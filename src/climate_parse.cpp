@@ -30,7 +30,7 @@ namespace Climate {
 //             "graph": { "nodes": [ node... ] },
 //             "surface": { "flat": "#2a2420", "steep": "#1a1614" (optional, else flat), "roughness": 1 },
 //             "clouds": { "cover": 0.6, "type": 0.5 } (optional),
-//             "instances": [ { "species": "conifer", "share": 2 } ] (optional), "features": [ "lava_lake" ] (optional),
+//             "instances": [ { "species": "conifer", "cell_m": 5, "share": 2 } ] (optional), "features": [ "lava_lake" ] (optional),
 //             "debug_color": "#c04020" }
 //     "at": the biome's place in the fields' space, a centre and a span on each field it names ({min, max}: their
 //     middle and half their gap); on each it is whole within 0.71 of the span and gone a span away, overlapping biomes
@@ -38,8 +38,9 @@ namespace Climate {
 //     default: no "at", it fills what the others leave. "surface": the biome's ground colours (sRGB) on gentle and
 //     steep slopes; without it, the procedural ground's. "clouds": the sky over the biome, its cover and cloud type in
 //     [0, 1] (stratus 0, stratocumulus 0.5, cumulus 1; Climate::BiomeClouds); without it, the sky's cover and the
-//     weather noise's type. "instances": the world's species (species.hpp) its sites grow, each by its integer share
-//     (BiomePick); without the key every species at share 1, [] none. "features": the feature kinds standing on it
+//     weather noise's type. "instances": the world's species (species.hpp) its sites grow, one site per cell of cell_m
+//     metres, each by its integer share among the biome's entries of its kind and cell (BiomePick); without the key
+//     the world's "instances", [] none. "features": the feature kinds standing on it
 //     (biome_features.hpp); without the key every kind.
 //   node:   { "id": "n1", "kind": ..., inputs by id, parameters; "pos": [x, y] (the mixer's, ignored) }, the kinds:
 //     "note":  "wavelength_m": 400 | "from_m": 0.4, "to_m": 26214.4 (every octave in range the LOD count has: the
@@ -95,6 +96,9 @@ public:
             error = "climate: " + err;
         }
     }
+
+    // A list of instances alone (parse_instances).
+    void run_instances(const ov::Value &p_list, const ov::str &p_where, std::vector<InstanceShare> &r_out) { instances(p_list, p_where, r_out); }
 
 private:
     const Ground &ground;
@@ -682,26 +686,34 @@ private:
         table.biomes.push_back(b);
     }
 
-    // A biome's "instances": [{ "species": name, "share": 1 (a whole number > 0) }] and "features": [kind name] (the
-    // world's species and the feature kinds: SDFTable checks the names).
-    void content(const ov::Value &p_d, const ov::str &p_where, Climate::Biome &r_b) {
-        r_b.instances_listed = p_d.has("instances");
-        const ov::Value instances = array(p_d, "instances", p_where);
-        for (int64_t i = 0; i < int64_t(instances.size()) && error.empty(); i++) {
+    // A list of instances: [{ "species": name, "cell_m": metres > 0, "share": 1 (a whole number > 0) }] (the world's
+    // species: SDFTable checks the names).
+    void instances(const ov::Value &p_list, const ov::str &p_where, std::vector<InstanceShare> &r_out) {
+        for (int64_t i = 0; i < int64_t(p_list.size()) && error.empty(); i++) {
             const ov::str where = p_where + ov::format(" instance %d", i);
-            const ov::Value e = dict(instances[i], where);
-            if (!keys(e, where, { "species", "share" })) {
+            const ov::Value e = dict(p_list[i], where);
+            if (!keys(e, where, { "species", "cell_m", "share" })) {
                 return;
             }
             InstanceShare s;
             s.species = text(e, "species", where);
+            s.cell_m = number(e, "cell_m", where);
             const double share = number(e, "share", where, 1.0);
+            if (error.empty() && !(s.cell_m > 0.0 && std::isfinite(s.cell_m))) {
+                fail_key(where, "cell_m", "is a size in metres > 0.");
+            }
             if (error.empty() && !(share >= 1.0 && share < 65536.0 && share == std::floor(share))) {
                 fail(where, "a share is a whole number in [1, 65535].");
             }
             s.share = uint32_t(share);
-            r_b.instances.push_back(s);
+            r_out.push_back(s);
         }
+    }
+
+    // A biome's "instances" (instances()) and "features": [kind name] (the feature kinds: SDFTable checks the names).
+    void content(const ov::Value &p_d, const ov::str &p_where, Climate::Biome &r_b) {
+        r_b.instances_listed = p_d.has("instances");
+        instances(array(p_d, "instances", p_where), p_where, r_b.instances);
         r_b.features_listed = p_d.has("features");
         const ov::Value features = array(p_d, "features", p_where);
         for (int64_t i = 0; i < int64_t(features.size()) && error.empty(); i++) {
@@ -715,6 +727,21 @@ private:
 };
 
 } // namespace
+
+ov::str parse_instances(const ov::Value &p_list, const ov::str &p_where, std::vector<InstanceShare> &r_out) {
+    if (!p_list.is_array()) {
+        return p_where + ": a list of instances.";
+    }
+    const Ground ground; // an instance reads no octave
+    Table table;
+    Parser parser(ground, table);
+    std::vector<InstanceShare> out;
+    parser.run_instances(p_list, p_where, out);
+    if (parser.error.empty()) {
+        r_out = out;
+    }
+    return parser.error;
+}
 
 ov::str parse(const ov::Value &p_data, const Ground &p_ground, Table &r_table) {
     r_table = Table();

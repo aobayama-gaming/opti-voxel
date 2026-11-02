@@ -402,14 +402,63 @@ RecordFinish SDFTable::record_finish() const {
     return RecordFinish{ param.skirt_depth, instance_band, erode_rule };
 }
 
-CellScatter SDFTable::scene_source(uint32_t p_salt, int p_count, double p_area_m) const {
+std::vector<Climate::InstanceShare> SDFTable::counted(Species::Kind p_kind, int p_count, double p_side_m) {
+    std::vector<Climate::InstanceShare> out;
+    for (const Species &s : default_species()) {
+        if (p_count > 0 && p_side_m > 0.0 && s.kind == p_kind) { // groups() rounds the cell as forest_cell_side
+            out.push_back(Climate::InstanceShare{ s.name, p_side_m / std::sqrt(double(p_count)), 1u });
+        }
+    }
+    return out;
+}
+
+std::vector<SDFTable::Group> SDFTable::groups() const {
+    const double vs = param.voxel_size;
+    // The world's list where a biome grows it (every biome without a climate), and each biome's own.
+    std::vector<std::pair<ov::str, const std::vector<Climate::InstanceShare> *>> lists;
+    const Climate::Table *climate = placing_climate();
+    if (climate == nullptr || std::any_of(climate->biomes.begin(), climate->biomes.end(), [](const Climate::Biome &p_b) { return !p_b.instances_listed; })) {
+        lists.push_back({ "the world", &instances });
+    }
+    for (size_t b = 0; climate != nullptr && b < climate->biomes.size(); b++) {
+        lists.push_back({ "biome '" + climate->biomes[b].name + "'", &climate->biomes[b].instances });
+    }
+    std::vector<Group> out;
+    for (const auto &[who, list] : lists) {
+        for (const Climate::InstanceShare &e : *list) {
+            const auto named = std::find_if(species.begin(), species.end(), [&](const Species &p_s) { return p_s.name == e.species; });
+            if (named == species.end()) {
+                OV_ERR_PRINT("SDFTable: " + who + " grows '" + e.species + "', which the world's species don't have.");
+                continue;
+            }
+            const int64_t side = std::max<int64_t>(1, std::llround(e.cell_m / vs));
+            auto g = std::find_if(out.begin(), out.end(), [&](const Group &p_g) { return p_g.kind == named->kind && p_g.side == side; });
+            if (g == out.end()) {
+                out.push_back(Group{ named->kind, side, {} });
+                g = out.end() - 1;
+            }
+            if (std::find(g->species.begin(), g->species.end(), &*named) == g->species.end()) {
+                g->species.push_back(&*named);
+            }
+        }
+    }
+    for (Group &g : out) { // the world's order: classes don't depend on which list named a species first
+        std::sort(g.species.begin(), g.species.end());
+    }
+    std::sort(out.begin(), out.end(), [](const Group &p_a, const Group &p_b) {
+        return p_a.kind != p_b.kind ? p_a.kind == Species::ROCK : p_a.side < p_b.side;
+    });
+    return out;
+}
+
+CellScatter SDFTable::scene_source(uint32_t p_salt, int64_t p_side) const {
     const double vs = param.voxel_size;
     CellScatter s;
     s.salt = p_salt;
-    s.side = forest_cell_side(p_count, p_area_m, vs);
+    s.side = zone.side_m > 0.0 ? p_side : 0;
     if (s.side > 0) {
-        const VoxelPos centre = ground_at(std::llround(SCENE_X / vs), std::llround(SCENE_Z / vs));
-        const int64_t half = std::llround(0.5 * p_area_m / vs);
+        const VoxelPos centre = ground_at(std::llround(zone.x_m / vs), std::llround(zone.z_m / vs));
+        const int64_t half = std::llround(0.5 * zone.side_m / vs);
         const VoxelPos reach(half, 4 * half, half);
         s.zone = VoxelBox{ centre - reach, centre + reach, true };
     }
@@ -424,51 +473,52 @@ CellScatter SDFTable::scene_source(uint32_t p_salt, int p_count, double p_area_m
     return s;
 }
 
-std::function<int(const Site &)> SDFTable::site_class(Species::Kind p_kind) const {
-    const Climate::Table *climate = placing_climate();
-    if (climate == nullptr || std::none_of(climate->biomes.begin(), climate->biomes.end(), [](const Climate::Biome &p_b) { return p_b.instances_listed; })) {
-        return nullptr; // every biome grows every species: the variant modulo their count
-    }
-    const std::vector<const Species *> kind = species_of(species, p_kind);
-    const BiomePick pick(climate, placing_spec());
-    std::vector<std::vector<uint32_t>> shares;
-    for (int b = 0; b < pick.biomes(); b++) {
-        const Climate::Biome &bi = climate->biomes[size_t(b)];
-        std::vector<uint32_t> s(kind.size(), bi.instances_listed ? 0u : 1u);
-        for (const Climate::InstanceShare &e : bi.instances) {
-            for (size_t i = 0; i < kind.size(); i++) {
-                s[i] += kind[i]->name == e.species ? e.share : 0u;
-            }
-            if (std::none_of(species.begin(), species.end(), [&](const Species &p_s) { return p_s.name == e.species; })) {
-                OV_ERR_PRINT("SDFTable: biome '" + bi.name + "' grows '" + e.species + "', which the world's species don't have.");
+std::function<int(const Site &)> SDFTable::site_class(const Group &p_group) const {
+    const double vs = param.voxel_size;
+    // A list's shares of the group's species (its entries of the group's kind and cell).
+    auto shares_of = [&](const std::vector<Climate::InstanceShare> &p_list) {
+        std::vector<uint32_t> s(p_group.species.size(), 0u);
+        for (const Climate::InstanceShare &e : p_list) {
+            for (size_t i = 0; i < s.size(); i++) {
+                const bool here = p_group.species[i]->name == e.species && std::max<int64_t>(1, std::llround(e.cell_m / vs)) == p_group.side;
+                s[i] += here ? e.share : 0u;
             }
         }
-        shares.push_back(s);
+        return s;
+    };
+    const Climate::Table *climate = placing_climate();
+    std::vector<std::vector<uint32_t>> shares;
+    for (size_t b = 0; climate != nullptr && b < climate->biomes.size(); b++) {
+        const Climate::Biome &bi = climate->biomes[b];
+        shares.push_back(shares_of(bi.instances_listed ? bi.instances : instances));
     }
+    const std::vector<uint32_t> world = shares_of(instances);
+    if (std::all_of(shares.begin(), shares.end(), [&](const std::vector<uint32_t> &p_s) { return p_s == world; })) {
+        // Every biome grows the same: no pick (the variant modulo their count when each is at share 1).
+        if (std::all_of(world.begin(), world.end(), [](uint32_t p_s) { return p_s == 1u; })) {
+            return nullptr;
+        }
+        return [world](const Site &p_site) { return pick_share(world, p_site.variant); };
+    }
+    const BiomePick pick(climate, placing_spec());
     return [pick, shares](const Site &p_site) { return pick_share(shares[size_t(pick.at(p_site.base, p_site.seed))], p_site.variant); };
 }
 
-CellScatter SDFTable::forest_source(const TreeTypes &p_types) const {
-    CellScatter s = scene_source(TREE_SITE_SALT, forest_count, forest_area);
-    const double vs = param.voxel_size;
-    const std::vector<const Species *> trees = species_of(species, Species::TREE);
-    if (trees.empty()) {
-        s.side = 0; // no tree to grow: not a source
-        return s;
-    }
+CellScatter SDFTable::forest_source(const TreeTypes &p_types, const Group &p_group, uint32_t p_salt) const {
+    CellScatter s = scene_source(p_salt, p_group.side);
     std::vector<TreeSpecies> list;
-    for (const Species *t : trees) {
+    for (const Species *t : p_group.species) {
         list.push_back(t->tree);
     }
-    set_forest_scatter(s, vs, *library, record_finish(), p_types, max_instance_extent(), list, species_key(trees), site_class(Species::TREE));
+    set_forest_scatter(s, param.voxel_size, *library, record_finish(), p_types, max_instance_extent(), list, species_key(p_group.species), site_class(p_group));
     return s;
 }
 
-CellScatter SDFTable::scatter_source(const Types &p_types) const {
-    CellScatter s = scene_source(SCATTER_SITE_SALT, scatter_count, scatter_area);
+CellScatter SDFTable::scatter_source(const Types &p_types, const Group &p_group, uint32_t p_salt) const {
+    CellScatter s = scene_source(p_salt, p_group.side);
     const float vs = param.voxel_size;
     const int rock = p_types.rock, capsule = p_types.capsule;
-    const std::vector<const Species *> kind = species_of(species, Species::ROCK);
+    const std::vector<const Species *> &kind = p_group.species;
     std::vector<RockSpecies> rocks;
     for (const Species *r : kind) {
         rocks.push_back(r->rock);
@@ -503,12 +553,12 @@ CellScatter SDFTable::scatter_source(const Types &p_types) const {
         r_out.push_back(rec);
     };
     // The far field of every rock together whatever the biomes list (one class, as before species).
-    s.set_growth(uint32_t(rocks.size()), site_class(Species::ROCK), grow, false);
+    s.set_growth(uint32_t(rocks.size()), site_class(p_group), grow, false);
     s.profile_key = "rocks:" + species_key(kind);
     return s;
 }
 
-void SDFTable::add_source(const CellScatter &p_source, const char *p_name, ov::Value &r_stats, std::vector<TreeSpan> *r_spans) {
+void SDFTable::add_source(const CellScatter &p_source, const ov::str &p_name, ov::Value &r_stats, std::vector<TreeSpan> *r_spans) {
     const uint64_t start_us = ov::now_usec();
     std::vector<CellSite> sites;
     if (p_source.valid()) {
@@ -538,7 +588,7 @@ void SDFTable::add_source(const CellScatter &p_source, const char *p_name, ov::V
         const Site &site = sites[i].site;
         std::vector<TableRecord> &parts = grown[i % BATCH];
         const uint32_t first = records.size();
-        if (parts.empty() || !admit_records(parts, p_name)) {
+        if (parts.empty() || !admit_records(parts, p_name.c_str())) {
             continue;
         }
         if (r_spans) {
@@ -621,7 +671,7 @@ void SDFTable::add_biomes(const Types &p_types, ov::Value &r_stats) {
     const double vs = param.voxel_size;
     // The sites on the base within biome_radius of the base's point under the scene's centre.
     const BaseSurface &base = get_base();
-    const VoxelPos centre = base.on_base(ground_at(std::llround(SCENE_X / vs), std::llround(SCENE_Z / vs)));
+    const VoxelPos centre = base.on_base(ground_at(std::llround(zone.x_m / vs), std::llround(zone.z_m / vs)));
     const int64_t r = std::llround(biome_radius / vs);
     const VoxelPos reach(r, r, r);
     std::vector<Biome::Site> all, sites;
@@ -881,10 +931,25 @@ void SDFTable::build_table(int p_lod_count) {
     // The biome features first: the scatter and the forest keep out of the lakes (their basins cut the ground away).
     ov::Value scene_stats = ov::Value::object();
     add_biomes(types, scene_stats);
-    sources = { Source{ "scatter", scatter_source(types) }, Source{ "trees", forest_source(tree_types) } };
+    // A kind's finest cell keeps the kind's salt (and its sites from before the cells), a coarser one hashes its cell in.
+    const std::vector<Group> grouped = groups();
+    for (const Group &g : grouped) {
+        const bool tree = g.kind == Species::TREE;
+        const bool first = std::none_of(sources.begin(), sources.end(), [&](const Source &p_s) { return p_s.kind == g.kind; });
+        const uint32_t base = tree ? TREE_SITE_SALT : SCATTER_SITE_SALT;
+        const uint32_t salt = first ? base : ExactNoise::hash3(base, uint32_t(g.side), uint32_t(uint64_t(g.side) >> 32)).x;
+        const ov::str name = ov::str(tree ? "trees" : "scatter") + (first ? ov::str() : ov::format("_%d", g.side));
+        sources.push_back(Source{ name, g.kind, tree ? forest_source(tree_types, g, salt) : scatter_source(types, g, salt) });
+    }
     if (!stream_sources) {
-        add_source(sources[0].scatter, sources[0].name, scene_stats);
-        add_source(sources[1].scatter, sources[1].name, scene_stats, &trees);
+        const std::vector<const Species *> world_trees = species_of(species, Species::TREE);
+        for (size_t i = 0; i < sources.size(); i++) {
+            const size_t from = trees.size();
+            add_source(sources[i].scatter, sources[i].name, scene_stats, sources[i].kind == Species::TREE ? &trees : nullptr);
+            for (size_t t = from; t < trees.size(); t++) { // the source's class: the world's tree species
+                trees[t].species = int(std::find(world_trees.begin(), world_trees.end(), grouped[i].species[size_t(trees[t].species)]) - world_trees.begin());
+            }
+        }
     }
     add_moment_blobs(blob, scene_stats);
     edit_regions.clear();

@@ -6,6 +6,7 @@
 #include "ov/format.hpp"
 #include "ov/json.hpp"
 
+#include <cmath>
 #include <initializer_list>
 
 namespace {
@@ -87,7 +88,7 @@ ov::Value section(const ov::Value &p_data, const char *p_key, std::initializer_l
 } // namespace
 
 ov::str WorldFile::parse(const ov::Value &p_data, const ov::str &p_dir, WorldFile &r_world) {
-    ov::str err = unknown_key(p_data, "file", { "engine", "climate", "planet", "look", "trees", "instances", "features", "species", "biomes" });
+    ov::str err = unknown_key(p_data, "file", { "engine", "climate", "planet", "look", "zone", "instances", "features", "species", "biomes" });
     if (!err.empty()) {
         return err;
     }
@@ -108,10 +109,14 @@ ov::str WorldFile::parse(const ov::Value &p_data, const ov::str &p_dir, WorldFil
     WorldFile w;
     const ov::Value planet = section(p_data, "planet", { "radius_m", "ring_m" }, err);
     const ov::Value look = section(p_data, "look", { "atmosphere", "atmosphere_scale", "clouds", "relief_m" }, err);
-    const ov::Value trees = section(p_data, "trees", { "count", "area_m" }, err);
-    const ov::Value instances = section(p_data, "instances", { "count", "area_m" }, err);
+    ov::Value zone = section(p_data, "zone", { "side_m", "centre_m" }, err);
     const ov::Value features = section(p_data, "features", { "radius_km" }, err);
-    for (const auto &part : { std::pair<const char *, ov::Value>{ "engine", engine }, { "planet", planet }, { "trees", trees }, { "instances", instances }, { "features", features } }) {
+    const ov::Value centre = zone.get("centre_m", ov::Value::array());
+    if (err.empty() && zone.has("centre_m") && !(centre.is_array() && centre.size() == 2 && centre[size_t(0)].is_number() && centre[size_t(1)].is_number())) {
+        err = "world: zone: centre_m is [x, z] in metres.";
+    }
+    zone.erase("centre_m");
+    for (const auto &part : { std::pair<const char *, ov::Value>{ "engine", engine }, { "planet", planet }, { "zone", zone }, { "features", features } }) {
         err = err.empty() ? not_a_number(part.second, part.first) : err;
     }
     if (!err.empty()) {
@@ -134,10 +139,20 @@ ov::str WorldFile::parse(const ov::Value &p_data, const ov::str &p_dir, WorldFil
     if (!(w.relief_m > 0.0)) {
         return "world: look: relief_m must be positive.";
     }
-    w.trees = int(trees.get("count", w.trees).as_int());
-    w.tree_area_m = trees.get("area_m", w.tree_area_m).as_double();
-    w.instances = int(instances.get("count", w.instances).as_int());
-    w.instance_area_m = instances.get("area_m", w.instance_area_m).as_double();
+    w.zone_side_m = zone.get("side_m", w.zone_side_m).as_double();
+    if (centre.size() == 2) {
+        w.zone_x_m = centre[size_t(0)].as_double();
+        w.zone_z_m = centre[size_t(1)].as_double();
+    }
+    if (!(w.zone_side_m >= 0.0 && std::isfinite(w.zone_side_m))) {
+        return "world: zone: side_m must be >= 0.";
+    }
+    if (p_data.has("instances")) {
+        err = Climate::parse_instances(p_data["instances"], "instances", w.instances);
+        if (!err.empty()) {
+            return "world: " + err;
+        }
+    }
     w.features_radius_m = 1000.0 * features.get("radius_km", w.features_radius_m / 1000.0).as_double();
     if (p_data.has("species")) {
         err = Archetype::parse_species(p_data["species"], w.species);

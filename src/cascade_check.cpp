@@ -432,7 +432,8 @@ ov::Value check_table(ov::gpu::Device *p_device, int p_lods, const ChunkParam &p
     ov::Value d = ov::Value::object();
     ChunkParam param = p_param;
     SDFCascade sdf;
-    sdf.set_scatter(600, 160.0);
+    sdf.set_zone(SDFTable::Zone{ 160.0 });
+    sdf.set_instances(SDFTable::counted(Archetype::Species::ROCK, 600, 160.0));
     sdf.set_stream_sources(false); // placed whole: the chunks' lists are the snapshot's (the streamed ones: unit tests)
     param.skirt_depth = ov::max(param.skirt_depth, sdf.min_skirt_depth(param, p_lods));
     sdf.configure(param, p_lods);

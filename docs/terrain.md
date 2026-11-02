@@ -5,7 +5,7 @@ One terrain (the cascade), one instance path (its table), one world file. Read b
 - **A run loads a world.** Every terrain setting is data: `World::Settings::world_path` (`VoxelTerrain.world_path`, `--world=PATH`
   on bench, player, Dawn and the tools; the web's `?world=`) names a world file (`WorldFile`, format in `src/world_file.hpp`). Its
   `engine` (a path or inline: `voxel_m`, `lods`, the master variables) and `climate` (a path or inline: the fields, none for no
-  biomes) sit beside `planet`, `look`, `trees`, `instances`, `features` and `biomes`; every key is optional. A
+  biomes) sit beside `planet`, `look`, `zone`, `instances`, `species`, `features` and `biomes`; every key is optional. A
   variant is another file: `adapter/godot/project/worlds/` holds the presets' and the tools' (`default`, `cm`, `lods25`, `biomes`,
   `forest5cm*`, `earth`, `earth25`, `tiny`), `climate/world.json` the game's (`--preset=video`). `--preset=` names keep working. The
   ground is the biomes' graphs, compiled (`docs/climate.md`); a world without biomes has the template biome's. Engine
@@ -28,7 +28,7 @@ One terrain (the cascade), one instance path (its table), one world file. Read b
   `--cam_pos` or `--above_ground=M` (M metres above the terrain under the camera, negative below) says otherwise: the
   cascade's ground is kilometres from the datum.
   **The table** (`SDFTable`, `src/sdf_table.*`, `SDFCascade`'s base: the library, records, snapshot, GPU table,
-  runtime edits and the scenes placed on the ground, i.e. the gallery, `instances` and `trees`, which only need
+  runtime edits and the scenes placed on the ground, i.e. the gallery and the instances' sources, which only need
   the base and `ground_under`) is folded into each lattice sample
   (`SDFCascade::sample_sdf`, GLSL `cascade_sample_sdf` at the level-0 store of the cascade passes): the register
   is the cascade's unit gradient and LOD-L distance times 2^L (exact), then `Archetype::fold_onto` and

@@ -202,10 +202,12 @@ struct BiomeClouds {
     float type = 0.0f;
 };
 
-// A species a biome grows (its "instances": a name of the world's species, an integer share among the biome's species
-// of a source's kind; BiomePick, SDFTable's sources).
+// A species a biome grows (its "instances", or the world's for a biome that lists none): a name of the world's species,
+// one site per cell of cell_m metres (a kind's entries of one cell are one source: SDFTable), and an integer share among
+// the biome's entries of that source (BiomePick).
 struct InstanceShare {
     ov::str species;
+    double cell_m = 0.0;
     uint32_t share = 1;
 };
 
@@ -215,7 +217,7 @@ struct Biome {
     std::vector<Amp> amps;
     SampleProgram program; // empty: none
     // What grows on it and what features stand on it ("instances", "features": kind names). Not listed: the world's
-    // defaults (every species of a source's kind at share 1, every feature kind).
+    // instances (SDFTable::set_instances), every feature kind.
     std::vector<InstanceShare> instances;
     bool instances_listed = false;
     std::vector<ov::str> features;
@@ -271,6 +273,9 @@ const std::vector<Cascade::Band> *bands_of(const Table &p_table, int p_source);
 // The table of a JSON object (units in metres; the format is described above parse() in climate_parse.cpp),
 // validated; on error r_table is left empty and the error returned.
 ov::str parse(const ov::Value &p_data, const Ground &p_ground, Table &r_table);
+// A list of instances ([{ "species": name, "cell_m": 5, "share": 1 }]: a biome's, the world's) in r_out: empty, or the
+// first error, p_where naming the list (r_out untouched).
+ov::str parse_instances(const ov::Value &p_list, const ov::str &p_where, std::vector<InstanceShare> &r_out);
 
 // The cascade p_ground (its base and insert shift) with the table's notes as its bands, its fields as its field groups
 // and, if a biome lists a note, a Modulation: every listed note gets A = sum_b w_b amp_b at each point, from the weights

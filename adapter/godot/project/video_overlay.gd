@@ -119,9 +119,9 @@ func _setting_lines() -> String:
 		error_text,
 		"mesher budget %s" % ("%s ms per frame" % _num(budget) if budget > 0.0 else "off"),
 	]
-	var trees: int = terrain.get_world_trees()
-	if trees > 0:
-		lines.append("%s trees" % _thousands(trees))
+	var zone_m: float = terrain.get_world_zone_m()
+	if zone_m > 0.0:
+		lines.append("trees and rocks by biome over %s" % _distance(zone_m))
 	return "\n".join(lines)
 
 func _process(delta: float) -> void:

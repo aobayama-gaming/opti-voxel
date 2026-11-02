@@ -104,8 +104,12 @@ TEST_CASE("Cell scatter: the profile bounds every record of the forest and the s
     ChunkParam param;
     param.voxel_size = 0.05f;
     SDFCascade sdf;
-    sdf.set_forest(200, 80.0);
-    sdf.set_scatter(400, 80.0);
+    sdf.set_zone(SDFTable::Zone{ 80.0 });
+    std::vector<Climate::InstanceShare> grown = SDFTable::counted(Archetype::Species::TREE, 200, 80.0);
+    for (const Climate::InstanceShare &r : SDFTable::counted(Archetype::Species::ROCK, 400, 80.0)) {
+        grown.push_back(r);
+    }
+    sdf.set_instances(grown);
     param.skirt_depth = MAX(param.skirt_depth, sdf.min_skirt_depth(param, 18));
     sdf.configure(param, 18);
     CHECK(sdf.get_sources().size() == 2);

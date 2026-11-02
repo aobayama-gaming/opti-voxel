@@ -1,6 +1,7 @@
 #pragma once
 
 #include "biome_compiler.hpp"
+#include "sdf_table.hpp"
 #include "species.hpp"
 
 #include "ov/str.hpp"
@@ -16,8 +17,8 @@
 //     "climate": "climate.json" or { "fields": [ field... ] },       the fields that place the biomes; none: no biomes
 //     "planet": { "radius_m": 0, "ring_m": 0 },
 //     "look": { "atmosphere": true, "atmosphere_scale": 0, "clouds": true, "relief_m": 3276.8 },
-//     "trees": { "count": 0, "area_m": 60 },
-//     "instances": { "count": 0, "area_m": 200 },
+//     "zone": { "side_m": 0, "centre_m": [-50, -150] },
+//     "instances": [ { "species": "conifer", "cell_m": 5, "share": 1 }... ],
 //     "features": { "radius_km": 0 },
 //     "species": [ species... ],
 //     "biomes": [ biome..., default biome ]
@@ -26,8 +27,10 @@
 // A path is relative to the file naming it, or absolute (res://, /...). "fields" and "biomes" are the climate table of
 // climate_parse.cpp (each biome a graph of notes, what it grows, its features), merged here and compiled there (at the
 // engine's values). Without biomes, the ground is the template biome's (Climate::template_biome). "species" are what the
-// biomes grow (species.hpp; Archetype::default_species without the key); trees, instances and features keep their
-// extents (count and area, radius): where the scenes stand, each site's species and features its biome's.
+// instances name (species.hpp; Archetype::default_species without the key); "instances" what grows where no biome lists
+// its own (and on a world without biomes), each entry a species, its cell and its share (Climate::parse_instances), over
+// the "zone" (SDFTable::Zone: a square of side_m metres round centre_m, x and z; side 0: no instance); the features
+// stand within radius_km of its centre, each where its biome lists its kind.
 struct WorldFile {
     // The world of a host or check given none.
     static constexpr const char *DEFAULT_PATH = "res://worlds/default.world.json";
@@ -44,10 +47,10 @@ struct WorldFile {
     // The relief the sky stays above (metres; AtmosphereMedium::for_base, CloudLayer::for_base), a planet's
     // SDFCascade::PLANET_RELIEF of its radius at most (SDFCascade::relief_m): the template ground's 3.3 km cap.
     double relief_m = Climate::TEMPLATE_MAX_AMP_M;
-    int trees = 0; // about this many grown trees (SDFTable::set_forest) in a square of side tree_area_m
-    double tree_area_m = 60.0;
-    int instances = 0; // this many scattered rocks and pillars (SDFTable::set_scatter) in a square of side instance_area_m
-    double instance_area_m = 200.0;
+    double zone_x_m = SDFTable::Zone().x_m; // SDFTable::set_zone
+    double zone_z_m = SDFTable::Zone().z_m;
+    double zone_side_m = 0.0;
+    std::vector<Climate::InstanceShare> instances; // SDFTable::set_instances
     double features_radius_m = 0.0; // biome features (lava lakes, floating islands) within this distance (SDFTable::set_biome_radius)
     std::vector<Archetype::Species> species = Archetype::default_species(); // SDFTable::set_species
 

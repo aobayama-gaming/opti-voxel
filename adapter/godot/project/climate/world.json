@@ -2,7 +2,7 @@
  "comment": "Eight biomes on three climate axes (temperature, humidity, wind: 105-419 km octaves), each playing the ground's own octaves (multipliers, shapes, multifractal, warps by wx / wy / wz) with the notes once fitted to real heightmaps (git history: tools/landforms); dunes and mountain remap the ground's height by their curve. Mountain is the default. 25 LODs at 5 cm.",
  "engine": "engine.json",
  "climate": "climate.json",
- "trees": {"count": 1000000, "area_m": 5000},
+ "zone": {"side_m": 5000},
  "biomes": [
   {
    "name": "valley",
@@ -40,6 +40,7 @@
    },
    "surface": {"flat": "#8c8a80", "steep": "#a8a49a"},
    "clouds": {"cover": 0.7, "type": 0.45},
+   "instances": [{"species": "broadleaf", "cell_m": 5, "share": 2}, {"species": "slender", "cell_m": 5}],
    "debug_color": "#9a9488"
   },
   {
@@ -77,6 +78,7 @@
    },
    "surface": {"flat": "#6a6a50", "steep": "#5a4c44"},
    "clouds": {"cover": 0.35, "type": 0.7},
+   "instances": [{"species": "conifer", "cell_m": 10}, {"species": "boulder", "cell_m": 30}],
    "debug_color": "#7a6a50"
   },
   {
@@ -122,6 +124,7 @@
    },
    "surface": {"flat": "#4c7a34", "steep": "#5c5044"},
    "clouds": {"cover": 0.45, "type": 0.85},
+   "instances": [{"species": "broadleaf", "cell_m": 5}, {"species": "slender", "cell_m": 5}],
    "debug_color": "#4c8a3c"
   },
   {
@@ -166,6 +169,7 @@
    },
    "surface": {"flat": "#5c8040", "steep": "#5c5040"},
    "clouds": {"cover": 0.65, "type": 0.2},
+   "instances": [{"species": "conifer", "cell_m": 10}, {"species": "boulder", "cell_m": 30}, {"species": "pillar", "cell_m": 30}],
    "debug_color": "#508040"
   },
   {
@@ -195,6 +199,7 @@
    },
    "surface": {"flat": "#4a5a2c", "steep": "#4a3c2c", "roughness": 1},
    "clouds": {"cover": 0.8, "type": 1},
+   "instances": [{"species": "broadleaf", "cell_m": 5}],
    "debug_color": "#3c6a3c"
   },
   {
@@ -239,6 +244,7 @@
    },
    "surface": {"flat": "#e0a060", "steep": "#c88848", "roughness": 1},
    "clouds": {"cover": 0.05, "type": 1},
+   "instances": [],
    "debug_color": "#e8a050"
   },
   {
@@ -267,6 +273,7 @@
    },
    "surface": {"flat": "#d8b98a", "steep": "#b08860"},
    "clouds": {"cover": 0.04, "type": 1},
+   "instances": [{"species": "boulder", "cell_m": 30}],
    "debug_color": "#e0c080"
   },
   {
@@ -309,6 +316,7 @@
    },
    "surface": {"flat": "#8c867c", "steep": "#5c564e"},
    "clouds": {"cover": 0.6, "type": 0.4},
+   "instances": [{"species": "conifer", "cell_m": 5, "share": 3}, {"species": "slender", "cell_m": 5}, {"species": "boulder", "cell_m": 30}],
    "debug_color": "#7a6a5a"
   }
  ]

@@ -41,10 +41,19 @@ Library-built instances placed by the stream: trees, the far-field moment blobs,
   its plane crosses the node (`SITE_SLACK` cells + `SITE_BEND` nodes): ~9 evaluations per site, 1 per empty box;
   unit-tested equal to the brute force on hills, a 60 degree slope and the 5 cm cascade. A tree grows along
   `SDFBase::up_at(base)` (+y on the flat world, the one source of "up" for placement; `UP_Y` keeps the records from
-  before, pinned by a hash). The scene's centre is the ground under (SCENE_X, SCENE_Z) of the base's tangent plane
-  (`ground_at`), the lake keep-out the distance to a lake's axis (`LavaPool::near`, the sources' `accept`); the zone is the `--tree_area` square over 4 half sides of height up and down. Hashing 3D cells moved
-  every tree, the coarse-plane projection (feature/cell-sites) again: forest5cm is another forest than before. The world file's `trees` (`count`, `area_m`; default 0, 60 m) in bench and player; meant for 5 cm voxels
-  (at 0.5 m only the trunk and hull remain). `get_debug_stats()["table"]["trees"]`: count, records per site.
+  before, pinned by a hash). The zone's centre is the ground under its `centre_m` of the base's tangent plane
+  (`ground_at`), the lake keep-out the distance to a lake's axis (`LavaPool::near`, the sources' `accept`); the zone is
+  the world file's `zone` square (`side_m`) over 4 half sides of height up and down. Hashing 3D cells moved every tree,
+  the coarse-plane projection (feature/cell-sites) again: forest5cm is another forest than before. **What grows where
+  is data:** the world file's `instances` (a biome's, or the world's for a biome that lists none and a world without
+  biomes) are entries `{species, cell_m, share}`; every entry of a kind (trees, rocks) and a cell, over all the lists,
+  is one source (`SDFTable::groups`: the rocks' then the trees', each kind's finest cell keeping its salt, a coarser one
+  `trees_<cell>`), and a site of it grows its biome's entries of that source by their shares (`site_class`: BiomePick,
+  `pick_share`; -1, nothing, where its biome names none of them; no pick at all when every biome grows the same). A
+  biome sets its own density by its cell (the world's 1M forest: `world.json`'s valleys and mangroves 5 m broadleaf,
+  the caldera and the cliffs 10 m conifers and 30 m boulders, the dunes none). The presets are counts of old:
+  `SDFTable::counted` gives the cell of N trees in a square (`forest_cell_side`'s). Meant for 5 cm voxels (at 0.5 m only
+  the trunk and hull remain). `get_debug_stats()["table"]["trees"]`: count, records per site.
   Past its parts' drops the forest is drawn by its moment blobs (below). **Band timing (moments,
   `src/instance_moments.*`):** every record has moments (`record_moments`: volume, centroid, 3x3 central second
   moment; analytic per library type via `TableDef::moments`, else its program on a 24^3 grid), an instance their sum

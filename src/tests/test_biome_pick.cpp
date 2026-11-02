@@ -120,37 +120,55 @@ TEST_CASE("Species: today's by default, a world's list parsed, refused with the 
 }
 
 // The forest grows each site's species from its biome: the conifers' biome grows conifers only, the default nothing; a
-// biome that lists no instances grows every species, the forest as before the biomes.
-TEST_CASE("BiomePick: a forest grows each site's species from its biome") {
+// biome that lists no instances grows the world's (every tree, one per 4.7 m cell); a biome's own cell is a source of its
+// own (denser there).
+TEST_CASE("BiomePick: a forest grows each site's species from its biome, at its biome's density") {
     auto forest = [](const ov::Value &p_climate) {
         auto sdf = std::make_unique<SDFCascade>();
         ChunkParam param;
         param.voxel_size = 0.05f;
         sdf->climate_data = p_climate;
-        sdf->set_forest(160, 60.0);
+        sdf->set_zone(SDFTable::Zone{ 60.0 });
+        sdf->set_instances(SDFTable::counted(Archetype::Species::TREE, 160, 60.0));
         sdf->set_stream_sources(false);
         sdf->set_moment_blobs(false);
         param.skirt_depth = MAX(param.skirt_depth, sdf->min_skirt_depth(param, 16));
         sdf->configure(param, 16);
         return sdf;
     };
-    const auto chosen = forest(two_biomes(R"([{"species": "conifer"}])", "[]"));
+    const double world_cell = 60.0 / std::sqrt(160.0);
+    const ov::str conifers = ov::format(R"([{"species": "conifer", "cell_m": %s}])", world_cell);
+    const auto chosen = forest(two_biomes(conifers, "[]"));
     CLIMATE_REQUIRE(chosen->get_climate() != nullptr);
     const std::vector<TreeSpan> &trees = chosen->get_trees();
     CHECK(trees.size() > 10);
+    CHECK(chosen->get_sources().size() == 1); // the world's list grows nowhere: not a source
     for (const TreeSpan &t : trees) {
         CHECK(t.species == 2);
     }
-    // Neither lists: every species, as without a climate (variant % 3).
-    const auto all = forest(two_biomes(R"([{"species": "broadleaf"}, {"species": "slender"}, {"species": "conifer"}])", ""));
+    // The rest grows the world's list: every species there, as without a climate (variant % 3); the conifers' biome grows
+    // conifers at the same cell, so from the same source.
+    const auto mixed = forest(two_biomes(conifers, ""));
     const auto bare = forest(ov::Value::object());
+    CHECK(mixed->get_sources().size() == 1);
     int kinds[3] = {};
-    for (const TreeSpan &t : all->get_trees()) {
+    for (const TreeSpan &t : mixed->get_trees()) {
         kinds[t.species]++;
     }
-    MESSAGE("trees: conifers' biome ", trees.size(), ", both biomes ", all->get_trees().size(), ", no climate ", bare->get_trees().size());
+    MESSAGE("trees: conifers' biome ", trees.size(), ", both biomes ", mixed->get_trees().size(), ", no climate ", bare->get_trees().size());
     CHECK(kinds[0] > 0);
     CHECK(kinds[1] > 0);
-    CHECK(kinds[2] > 0);
-    CHECK(trees.size() < all->get_trees().size());
+    CHECK(kinds[2] > kinds[0]);
+    CHECK(trees.size() < mixed->get_trees().size());
+    // A denser cell in the conifers' biome: a second source, its sites only where the conifers' biome is.
+    const auto dense = forest(two_biomes(R"([{"species": "conifer", "cell_m": 2}])", ""));
+    CLIMATE_REQUIRE(dense->get_sources().size() == 2);
+    CHECK(dense->get_sources()[0].name == "trees");
+    CHECK(dense->get_sources()[1].name == ov::format("trees_%d", std::llround(world_cell / 0.05)));
+    int conifers_dense = 0;
+    for (const TreeSpan &t : dense->get_trees()) {
+        conifers_dense += t.species == 2 ? 1 : 0;
+    }
+    MESSAGE("conifers: ", kinds[2], " at the world's cell, ", conifers_dense, " at 2 m");
+    CHECK(conifers_dense > 2 * kinds[2]);
 }
