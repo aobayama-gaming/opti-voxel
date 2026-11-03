@@ -86,7 +86,7 @@ inline ov::str set_world(SpikeSet p_v, const ov::str &p_world) {
         case SpikeSet::L4D:
             return "res://climate/fieldless_test.json";
         case SpikeSet::L4W:
-            return "res://climate/world.json";
+            return "res://climate/eight_biomes_test.json";
         case SpikeSet::L4N:
             return "res://climate/notes_test.json";
         case SpikeSet::L4E:

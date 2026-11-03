@@ -9,7 +9,9 @@ extends SubViewportContainer
 ## trees, rocks and features (half the workers' time and the 10-33 ms instance lists of a drag's frames).
 ## The chunks load round the orbit's pivot (VoxelTerrain.set_lod_centre), from the LOD the camera's distance needs there
 ## (lod_view_min) to LOD_VIEW_MAX, which at the pixel error reaches ~54 km from it.
-## Orbit: left drag; pan: right or middle drag; zoom: the wheel. Nothing without a RenderingDevice (the headless check).
+## The orbit's pivot is a player: a capsule of a person's height (a scale), its feet on the ground (get_sdf_at, the CPU's
+## SDF) unless noclip. Move: left drag (walking, it follows the ground; noclip: it flies where the camera looks); orbit:
+## right or middle drag; zoom: the wheel, down to the player. Nothing without a RenderingDevice (the headless check).
 
 signal status_changed
 
@@ -25,10 +27,52 @@ const LOAD_WAIT := 1.0
 const GAME_SCENE := "res://main_scene_5cm.tscn"
 ## The game's fog over views of kilometres instead of metres.
 const FOG_DENSITY := 0.00004
+## The player: a capsule of a person's height and its radius (metres).
+const PLAYER_HEIGHT := 1.7
+const PLAYER_RADIUS := 0.25
+## The camera's closest orbit (metres from the player's feet) and its least height above the ground.
+const NEAREST := 2.5
+const CAMERA_CLEARANCE := 0.3
+## First person: the eyes' height above the feet (metres), a drag's move in metres per pixel.
+const EYE_HEIGHT := 1.6
+const FPV_STEP := 0.05
+## The nearest far plane (metres): the LODs' reach round the player (LOD_VIEW_MAX, ~54 km), zoomed in or not.
+const VIEW_FAR := 60000.0
+## The aim's distance: cast this often (seconds), at most this many steps, each this share of the SDF (under 1: the
+## SDF is a height difference, not a true distance, and overshoots on slopes).
+const AIM_EVERY := 0.1
+const AIM_STEPS := 256
+const AIM_STEP := 0.7
+## A game character's run (metres a second; Minecraft sprints at 5.6, most action games run at 5-7): WASD in first
+## person, and the aim's distance read as the time to run it.
+const KEY_SPEED := 6.0
+## The reach sphere: where a run of REACH_MIN minutes (the view's box sets it, 0: none) gets from the player, KEY_SPEED
+## a second (5 min: 1.8 km). Faint, with its silhouette and its line on the terrain (the scene's depth within
+## REACH_LINE_M of the sphere's) brighter.
+const REACH_MIN := 5.0
+const REACH_LINE_M := 15.0
+const REACH_SHADER := """
+shader_type spatial;
+render_mode unshaded, blend_mix, cull_disabled, depth_draw_never, shadows_disabled, fog_disabled;
+uniform sampler2D depth_texture : hint_depth_texture, filter_nearest;
+uniform vec3 colour : source_color = vec3(0.35, 0.85, 1.0);
+uniform float line_m = 15.0;
+void fragment() {
+	float rim = pow(1.0 - abs(dot(NORMAL, VIEW)), 3.0);
+	vec4 scene = INV_PROJECTION_MATRIX * vec4(SCREEN_UV * 2.0 - 1.0, texture(depth_texture, SCREEN_UV).r, 1.0);
+	float line = 1.0 - clamp(abs(scene.z / scene.w - VERTEX.z) / line_m, 0.0, 1.0);
+	ALBEDO = colour;
+	ALPHA = 0.03 + 0.15 * rim + 0.7 * line;
+}
+"""
 
 var _viewport := SubViewport.new()
 var _held := TextureRect.new()  # the last terrain's frame while the new one loads
+var _aim_label := Label.new()  # the crosshair and the distance to the terrain under it
+var _aim_timer := 0.0
 var _camera := Camera3D.new()
+var _player := MeshInstance3D.new()
+var _reach := MeshInstance3D.new()  # a run's reach round the player: a unit sphere scaled to it
 var _terrain: Node3D  # VoxelTerrain
 var _restart := Timer.new()
 var _json := ""
@@ -46,6 +90,8 @@ var _dist := 8000.0
 var status := ""  # the last restart's line
 var loaded_ms := -1  # the last restart until its chunks in view were loaded, -1 while loading
 var profile := {}  # --drag: "restart_ms" and "loaded_ms" appended to, when set
+var noclip := false  # the player flies through the ground, else walks on it
+var fpv := false  # the camera at the player's eyes, else orbiting them
 
 
 func _init() -> void:
@@ -53,6 +99,7 @@ func _init() -> void:
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	size_flags_vertical = Control.SIZE_EXPAND_FILL
 	mouse_filter = Control.MOUSE_FILTER_STOP
+	focus_mode = Control.FOCUS_CLICK  # WASD while focused
 	_viewport.own_world_3d = true
 	_viewport.render_target_update_mode = SubViewport.UPDATE_WHEN_VISIBLE
 	add_child(_viewport)
@@ -62,8 +109,38 @@ func _init() -> void:
 	_held.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_held.visible = false
 	add_child(_held)
+	_aim_label.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_aim_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_aim_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_aim_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_aim_label.add_theme_color_override("font_outline_color", Color.BLACK)
+	_aim_label.add_theme_constant_override("outline_size", 4)
+	add_child(_aim_label)
 	_add_game_look()
 	_viewport.add_child(_camera)
+	var capsule := CapsuleMesh.new()
+	capsule.height = PLAYER_HEIGHT
+	capsule.radius = PLAYER_RADIUS
+	var look := StandardMaterial3D.new()
+	look.albedo_color = Color(1.0, 0.45, 0.1)
+	look.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	capsule.material = look
+	_player.mesh = capsule
+	_viewport.add_child(_player)
+	var sphere := SphereMesh.new()
+	sphere.radius = 1.0
+	sphere.height = 2.0
+	sphere.radial_segments = 96
+	sphere.rings = 48
+	var veil := ShaderMaterial.new()
+	veil.shader = Shader.new()
+	veil.shader.code = REACH_SHADER
+	veil.set_shader_parameter("line_m", REACH_LINE_M)
+	sphere.material = veil
+	_reach.mesh = sphere
+	_reach.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_viewport.add_child(_reach)
+	set_reach_minutes(REACH_MIN)
 	_restart.one_shot = true
 	_restart.wait_time = RESTART_AFTER
 	_restart.timeout.connect(_restart_terrain)
@@ -151,6 +228,7 @@ func _restart_terrain() -> void:
 			_shifted += p_shift)
 		_viewport.add_child(_terrain)  # starts the world: its pipelines, then the chunks
 	_aim_camera()
+	_to_ground()  # the edited ground under the player
 	_place_camera()  # the new terrain's LOD centre
 	_started = _json
 	loaded_ms = -1
@@ -205,7 +283,14 @@ func _notification(p_what: int) -> void:
 		_stop_terrain()  # nothing runs behind the 2D view
 
 
-func _process(_delta: float) -> void:
+func _process(p_delta: float) -> void:
+	_keys_move(p_delta)
+	_aim_timer -= p_delta
+	if _aim_timer <= 0.0:
+		_aim_timer = AIM_EVERY
+		var d := aim_distance()
+		# The crosshair, the distance under it beneath (a second line keeps the "+" on the view's centre).
+		_aim_label.text = "+\n%s" % ("—" if d < 0.0 else "%s · %s" % [_metres(d), _run_time(d / KEY_SPEED)])
 	if _terrain == null or _restart_usec == 0:
 		return
 	if _terrain.is_load_complete() or Time.get_ticks_usec() - _restart_usec > int(LOAD_WAIT * 1e6):
@@ -237,6 +322,7 @@ func _aim_camera() -> void:
 	_up = _terrain.get_up_at(base)
 	_target = base + _up * _aim.y
 	_aim_pending = false
+	_to_ground()
 	_place_camera()
 
 
@@ -247,30 +333,145 @@ func _ground_axes() -> Array[Vector3]:
 	return [_up.cross(z), z]
 
 
-func _place_camera() -> void:
+static func _metres(p_m: float) -> String:
+	return "%.1f m" % p_m if p_m < 1000.0 else "%.2f km" % (p_m / 1000.0)
+
+
+# p_s seconds as a run's time: "12 s", "3 min 20 s", "1 h 05 min".
+static func _run_time(p_s: float) -> String:
+	var s := int(round(p_s))
+	if s < 60:
+		return "%d s run" % s
+	if s < 3600:
+		return "%d min %02d s run" % [s / 60, s % 60]
+	return "%d h %02d min run" % [s / 3600, (s % 3600) / 60]
+
+
+# The distance (metres) from the camera to the terrain at the view's centre, -1 past VIEW_FAR or without a terrain:
+# sphere tracing on the CPU's SDF (get_sdf_at, steps of AIM_STEP of it), a crossing refined by bisection.
+func aim_distance() -> float:
+	if _terrain == null or not _terrain.is_inside_tree():
+		return -1.0
+	var from := _camera.global_position
+	var dir := -_camera.global_transform.basis.z
+	var t := 0.0
+	var last := 0.0
+	for i in AIM_STEPS:
+		var d: float = _terrain.get_sdf_at(from + dir * t)
+		if d <= 0.0:
+			var lo := last
+			var hi := t
+			for j in 16:  # inside: the crossing between the last point outside and this one
+				var mid := (lo + hi) * 0.5
+				if _terrain.get_sdf_at(from + dir * mid) > 0.0:
+					lo = mid
+				else:
+					hi = mid
+			return hi
+		last = t
+		t += maxf(d * AIM_STEP, 0.02)
+		if t > VIEW_FAR:
+			return -1.0
+	return -1.0
+
+
+# The player's feet on the ground under them (along the terrain's up, by its SDF), unless noclip.
+func _to_ground() -> void:
+	if noclip or _terrain == null or not _terrain.is_inside_tree():
+		return
+	for i in 32:
+		var d: float = _terrain.get_sdf_at(_target)
+		if absf(d) < 0.01:
+			break
+		_target -= _terrain.get_up_at(_target) * d
+
+
+func set_noclip(p_on: bool) -> void:
+	noclip = p_on
+	_to_ground()
+	_place_camera()
+
+
+# The reach sphere at a run of p_minutes (0: hidden).
+func set_reach_minutes(p_minutes: float) -> void:
+	_reach.visible = p_minutes > 0.0
+	_reach.scale = Vector3.ONE * maxf(p_minutes * 60.0 * KEY_SPEED, 1.0)
+
+
+func set_fpv(p_on: bool) -> void:
+	fpv = p_on
+	_place_camera()
+
+
+# From the player towards the orbiting camera (yaw round _up, pitch above the ground); first person looks against it.
+func _view_dir() -> Vector3:
 	var axes := _ground_axes()
-	var dir := (axes[0] * sin(_yaw) + axes[1] * cos(_yaw)) * cos(_pitch) + _up * sin(_pitch)
-	_camera.position = _target + dir * _dist
-	_camera.look_at(_target, _up)
+	return (axes[0] * sin(_yaw) + axes[1] * cos(_yaw)) * cos(_pitch) + _up * sin(_pitch)
+
+
+# The player's right and forward: along the ground walking, forward where the camera looks in noclip.
+func _move_axes() -> Array[Vector3]:
+	var axes := _ground_axes()
+	var right := axes[0] * cos(_yaw) - axes[1] * sin(_yaw)
+	var fwd := -_view_dir() if noclip else -(axes[0] * sin(_yaw) + axes[1] * cos(_yaw))
+	return [right, fwd]
+
+
+# WASD while the view has focus (a click gives it): along the ground walking; in noclip forward where the camera looks,
+# Space up and Shift down. KEY_SPEED metres a second in first person, the orbit's distance a second otherwise.
+func _keys_move(p_delta: float) -> void:
+	if not has_focus():
+		return
+	var mv := _move_axes()
+	var v := Vector3.ZERO
+	v += mv[1] * (float(Input.is_key_pressed(KEY_W)) - float(Input.is_key_pressed(KEY_S)))
+	v += mv[0] * (float(Input.is_key_pressed(KEY_D)) - float(Input.is_key_pressed(KEY_A)))
+	if noclip:
+		v += _up * (float(Input.is_key_pressed(KEY_SPACE)) - float(Input.is_key_pressed(KEY_SHIFT)))
+	if v == Vector3.ZERO:
+		return
+	_target += v.normalized() * (KEY_SPEED if fpv else maxf(_dist, 10.0)) * p_delta
+	_to_ground()
+	_place_camera()
+
+
+func _place_camera() -> void:
+	var dir := _view_dir()
+	var eye := _target + _up * (PLAYER_HEIGHT * 0.5)  # the orbit round the capsule's middle
+	if fpv:
+		eye = _target + _up * EYE_HEIGHT
+		_camera.position = eye
+		_camera.look_at(eye - dir, _up)
+	else:
+		_camera.position = eye + dir * _dist
+		if not noclip and _terrain != null and _terrain.is_inside_tree():
+			var d: float = _terrain.get_sdf_at(_camera.position)
+			if d < CAMERA_CLEARANCE:  # never under the ground the player walks
+				_camera.position += _up * (CAMERA_CLEARANCE - d)
+		_camera.look_at(eye, _up)
+	_player.visible = not fpv
+	_reach.position = _target + _up * (PLAYER_HEIGHT * 0.5)
+	_player.transform = Transform3D(Basis(Quaternion(Vector3.UP, _up)), _target + _up * (PLAYER_HEIGHT * 0.5))
+	var dist := EYE_HEIGHT if fpv else _dist
 	if _terrain != null:
 		_terrain.set_lod_centre(_target)  # the LOD rings round the pivot, not the camera
-		_terrain.lod_view_min = _terrain.get_lod_at_distance(_dist)  # nothing finer than the pivot needs from here
+		_terrain.lod_view_min = _terrain.get_lod_at_distance(dist)  # nothing finer than the pivot needs from here
 	# The planes follow the orbit: a world's view is hundreds of km (the terrain loads to the far plane, lod_far_limit).
-	_camera.far = maxf(_dist * 4.0, 2000.0)
-	_camera.near = clampf(_dist * 0.0002, 0.05, 50.0)
+	_camera.far = maxf(_dist * 4.0, VIEW_FAR)
+	_camera.near = clampf(dist * 0.0002, 0.05, 50.0)
 
 
 func _gui_input(p_event: InputEvent) -> void:
 	if p_event is InputEventMouseMotion:
 		var m := p_event as InputEventMouseMotion
-		if m.button_mask & MOUSE_BUTTON_MASK_LEFT:
+		if m.button_mask & (MOUSE_BUTTON_MASK_RIGHT | MOUSE_BUTTON_MASK_MIDDLE):
 			_yaw -= m.relative.x * 0.008
-			_pitch = clampf(_pitch + m.relative.y * 0.008, 0.05, 1.55)
-		elif m.button_mask & (MOUSE_BUTTON_MASK_RIGHT | MOUSE_BUTTON_MASK_MIDDLE):
-			var axes := _ground_axes()
-			var right := axes[0] * cos(_yaw) - axes[1] * sin(_yaw)
-			var fwd := -(axes[0] * sin(_yaw) + axes[1] * cos(_yaw))
-			_target += (-right * m.relative.x + fwd * m.relative.y) * _dist * 0.0015
+			_pitch = clampf(_pitch + m.relative.y * 0.008, -1.55 if noclip or fpv else 0.05, 1.55)
+		elif m.button_mask & MOUSE_BUTTON_MASK_LEFT:
+			var mv := _move_axes()
+			var step := FPV_STEP if fpv else maxf(_dist, 10.0) * 0.0015
+			_target += (-mv[0] * m.relative.x + mv[1] * m.relative.y) * step
+			_to_ground()
 		else:
 			return
 		_place_camera()
@@ -278,7 +479,7 @@ func _gui_input(p_event: InputEvent) -> void:
 	elif p_event is InputEventMouseButton and p_event.pressed:
 		var b := p_event as InputEventMouseButton
 		if b.button_index == MOUSE_BUTTON_WHEEL_UP:
-			_dist = maxf(_dist * 0.9, 20.0)
+			_dist = maxf(_dist * 0.9, NEAREST)
 		elif b.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 			_dist /= 0.9
 		else:

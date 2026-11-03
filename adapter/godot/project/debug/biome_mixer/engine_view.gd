@@ -70,6 +70,20 @@ func _ready() -> void:
 		if not p_on:
 			_settle.start())
 	bar.add_child(_three)
+	var noclip := CheckButton.new()
+	noclip.text = "Noclip"
+	noclip.tooltip_text = "The player (the capsule, 1.7 m) flies through the ground where the camera looks; off, a left drag walks it on the ground."
+	noclip.toggled.connect(_view3d.set_noclip)
+	bar.add_child(noclip)
+	var fpv := CheckButton.new()
+	fpv.text = "First person"
+	fpv.tooltip_text = "The camera at the player's eyes (1.6 m); right drag looks round, left drag moves. Off: the camera orbits the player."
+	fpv.toggled.connect(_view3d.set_fpv)
+	bar.add_child(fpv)
+	var reach := SpinBox.new()
+	_spin(bar, reach, "Run min", 0.0, 120.0, TerrainView.REACH_MIN)
+	reach.tooltip_text = "A faint sphere round the player: where a run of this many minutes reaches (6 m/s: 2 min 720 m, 5 min 1.8 km), its line on the terrain brighter. 0: none."
+	reach.value_changed.connect(_view3d.set_reach_minutes)
 	var game := Button.new()
 	game.text = "Open in game"
 	game.tooltip_text = "Runs the game on this world (the engine's terrain in 3D, with its trees, rocks and features)."

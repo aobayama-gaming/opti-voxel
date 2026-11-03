@@ -28,6 +28,39 @@ inline ov::str ground_graph(double p_voxel) {
     return "\"graph\": " + ov::to_json(Climate::template_graph(p_voxel));
 }
 
+// The template ground's nodes (Climate::template_graph) but its output: its notes and their mix "ground", each note
+// through a shape of p_shape's members if any (a shape on every octave).
+inline ov::Value ground_nodes(double p_voxel, const ov::str &p_shape = ov::str()) {
+    const ov::Value graph = Climate::template_graph(p_voxel);
+    ov::Value nodes = ov::Value::array();
+    for (const ov::Value &n : graph["nodes"].elements()) {
+        if (n["kind"].as_str() == "output") {
+            continue;
+        }
+        ov::Value node = n;
+        for (size_t r = 0; !p_shape.empty() && node["kind"].as_str() == "mix" && r < node["rows"].size(); r++) {
+            ov::Value shape = json("{" + p_shape + "}");
+            shape["id"] = "s_" + node["rows"][r]["in"].as_str();
+            shape["kind"] = "shape";
+            shape["in"] = node["rows"][r]["in"];
+            node["rows"].at(r)["in"] = shape["id"];
+            nodes.push_back(shape);
+        }
+        nodes.push_back(node);
+    }
+    return nodes;
+}
+
+// A biome's "graph" member: the template ground with each note through a shape of p_shape's members, to splice into a
+// table's text.
+inline ov::str shaped_ground_graph(double p_voxel, const ov::str &p_shape) {
+    ov::Value nodes = ground_nodes(p_voxel, p_shape);
+    nodes.push_back(json(R"({"id": "o", "kind": "output", "height": "ground"})"));
+    ov::Value graph = ov::Value::object();
+    graph["nodes"] = nodes;
+    return "\"graph\": " + ov::to_json(graph);
+}
+
 // Biome p_biome's graph nodes.
 inline ov::Value &graph_nodes(ov::Value &r_table, size_t p_biome) {
     return r_table["biomes"].at(p_biome)["graph"]["nodes"];

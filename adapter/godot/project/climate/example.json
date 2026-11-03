@@ -1,75 +1,97 @@
 {
- "comment": "A world with the cascade's shaped bands: a continent field and a terrain-type field (the continents, twisted) choose mountains (ridged multifractal, lifted by their curve), hills (billow), badlands (stepped by their curve) and plains (low billow), with turbulence from three warp fields. Tuned for 5 cm voxels; ranges keep the octaves the ground has at any LOD count.",
+ "comment": "A world with the cascade's shaped bands: a continent field and a terrain-type field (the continents, twisted) choose mountains (ridged multifractal, lifted by their curve), hills (billow), badlands (stepped by their curve) and plains (low billow), with turbulence from warp nodes (one noise read at three seeds). Tuned for 5 cm voxels; a note past the LOD count's top plays nothing, so it reads at any LOD count.",
  "engine": {"voxel_m": 0.05, "lods": 25},
  "climate": {
   "fields": [
    {
     "name": "continent",
     "seed": 209,
-    "bands": [
-     {"from_m": 13000, "to_m": 30000000, "amp": 1.0, "persistence": 0.75}
-    ]
+    "bands": [{"from_m": 13000, "to_m": 30000000, "amp": 1.0, "persistence": 0.75}]
    },
    {
     "name": "terrain",
     "seed": 102,
-    "bands": [
-     {"from_m": 3200, "to_m": 30000000, "amp": 0.12, "persistence": 0.75}
-    ],
-    "terms": [
-     {"source": "continent", "x": 1.0}
-    ]
+    "bands": [{"from_m": 3200, "to_m": 30000000, "amp": 0.12, "persistence": 0.75}],
+    "terms": [{"source": "continent", "x": 1.0}]
    },
    {
     "name": "badland",
     "seed": 103,
-    "bands": [
-     {"from_m": 6500, "to_m": 30000000, "amp": 1.0, "persistence": 0.7}
-    ]
-   },
-   {
-    "name": "wx",
-    "seed": 105,
-    "bands": [
-     {"from_m": 200, "to_m": 3200, "amp": 0.5, "persistence": 0.6}
-    ]
-   },
-   {
-    "name": "wy",
-    "seed": 106,
-    "bands": [
-     {"from_m": 200, "to_m": 3200, "amp": 0.5, "persistence": 0.6}
-    ]
-   },
-   {
-    "name": "wz",
-    "seed": 107,
-    "bands": [
-     {"from_m": 200, "to_m": 3200, "amp": 0.5, "persistence": 0.6}
-    ]
+    "bands": [{"from_m": 6500, "to_m": 30000000, "amp": 1.0, "persistence": 0.7}]
    }
   ]
  },
  "biomes": [
   {
    "name": "mountains",
-   "at": {
-    "terrain": [0.485, 0.4565]
-   },
+   "at": {"terrain": [0.485, 0.4565]},
    "graph": {
     "nodes": [
-     {"id": "n1", "kind": "note", "from_m": 26214.4, "to_m": 26214.4, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
-     {"id": "n2", "kind": "note", "from_m": 13107.2, "to_m": 13107.2, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
+     {"id": "wx_16", "kind": "note", "wavelength_m": 3276.8, "seed": 105, "amp_m": 0.5},
+     {"id": "warp_wx_16_80", "kind": "warp", "in": "wx_16", "amount_m": 80},
+     {"id": "wx_15", "kind": "note", "wavelength_m": 1638.4, "seed": 105, "amp_m": 0.3},
+     {"id": "wx_16_15", "kind": "mix", "rows": [{"in": "wx_16"}, {"in": "wx_15"}]},
+     {"id": "warp_wx_15_80", "kind": "warp", "in": "wx_16_15", "amount_m": 80},
+     {"id": "wx_14", "kind": "note", "wavelength_m": 819.2, "seed": 105, "amp_m": 0.18},
+     {"id": "wx_16_14", "kind": "mix", "rows": [{"in": "wx_16"}, {"in": "wx_15"}, {"in": "wx_14"}]},
+     {"id": "warp_wx_14_80", "kind": "warp", "in": "wx_16_14", "amount_m": 80},
+     {"id": "wx_13", "kind": "note", "wavelength_m": 409.6, "seed": 105, "amp_m": 0.108},
+     {"id": "wx_16_13", "kind": "mix", "rows": [{"in": "wx_16"}, {"in": "wx_15"}, {"in": "wx_14"}, {"in": "wx_13"}]},
+     {"id": "warp_wx_13_80", "kind": "warp", "in": "wx_16_13", "amount_m": 80},
+     {"id": "wx_12", "kind": "note", "wavelength_m": 204.8, "seed": 105, "amp_m": 0.0648},
+     {"id": "wx_16_12", "kind": "mix", "rows": [{"in": "wx_16"}, {"in": "wx_15"}, {"in": "wx_14"}, {"in": "wx_13"}, {"in": "wx_12"}]},
+     {"id": "warp_wx_12_80", "kind": "warp", "in": "wx_16_12", "amount_m": 80},
+     {"id": "n1", "kind": "note", "wavelength_m": 26214.4, "seed": 59943, "amp_m": 3276.8},
+     {"id": "n2", "kind": "note", "wavelength_m": 13107.2, "seed": 59943, "amp_m": 1638.4},
      {"id": "n2s", "kind": "shape", "in": "n2", "shape": "ridged"},
      {"id": "n2m", "kind": "multifractal", "in": "n2s", "gain": 2},
-     {"id": "n3", "kind": "note", "from_m": 1638.4, "to_m": 6553.6, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
-     {"id": "n3w", "kind": "warp", "in": "n3", "fields": ["wx", "wy", "wz"], "amount_m": 80},
-     {"id": "n3s", "kind": "shape", "in": "n3w", "shape": "ridged"},
-     {"id": "n3m", "kind": "multifractal", "in": "n3s", "gain": 2},
-     {"id": "n4", "kind": "note", "from_m": 0.4, "to_m": 819.2, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
-     {"id": "n4w", "kind": "warp", "in": "n4", "fields": ["wx", "wy", "wz"], "amount_m": 80},
-     {"id": "n4s", "kind": "shape", "in": "n4w", "shape": "ridged"},
-     {"id": "n4m", "kind": "multifractal", "in": "n4s", "gain": 2},
+     {"id": "n3_17", "kind": "note", "wavelength_m": 6553.6, "seed": 59943, "amp_m": 819.2},
+     {"id": "n3s_17", "kind": "shape", "in": "n3_17", "shape": "ridged"},
+     {"id": "n3m_17", "kind": "multifractal", "in": "n3s_17", "gain": 2},
+     {"id": "n3_16", "kind": "note", "wavelength_m": 3276.8, "seed": 59943, "amp_m": 409.6},
+     {"id": "n3s_16", "kind": "shape", "in": "n3_16", "shape": "ridged"},
+     {"id": "n3m_16", "kind": "multifractal", "in": "n3s_16", "gain": 2},
+     {"id": "n3_15", "kind": "note", "wavelength_m": 1638.4, "seed": 59943, "amp_m": 204.8, "warp": "warp_wx_16_80"},
+     {"id": "n3s_15", "kind": "shape", "in": "n3_15", "shape": "ridged"},
+     {"id": "n3m_15", "kind": "multifractal", "in": "n3s_15", "gain": 2},
+     {"id": "n3m", "kind": "mix", "rows": [{"in": "n3m_17"}, {"in": "n3m_16"}, {"in": "n3m_15"}]},
+     {"id": "n4_14", "kind": "note", "wavelength_m": 819.2, "seed": 59943, "amp_m": 102.4, "warp": "warp_wx_15_80"},
+     {"id": "n4s_14", "kind": "shape", "in": "n4_14", "shape": "ridged"},
+     {"id": "n4m_14", "kind": "multifractal", "in": "n4s_14", "gain": 2},
+     {"id": "n4_13", "kind": "note", "wavelength_m": 409.6, "seed": 59943, "amp_m": 51.2, "warp": "warp_wx_14_80"},
+     {"id": "n4s_13", "kind": "shape", "in": "n4_13", "shape": "ridged"},
+     {"id": "n4m_13", "kind": "multifractal", "in": "n4s_13", "gain": 2},
+     {"id": "n4_12", "kind": "note", "wavelength_m": 204.8, "seed": 59943, "amp_m": 25.6, "warp": "warp_wx_13_80"},
+     {"id": "n4s_12", "kind": "shape", "in": "n4_12", "shape": "ridged"},
+     {"id": "n4m_12", "kind": "multifractal", "in": "n4s_12", "gain": 2},
+     {"id": "n4_11", "kind": "note", "wavelength_m": 102.4, "seed": 59943, "amp_m": 12.8, "warp": "warp_wx_12_80"},
+     {"id": "n4s_11", "kind": "shape", "in": "n4_11", "shape": "ridged"},
+     {"id": "n4m_11", "kind": "multifractal", "in": "n4s_11", "gain": 2},
+     {"id": "n4_10", "kind": "note", "wavelength_m": 51.2, "seed": 59943, "amp_m": 6.4, "warp": "warp_wx_12_80"},
+     {"id": "n4s_10", "kind": "shape", "in": "n4_10", "shape": "ridged"},
+     {"id": "n4m_10", "kind": "multifractal", "in": "n4s_10", "gain": 2},
+     {"id": "n4_9", "kind": "note", "wavelength_m": 25.6, "seed": 59943, "amp_m": 3.2, "warp": "warp_wx_12_80"},
+     {"id": "n4s_9", "kind": "shape", "in": "n4_9", "shape": "ridged"},
+     {"id": "n4m_9", "kind": "multifractal", "in": "n4s_9", "gain": 2},
+     {"id": "n4_8", "kind": "note", "wavelength_m": 12.8, "seed": 59943, "amp_m": 1.6, "warp": "warp_wx_12_80"},
+     {"id": "n4s_8", "kind": "shape", "in": "n4_8", "shape": "ridged"},
+     {"id": "n4m_8", "kind": "multifractal", "in": "n4s_8", "gain": 2},
+     {"id": "n4_7", "kind": "note", "wavelength_m": 6.4, "seed": 59943, "amp_m": 0.8, "warp": "warp_wx_12_80"},
+     {"id": "n4s_7", "kind": "shape", "in": "n4_7", "shape": "ridged"},
+     {"id": "n4m_7", "kind": "multifractal", "in": "n4s_7", "gain": 2},
+     {"id": "n4_6", "kind": "note", "wavelength_m": 3.2, "seed": 59943, "amp_m": 0.4, "warp": "warp_wx_12_80"},
+     {"id": "n4s_6", "kind": "shape", "in": "n4_6", "shape": "ridged"},
+     {"id": "n4m_6", "kind": "multifractal", "in": "n4s_6", "gain": 2},
+     {"id": "n4_5", "kind": "note", "wavelength_m": 1.6, "seed": 59943, "amp_m": 0.2, "warp": "warp_wx_12_80"},
+     {"id": "n4s_5", "kind": "shape", "in": "n4_5", "shape": "ridged"},
+     {"id": "n4m_5", "kind": "multifractal", "in": "n4s_5", "gain": 2},
+     {"id": "n4_4", "kind": "note", "wavelength_m": 0.8, "seed": 59943, "amp_m": 0.1, "warp": "warp_wx_12_80"},
+     {"id": "n4s_4", "kind": "shape", "in": "n4_4", "shape": "ridged"},
+     {"id": "n4m_4", "kind": "multifractal", "in": "n4s_4", "gain": 2},
+     {"id": "n4_3", "kind": "note", "wavelength_m": 0.4, "seed": 59943, "amp_m": 0.05, "warp": "warp_wx_12_80"},
+     {"id": "n4s_3", "kind": "shape", "in": "n4_3", "shape": "ridged"},
+     {"id": "n4m_3", "kind": "multifractal", "in": "n4s_3", "gain": 2},
+     {"id": "n4m", "kind": "mix", "rows": [{"in": "n4m_14"}, {"in": "n4m_13"}, {"in": "n4m_12"}, {"in": "n4m_11"}, {"in": "n4m_10"}, {"in": "n4m_9"}, {"in": "n4m_8"}, {"in": "n4m_7"}, {"in": "n4m_6"}, {"in": "n4m_5"}, {"in": "n4m_4"}, {"in": "n4m_3"}]},
      {"id": "mix", "kind": "mix", "rows": [{"in": "n1", "x": 0.15}, {"in": "n2m", "x": 1.5}, {"in": "n3m", "x": 2.5}, {"in": "n4m", "x": 1.2}]},
      {"id": "curve", "kind": "curve", "in": "mix", "points": [[-1500, -1200], [0, 0], [600, 1100], [1500, 2600]]},
      {"id": "out", "kind": "output", "height": "curve"}
@@ -80,16 +102,55 @@
   },
   {
    "name": "badlands",
-   "at": {
-    "badland": [0.575, 0.3575],
-    "continent": [0.405, 0.5225]
-   },
+   "at": {"badland": [0.575, 0.3575], "continent": [0.405, 0.5225]},
    "graph": {
     "nodes": [
-     {"id": "n1", "kind": "note", "from_m": 3276.8, "to_m": 26214.4, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
-     {"id": "n2", "kind": "note", "from_m": 0.4, "to_m": 1638.4, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
-     {"id": "n2w", "kind": "warp", "in": "n2", "fields": ["wx", "wy", "wz"], "amount_m": 40},
-     {"id": "n2s", "kind": "shape", "in": "n2w", "shape": "billow"},
+     {"id": "wx_16", "kind": "note", "wavelength_m": 3276.8, "seed": 105, "amp_m": 0.5},
+     {"id": "warp_wx_16_40", "kind": "warp", "in": "wx_16", "amount_m": 40},
+     {"id": "wx_15", "kind": "note", "wavelength_m": 1638.4, "seed": 105, "amp_m": 0.3},
+     {"id": "wx_16_15", "kind": "mix", "rows": [{"in": "wx_16"}, {"in": "wx_15"}]},
+     {"id": "warp_wx_15_40", "kind": "warp", "in": "wx_16_15", "amount_m": 40},
+     {"id": "wx_14", "kind": "note", "wavelength_m": 819.2, "seed": 105, "amp_m": 0.18},
+     {"id": "wx_16_14", "kind": "mix", "rows": [{"in": "wx_16"}, {"in": "wx_15"}, {"in": "wx_14"}]},
+     {"id": "warp_wx_14_40", "kind": "warp", "in": "wx_16_14", "amount_m": 40},
+     {"id": "wx_13", "kind": "note", "wavelength_m": 409.6, "seed": 105, "amp_m": 0.108},
+     {"id": "wx_16_13", "kind": "mix", "rows": [{"in": "wx_16"}, {"in": "wx_15"}, {"in": "wx_14"}, {"in": "wx_13"}]},
+     {"id": "warp_wx_13_40", "kind": "warp", "in": "wx_16_13", "amount_m": 40},
+     {"id": "wx_12", "kind": "note", "wavelength_m": 204.8, "seed": 105, "amp_m": 0.0648},
+     {"id": "wx_16_12", "kind": "mix", "rows": [{"in": "wx_16"}, {"in": "wx_15"}, {"in": "wx_14"}, {"in": "wx_13"}, {"in": "wx_12"}]},
+     {"id": "warp_wx_12_40", "kind": "warp", "in": "wx_16_12", "amount_m": 40},
+     {"id": "n1_19", "kind": "note", "wavelength_m": 26214.4, "seed": 59943, "amp_m": 3276.8},
+     {"id": "n1_18", "kind": "note", "wavelength_m": 13107.2, "seed": 59943, "amp_m": 1638.4},
+     {"id": "n1_17", "kind": "note", "wavelength_m": 6553.6, "seed": 59943, "amp_m": 819.2},
+     {"id": "n1_16", "kind": "note", "wavelength_m": 3276.8, "seed": 59943, "amp_m": 409.6},
+     {"id": "n1", "kind": "mix", "rows": [{"in": "n1_19"}, {"in": "n1_18"}, {"in": "n1_17"}, {"in": "n1_16"}]},
+     {"id": "n2_15", "kind": "note", "wavelength_m": 1638.4, "seed": 59943, "amp_m": 204.8, "warp": "warp_wx_16_40"},
+     {"id": "n2s_15", "kind": "shape", "in": "n2_15", "shape": "billow"},
+     {"id": "n2_14", "kind": "note", "wavelength_m": 819.2, "seed": 59943, "amp_m": 102.4, "warp": "warp_wx_15_40"},
+     {"id": "n2s_14", "kind": "shape", "in": "n2_14", "shape": "billow"},
+     {"id": "n2_13", "kind": "note", "wavelength_m": 409.6, "seed": 59943, "amp_m": 51.2, "warp": "warp_wx_14_40"},
+     {"id": "n2s_13", "kind": "shape", "in": "n2_13", "shape": "billow"},
+     {"id": "n2_12", "kind": "note", "wavelength_m": 204.8, "seed": 59943, "amp_m": 25.6, "warp": "warp_wx_13_40"},
+     {"id": "n2s_12", "kind": "shape", "in": "n2_12", "shape": "billow"},
+     {"id": "n2_11", "kind": "note", "wavelength_m": 102.4, "seed": 59943, "amp_m": 12.8, "warp": "warp_wx_12_40"},
+     {"id": "n2s_11", "kind": "shape", "in": "n2_11", "shape": "billow"},
+     {"id": "n2_10", "kind": "note", "wavelength_m": 51.2, "seed": 59943, "amp_m": 6.4, "warp": "warp_wx_12_40"},
+     {"id": "n2s_10", "kind": "shape", "in": "n2_10", "shape": "billow"},
+     {"id": "n2_9", "kind": "note", "wavelength_m": 25.6, "seed": 59943, "amp_m": 3.2, "warp": "warp_wx_12_40"},
+     {"id": "n2s_9", "kind": "shape", "in": "n2_9", "shape": "billow"},
+     {"id": "n2_8", "kind": "note", "wavelength_m": 12.8, "seed": 59943, "amp_m": 1.6, "warp": "warp_wx_12_40"},
+     {"id": "n2s_8", "kind": "shape", "in": "n2_8", "shape": "billow"},
+     {"id": "n2_7", "kind": "note", "wavelength_m": 6.4, "seed": 59943, "amp_m": 0.8, "warp": "warp_wx_12_40"},
+     {"id": "n2s_7", "kind": "shape", "in": "n2_7", "shape": "billow"},
+     {"id": "n2_6", "kind": "note", "wavelength_m": 3.2, "seed": 59943, "amp_m": 0.4, "warp": "warp_wx_12_40"},
+     {"id": "n2s_6", "kind": "shape", "in": "n2_6", "shape": "billow"},
+     {"id": "n2_5", "kind": "note", "wavelength_m": 1.6, "seed": 59943, "amp_m": 0.2, "warp": "warp_wx_12_40"},
+     {"id": "n2s_5", "kind": "shape", "in": "n2_5", "shape": "billow"},
+     {"id": "n2_4", "kind": "note", "wavelength_m": 0.8, "seed": 59943, "amp_m": 0.1, "warp": "warp_wx_12_40"},
+     {"id": "n2s_4", "kind": "shape", "in": "n2_4", "shape": "billow"},
+     {"id": "n2_3", "kind": "note", "wavelength_m": 0.4, "seed": 59943, "amp_m": 0.05, "warp": "warp_wx_12_40"},
+     {"id": "n2s_3", "kind": "shape", "in": "n2_3", "shape": "billow"},
+     {"id": "n2s", "kind": "mix", "rows": [{"in": "n2s_15"}, {"in": "n2s_14"}, {"in": "n2s_13"}, {"in": "n2s_12"}, {"in": "n2s_11"}, {"in": "n2s_10"}, {"in": "n2s_9"}, {"in": "n2s_8"}, {"in": "n2s_7"}, {"in": "n2s_6"}, {"in": "n2s_5"}, {"in": "n2s_4"}, {"in": "n2s_3"}]},
      {"id": "mix", "kind": "mix", "rows": [{"in": "n1", "x": 0.1}, {"in": "n2s", "x": 0.7}]},
      {"id": "curve", "kind": "curve", "in": "mix", "points": [[-200, -200], [0, 0], [30, 40], [40, 40], [70, 80], [80, 80], [110, 120], [300, 320]]},
      {"id": "out", "kind": "output", "height": "curve"}
@@ -100,15 +161,56 @@
   },
   {
    "name": "hills",
-   "at": {
-    "terrain": [0.425, 0.5115]
-   },
+   "at": {"terrain": [0.425, 0.5115]},
    "graph": {
     "nodes": [
-     {"id": "n1", "kind": "note", "from_m": 6553.6, "to_m": 26214.4, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
-     {"id": "n2", "kind": "note", "from_m": 0.4, "to_m": 3276.8, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
-     {"id": "n2w", "kind": "warp", "in": "n2", "fields": ["wx", "wy", "wz"], "amount_m": 60},
-     {"id": "n2s", "kind": "shape", "in": "n2w", "shape": "billow"},
+     {"id": "wx_16", "kind": "note", "wavelength_m": 3276.8, "seed": 105, "amp_m": 0.5},
+     {"id": "warp_wx_16_60", "kind": "warp", "in": "wx_16", "amount_m": 60},
+     {"id": "wx_15", "kind": "note", "wavelength_m": 1638.4, "seed": 105, "amp_m": 0.3},
+     {"id": "wx_16_15", "kind": "mix", "rows": [{"in": "wx_16"}, {"in": "wx_15"}]},
+     {"id": "warp_wx_15_60", "kind": "warp", "in": "wx_16_15", "amount_m": 60},
+     {"id": "wx_14", "kind": "note", "wavelength_m": 819.2, "seed": 105, "amp_m": 0.18},
+     {"id": "wx_16_14", "kind": "mix", "rows": [{"in": "wx_16"}, {"in": "wx_15"}, {"in": "wx_14"}]},
+     {"id": "warp_wx_14_60", "kind": "warp", "in": "wx_16_14", "amount_m": 60},
+     {"id": "wx_13", "kind": "note", "wavelength_m": 409.6, "seed": 105, "amp_m": 0.108},
+     {"id": "wx_16_13", "kind": "mix", "rows": [{"in": "wx_16"}, {"in": "wx_15"}, {"in": "wx_14"}, {"in": "wx_13"}]},
+     {"id": "warp_wx_13_60", "kind": "warp", "in": "wx_16_13", "amount_m": 60},
+     {"id": "wx_12", "kind": "note", "wavelength_m": 204.8, "seed": 105, "amp_m": 0.0648},
+     {"id": "wx_16_12", "kind": "mix", "rows": [{"in": "wx_16"}, {"in": "wx_15"}, {"in": "wx_14"}, {"in": "wx_13"}, {"in": "wx_12"}]},
+     {"id": "warp_wx_12_60", "kind": "warp", "in": "wx_16_12", "amount_m": 60},
+     {"id": "n1_19", "kind": "note", "wavelength_m": 26214.4, "seed": 59943, "amp_m": 3276.8},
+     {"id": "n1_18", "kind": "note", "wavelength_m": 13107.2, "seed": 59943, "amp_m": 1638.4},
+     {"id": "n1_17", "kind": "note", "wavelength_m": 6553.6, "seed": 59943, "amp_m": 819.2},
+     {"id": "n1", "kind": "mix", "rows": [{"in": "n1_19"}, {"in": "n1_18"}, {"in": "n1_17"}]},
+     {"id": "n2_16", "kind": "note", "wavelength_m": 3276.8, "seed": 59943, "amp_m": 409.6},
+     {"id": "n2s_16", "kind": "shape", "in": "n2_16", "shape": "billow"},
+     {"id": "n2_15", "kind": "note", "wavelength_m": 1638.4, "seed": 59943, "amp_m": 204.8, "warp": "warp_wx_16_60"},
+     {"id": "n2s_15", "kind": "shape", "in": "n2_15", "shape": "billow"},
+     {"id": "n2_14", "kind": "note", "wavelength_m": 819.2, "seed": 59943, "amp_m": 102.4, "warp": "warp_wx_15_60"},
+     {"id": "n2s_14", "kind": "shape", "in": "n2_14", "shape": "billow"},
+     {"id": "n2_13", "kind": "note", "wavelength_m": 409.6, "seed": 59943, "amp_m": 51.2, "warp": "warp_wx_14_60"},
+     {"id": "n2s_13", "kind": "shape", "in": "n2_13", "shape": "billow"},
+     {"id": "n2_12", "kind": "note", "wavelength_m": 204.8, "seed": 59943, "amp_m": 25.6, "warp": "warp_wx_13_60"},
+     {"id": "n2s_12", "kind": "shape", "in": "n2_12", "shape": "billow"},
+     {"id": "n2_11", "kind": "note", "wavelength_m": 102.4, "seed": 59943, "amp_m": 12.8, "warp": "warp_wx_12_60"},
+     {"id": "n2s_11", "kind": "shape", "in": "n2_11", "shape": "billow"},
+     {"id": "n2_10", "kind": "note", "wavelength_m": 51.2, "seed": 59943, "amp_m": 6.4, "warp": "warp_wx_12_60"},
+     {"id": "n2s_10", "kind": "shape", "in": "n2_10", "shape": "billow"},
+     {"id": "n2_9", "kind": "note", "wavelength_m": 25.6, "seed": 59943, "amp_m": 3.2, "warp": "warp_wx_12_60"},
+     {"id": "n2s_9", "kind": "shape", "in": "n2_9", "shape": "billow"},
+     {"id": "n2_8", "kind": "note", "wavelength_m": 12.8, "seed": 59943, "amp_m": 1.6, "warp": "warp_wx_12_60"},
+     {"id": "n2s_8", "kind": "shape", "in": "n2_8", "shape": "billow"},
+     {"id": "n2_7", "kind": "note", "wavelength_m": 6.4, "seed": 59943, "amp_m": 0.8, "warp": "warp_wx_12_60"},
+     {"id": "n2s_7", "kind": "shape", "in": "n2_7", "shape": "billow"},
+     {"id": "n2_6", "kind": "note", "wavelength_m": 3.2, "seed": 59943, "amp_m": 0.4, "warp": "warp_wx_12_60"},
+     {"id": "n2s_6", "kind": "shape", "in": "n2_6", "shape": "billow"},
+     {"id": "n2_5", "kind": "note", "wavelength_m": 1.6, "seed": 59943, "amp_m": 0.2, "warp": "warp_wx_12_60"},
+     {"id": "n2s_5", "kind": "shape", "in": "n2_5", "shape": "billow"},
+     {"id": "n2_4", "kind": "note", "wavelength_m": 0.8, "seed": 59943, "amp_m": 0.1, "warp": "warp_wx_12_60"},
+     {"id": "n2s_4", "kind": "shape", "in": "n2_4", "shape": "billow"},
+     {"id": "n2_3", "kind": "note", "wavelength_m": 0.4, "seed": 59943, "amp_m": 0.05, "warp": "warp_wx_12_60"},
+     {"id": "n2s_3", "kind": "shape", "in": "n2_3", "shape": "billow"},
+     {"id": "n2s", "kind": "mix", "rows": [{"in": "n2s_16"}, {"in": "n2s_15"}, {"in": "n2s_14"}, {"in": "n2s_13"}, {"in": "n2s_12"}, {"in": "n2s_11"}, {"in": "n2s_10"}, {"in": "n2s_9"}, {"in": "n2s_8"}, {"in": "n2s_7"}, {"in": "n2s_6"}, {"in": "n2s_5"}, {"in": "n2s_4"}, {"in": "n2s_3"}]},
      {"id": "mix", "kind": "mix", "rows": [{"in": "n1", "x": 0.1}, {"in": "n2s", "x": 0.8}]},
      {"id": "out", "kind": "output", "height": "mix"}
     ]
@@ -120,9 +222,37 @@
    "name": "plains",
    "graph": {
     "nodes": [
-     {"id": "n1", "kind": "note", "from_m": 1638.4, "to_m": 26214.4, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
-     {"id": "n2", "kind": "note", "from_m": 0.4, "to_m": 819.2, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
-     {"id": "n2s", "kind": "shape", "in": "n2", "shape": "billow"},
+     {"id": "n1_19", "kind": "note", "wavelength_m": 26214.4, "seed": 59943, "amp_m": 3276.8},
+     {"id": "n1_18", "kind": "note", "wavelength_m": 13107.2, "seed": 59943, "amp_m": 1638.4},
+     {"id": "n1_17", "kind": "note", "wavelength_m": 6553.6, "seed": 59943, "amp_m": 819.2},
+     {"id": "n1_16", "kind": "note", "wavelength_m": 3276.8, "seed": 59943, "amp_m": 409.6},
+     {"id": "n1_15", "kind": "note", "wavelength_m": 1638.4, "seed": 59943, "amp_m": 204.8},
+     {"id": "n1", "kind": "mix", "rows": [{"in": "n1_19"}, {"in": "n1_18"}, {"in": "n1_17"}, {"in": "n1_16"}, {"in": "n1_15"}]},
+     {"id": "n2_14", "kind": "note", "wavelength_m": 819.2, "seed": 59943, "amp_m": 102.4},
+     {"id": "n2s_14", "kind": "shape", "in": "n2_14", "shape": "billow"},
+     {"id": "n2_13", "kind": "note", "wavelength_m": 409.6, "seed": 59943, "amp_m": 51.2},
+     {"id": "n2s_13", "kind": "shape", "in": "n2_13", "shape": "billow"},
+     {"id": "n2_12", "kind": "note", "wavelength_m": 204.8, "seed": 59943, "amp_m": 25.6},
+     {"id": "n2s_12", "kind": "shape", "in": "n2_12", "shape": "billow"},
+     {"id": "n2_11", "kind": "note", "wavelength_m": 102.4, "seed": 59943, "amp_m": 12.8},
+     {"id": "n2s_11", "kind": "shape", "in": "n2_11", "shape": "billow"},
+     {"id": "n2_10", "kind": "note", "wavelength_m": 51.2, "seed": 59943, "amp_m": 6.4},
+     {"id": "n2s_10", "kind": "shape", "in": "n2_10", "shape": "billow"},
+     {"id": "n2_9", "kind": "note", "wavelength_m": 25.6, "seed": 59943, "amp_m": 3.2},
+     {"id": "n2s_9", "kind": "shape", "in": "n2_9", "shape": "billow"},
+     {"id": "n2_8", "kind": "note", "wavelength_m": 12.8, "seed": 59943, "amp_m": 1.6},
+     {"id": "n2s_8", "kind": "shape", "in": "n2_8", "shape": "billow"},
+     {"id": "n2_7", "kind": "note", "wavelength_m": 6.4, "seed": 59943, "amp_m": 0.8},
+     {"id": "n2s_7", "kind": "shape", "in": "n2_7", "shape": "billow"},
+     {"id": "n2_6", "kind": "note", "wavelength_m": 3.2, "seed": 59943, "amp_m": 0.4},
+     {"id": "n2s_6", "kind": "shape", "in": "n2_6", "shape": "billow"},
+     {"id": "n2_5", "kind": "note", "wavelength_m": 1.6, "seed": 59943, "amp_m": 0.2},
+     {"id": "n2s_5", "kind": "shape", "in": "n2_5", "shape": "billow"},
+     {"id": "n2_4", "kind": "note", "wavelength_m": 0.8, "seed": 59943, "amp_m": 0.1},
+     {"id": "n2s_4", "kind": "shape", "in": "n2_4", "shape": "billow"},
+     {"id": "n2_3", "kind": "note", "wavelength_m": 0.4, "seed": 59943, "amp_m": 0.05},
+     {"id": "n2s_3", "kind": "shape", "in": "n2_3", "shape": "billow"},
+     {"id": "n2s", "kind": "mix", "rows": [{"in": "n2s_14"}, {"in": "n2s_13"}, {"in": "n2s_12"}, {"in": "n2s_11"}, {"in": "n2s_10"}, {"in": "n2s_9"}, {"in": "n2s_8"}, {"in": "n2s_7"}, {"in": "n2s_6"}, {"in": "n2s_5"}, {"in": "n2s_4"}, {"in": "n2s_3"}]},
      {"id": "mix", "kind": "mix", "rows": [{"in": "n1", "x": 0.04}, {"in": "n2s", "x": 0.3}]},
      {"id": "out", "kind": "output", "height": "mix"}
     ]

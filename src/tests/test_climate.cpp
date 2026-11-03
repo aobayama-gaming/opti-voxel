@@ -206,6 +206,17 @@ TEST_CASE("ClimateReport: preview gives a world's maps from its text, the same t
     CHECK(std::all_of(plane.altitude_m.begin(), plane.altitude_m.end(), [](float p_a) { return p_a == 0.0f; }));
     CHECK(ov::contains(ClimateReport::preview(ClimateTest::json(R"({"engine": {"voxel_m": 0.05}})"), "", 20.0, 16, true, 0.0, 0.0).error, "no fields"));
     CHECK(ov::contains(ClimateReport::preview(ClimateTest::json(R"({"trees": 1})"), "", 20.0, 16, true, 0.0, 0.0).error, "unknown key"));
+    // Every mix row at 0: a ground of no notes (its top lattice -1) is drawn over the whole extent, never queried under
+    // Λ_0 (the mixer's map flooded "lattice level out of range" and never drew the next edit).
+    const ClimateReport::Preview silent = ClimateReport::preview(ClimateTest::json(R"({"engine": {"voxel_m": 0.05, "lods": 15},
+        "climate": {"fields": [{"name": "t", "seed": 1, "bands": [{"wavelength_m": 13107.2, "amp": 1}]}]},
+        "biomes": [{"name": "a", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 1638.4, "seed": 1, "amp_m": 10},
+            {"id": "mix", "kind": "mix", "rows": [{"in": "n", "x": 0}]}, {"id": "out", "kind": "output", "height": "mix"}]}}]})"),
+            "", 20.0, 16, true, 0.0, 0.0);
+    CHECK(silent.error == ov::str());
+    CHECK(silent.lattice >= 0);
+    CHECK(silent.spacing_m * 16.0 > 10000.0);
+    CHECK(silent.relief_m == 0.0);
 }
 
 TEST_CASE("Climate: malformed tables are refused with the reason") {
@@ -236,7 +247,7 @@ TEST_CASE("Climate: malformed tables are refused with the reason") {
         { R"({"biomes": [{"name": "a", "amp": [{"field": "ground", "wavelength_m": 4000, "x": 2}]}]})", "became the biome's 'graph'" },
         { R"({"biomes": [{"name": "a", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 1, "seed": 1, "amp_m": 1}, {"id": "o", "kind": "output", "height": "n"}]}}]})",
                 "outside the cascade's range" },
-        { R"({"biomes": [{"name": "a", "graph": {"nodes": [{"id": "n", "kind": "note", "from_m": 4000, "to_m": 9000, "seed": 1, "amp_m": 1e13}, {"id": "o", "kind": "output", "height": "n"}]}}]})",
+        { R"({"biomes": [{"name": "a", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 4000, "seed": 1, "amp_m": 1e13}, {"id": "o", "kind": "output", "height": "n"}]}}]})",
                 "outside [2^-16, 2^40]" },
         { R"({"biomes": [{"name": "a", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 4000, "seed": 1, "amp_m": 1}, {"id": "m", "kind": "mix", "rows": [{"in": "n", "x": -1}]}, {"id": "o", "kind": "output", "height": "m"}]}}]})",
                 ">= 0" },
@@ -245,13 +256,13 @@ TEST_CASE("Climate: malformed tables are refused with the reason") {
         { R"({"biomes": [{"name": "a", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 4000, "amp_m": 1}, {"id": "o", "kind": "output", "height": "n"}]}}]})",
                 "'seed' is required" },
         { R"({"biomes": [{"name": "a", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 4000, "seed": 1}, {"id": "o", "kind": "output", "height": "n"}]}}]})",
-                "'steepness'" },
+                "'amp_m' is required" },
         { R"({"biomes": [{"name": "a", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 4000, "seed": 1, "amp_m": 1}]}}]})", "an output node" },
         { R"({"biomes": [{"name": "a", "graph": {"nodes": [{"id": "o", "kind": "output", "height": "x"}]}}]})", "no node 'x'" },
         { R"({"biomes": [{"name": "a", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 4000, "seed": 1, "amp_m": 1}, {"id": "n", "kind": "note", "wavelength_m": 400, "seed": 1, "amp_m": 1}, {"id": "o", "kind": "output", "height": "n"}]}}]})",
                 "two nodes are 'n'" },
         { R"({"biomes": [{"name": "a", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 4000, "seed": 1, "amp_m": 1}, {"id": "m", "kind": "multifractal", "in": "n", "gain": 1}, {"id": "q", "kind": "multifractal", "in": "m", "gain": 1}, {"id": "o", "kind": "output", "height": "q"}]}}]})",
-                "a multifractal weighs one note's octaves" },
+                "a multifractal weighs a note" },
         { R"({"biomes": [{"name": "a", "height_m": 100}]})", "unknown key 'height_m'" },
         { R"({"biomes": [{"name": "a", "debug_color": "red"}]})", "#rrggbb" },
         { R"({"biomes": [{"name": "a", "debug_color": "#-00001"}]})", "#rrggbb" },
@@ -287,7 +298,7 @@ TEST_CASE("Climate: malformed tables are refused with the reason") {
     for (const Case &c : curves) {
         CAPTURE(c.json);
         ov::Value graph = Climate::template_graph(0.5);
-        graph["nodes"].at(1)["height"] = "c";
+        graph["nodes"].at(graph["nodes"].size() - 1)["height"] = "c";
         graph["nodes"].push_back(ClimateTest::json(ov::str(R"({"id": "c", "kind": "curve", "in": "ground", "points": )") + c.json + "}"));
         Table t;
         const ov::str err = parse_json(R"({"biomes": [{"name": "a", "graph": )" + ov::to_json(graph) + "}]}", g.ground, t);
@@ -296,7 +307,7 @@ TEST_CASE("Climate: malformed tables are refused with the reason") {
     }
     // A volume of 0 turns a note off (it is dropped), and the field count is capped.
     Table t;
-    CHECK(parse_json(R"({"biomes": [{"name": "a", "graph": {"nodes": [{"id": "n", "kind": "note", "from_m": 4, "to_m": 100, "seed": 1, "amp_m": 1}, {"id": "m", "kind": "mix", "rows": [{"in": "n", "x": 0}]}, {"id": "o", "kind": "output", "height": "m"}]}}]})",
+    CHECK(parse_json(R"({"biomes": [{"name": "a", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 100, "seed": 1, "amp_m": 1}, {"id": "m", "kind": "mix", "rows": [{"in": "n", "x": 0}]}, {"id": "o", "kind": "output", "height": "m"}]}}]})",
                   g.ground, t) == ov::str());
     CHECK(t.notes.empty());
     ov::str many = R"({"fields": [)";
@@ -320,7 +331,7 @@ TEST_CASE("Climate: the graph kind catalogue is the parser's keys, every kind pa
     };
     const Case cases[] = {
         { "note", R"({"id": "n", "kind": "note", "wavelength_m": 400, "seed": 1, "amp_m": 1 @})", "n" },
-        { "warp", R"(N, {"id": "x", "kind": "warp", "in": "n", "fields": ["t", "t", "t"], "amount_m": 10 @})", "x" },
+        { "warp", R"({"id": "c", "kind": "note", "wavelength_m": 1600, "seed": 3, "amp_m": 1}, {"id": "x", "kind": "warp", "in": "c", "amount_m": 10 @}, {"id": "n", "kind": "note", "wavelength_m": 400, "seed": 1, "amp_m": 1, "warp": "x"})", "n" },
         { "shape", R"(N, {"id": "x", "kind": "shape", "in": "n", "shape": "ridged" @})", "x" },
         { "multifractal", R"(N, {"id": "x", "kind": "multifractal", "in": "n", "gain": 2 @})", "x" },
         { "mix", R"(N, {"id": "x", "kind": "mix", "rows": [{"in": "n", "x": 1}] @})", "x" },
@@ -421,7 +432,7 @@ TEST_CASE("Climate: the compiler shares notes between biomes, constant where eve
     // b mixes the ground's octave 12 alone, at volume 2: one note with a's (the same seed and stretch), every note
     // modulated now (b's volume on 12; the others a's alone), b listing a's other 16 at 0.
     Table two;
-    const ov::str own = R"({"name": "b", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 204.8, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
+    const ov::str own = R"({"name": "b", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 204.8, "seed": 59943, "amp_m": 25.6},
             {"id": "m", "kind": "mix", "rows": [{"in": "n", "x": 2}]}, {"id": "o", "kind": "output", "height": "m"}]}})";
     CLIMATE_REQUIRE(parse_json(fields + R"({"name": "a", "at": {"t": [0, 1]}, )" + ground + "}, " + own + "]}", g.ground, two) == ov::str());
     CHECK(two.notes.size() == 17);
@@ -443,7 +454,7 @@ TEST_CASE("Climate: the compiler shares notes between biomes, constant where eve
     // Another seed on octave 12: a second note there (Cascade::MAX_LEVEL_NOTES), its own; a plays only the first, b
     // only the second, both listed in both biomes (a level is modulated as a whole).
     Table other;
-    const ov::str reseeded = R"({"name": "b", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 204.8, "seed": 7, "steepness": 0.125},
+    const ov::str reseeded = R"({"name": "b", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 204.8, "seed": 7, "amp_m": 25.6},
             {"id": "o", "kind": "output", "height": "n"}]}})";
     CLIMATE_REQUIRE(parse_json(fields + R"({"name": "a", "at": {"t": [0, 1]}, )" + ground + "}, " + reseeded + "]}", g.ground, other) == ov::str());
     CHECK(other.notes.size() == 18);
@@ -455,9 +466,9 @@ TEST_CASE("Climate: the compiler shares notes between biomes, constant where eve
     CHECK(find_amp(other.biomes[1], *second)->amp == float(0.125 * 4096.0));
     // Two multifractal notes on one octave: refused (the state holds one octave's signal).
     Table two_states;
-    const ov::str mf = R"({"name": "b", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 204.8, "seed": 7, "steepness": 0.125},
+    const ov::str mf = R"({"name": "b", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 204.8, "seed": 7, "amp_m": 25.6},
             {"id": "m", "kind": "multifractal", "in": "n", "gain": 1}, {"id": "o", "kind": "output", "height": "m"}]}})";
-    const ov::str mf_a = R"({"name": "a", "at": {"t": [0, 1]}, "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 204.8, "seed": 8, "steepness": 0.125},
+    const ov::str mf_a = R"({"name": "a", "at": {"t": [0, 1]}, "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 204.8, "seed": 8, "amp_m": 25.6},
             {"id": "m", "kind": "multifractal", "in": "n", "gain": 1}, {"id": "o", "kind": "output", "height": "m"}]}})";
     CHECK(ov::contains(parse_json(fields + mf_a + ", " + mf + "]}", g.ground, two_states), "one multifractal"));
 }
@@ -654,7 +665,7 @@ TEST_CASE("Climate: carried fields and a neutral modulation leave the ground bit
     // so n A and n.s (A 2^-3) + n.w dA give the constant band's bits (adding a zero product changes nothing).
     Table neutral;
     CLIMATE_REQUIRE(parse_json(R"({"fields": [{"name": "t", "bands": [{"from_m": 400, "to_m": 26000, "amp": 1}]}], "biomes": [{"name": "only", )" +
-                                    ClimateTest::note_graph(R"("from_m": 0.4, "to_m": 26214.4, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8)", R"("shape": "plain")") +
+                                    ClimateTest::shaped_ground_graph(0.05, R"("shape": "plain")") +
                                     "}]}",
                             g.ground, neutral) == ov::str());
     const Cascade::Spec specs[] = { combined_spec(carried, bare), combined_spec(neutral, bare) };

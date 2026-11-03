@@ -58,10 +58,7 @@ static func title(p_node: Dictionary) -> String:
 	var t := Kinds.title(p_node.kind)
 	match String(p_node.kind):
 		"note":
-			if p_node.has("wavelength_m"):
-				t += " %s" % fmt_m(float(p_node.wavelength_m))
-			elif p_node.has("from_m") and p_node.has("to_m"):
-				t += " %s .. %s" % [fmt_m(float(p_node.from_m)), fmt_m(float(p_node.to_m))]
+			t += " %s" % fmt_m(float(p_node.get("wavelength_m", 0.0)))
 		"shape":
 			t += " %s" % ("coeffs" if p_node.has("coeffs") else String(p_node.get("shape", "plain")))
 		"warp":
@@ -236,6 +233,22 @@ static func _surface_row(p_key: String, p_ctx: Object) -> Control:
 	return row
 
 
+# A note's wavelength: one of the octaves the cascade inserts (2^k voxels, its lattice Λ_k), from 8 voxels (the finest
+# the engine takes) to the top note of the LOD count (k = lods + 4: 26 km at 5 cm and 15 LODs). A value between octaves
+# (an older file) shows as its nearest, which is what the engine reads.
+static func _octaves(p_m: float, p_set: Callable) -> OptionButton:
+	var ob := OptionButton.new()
+	var lo := 3
+	var hi := EngineInfo.lods + 4
+	for k in range(lo, hi + 1):
+		var m := EngineInfo.voxel_m * pow(2.0, k)
+		ob.add_item("%.1f m" % m if m < 1000.0 else "%.1f km" % (m / 1000.0))
+	var near := clampi(int(round(log(maxf(p_m, 1e-6) / EngineInfo.voxel_m) / log(2.0))), lo, hi)
+	ob.select(near - lo)
+	ob.item_selected.connect(func(i: int) -> void: p_set.call(snappedf(EngineInfo.voxel_m * pow(2.0, lo + i), 0.0001)))
+	return ob
+
+
 static func _param_row(p_id: String, p_node: Dictionary, p_d: Dictionary, p_ctx: Object) -> Control:
 	var row := HBoxContainer.new()
 	row.add_child(_label(p_d.name))
@@ -244,6 +257,8 @@ static func _param_row(p_id: String, p_node: Dictionary, p_d: Dictionary, p_ctx:
 	var set1 := func(p_value: Variant) -> void: p_ctx.set_params(p_id, {name: p_value})
 	var fields: Array = p_ctx.world.fields.map(func(f): return String(f.get("name", "")))
 	match String(p_d.type):
+		"number" when p_node.kind == "note" and name == "wavelength_m":
+			row.add_child(_octaves(float(v), set1))
 		"number":
 			var c := _slider(float(v), Kinds.range_of(p_node.kind, name), set1)
 			c.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -273,13 +288,6 @@ static func _param_row(p_id: String, p_node: Dictionary, p_d: Dictionary, p_ctx:
 			row.add_child(sp)
 		"field":
 			row.add_child(_options(fields, String(v), set1))
-		"fields":
-			for axis in 3:
-				var a := axis
-				row.add_child(_options(fields, String(v[a]) if v is Array and a < v.size() else "", func(f: String) -> void:
-					var three: Array = (p_node[name] as Array).duplicate()
-					three[a] = f
-					p_ctx.set_params(p_id, {name: three})))
 		"shape":
 			row.add_child(_options(Array(p_d.options), String(v), func(s: String) -> void: p_ctx.set_params(p_id, {name: s}, true)))
 		"coeffs":
@@ -314,7 +322,7 @@ static func _param_row(p_id: String, p_node: Dictionary, p_d: Dictionary, p_ctx:
 		var x := Button.new()
 		x.text = "-"
 		x.flat = true
-		x.tooltip_text = "Take %s out (the engine's default, or the node's other way: wavelength_m or from_m and to_m, steepness or amp_m)" % name
+		x.tooltip_text = "Take %s out (the engine's default)" % name
 		x.pressed.connect(func() -> void: p_ctx.set_params(p_id, {name: null}, true))
 		row.add_child(x)
 	return row

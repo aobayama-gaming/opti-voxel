@@ -17,15 +17,8 @@ using ExactNoise::float_bits;
 
 namespace {
 
-uint64_t fnv(uint64_t p_h, uint32_t p_v) {
-    for (int i = 0; i < 4; i++) {
-        p_h = (p_h ^ ((p_v >> (8 * i)) & 0xFFu)) * 1099511628211ull;
-    }
-    return p_h;
-}
-
 uint64_t fnv_text(const ov::str &p_s) {
-    uint64_t h = 14695981039346656037ull;
+    uint64_t h = ExactNoise::FNV64_BASIS;
     for (const char c : p_s) {
         h = (h ^ uint8_t(c)) * 1099511628211ull;
     }
@@ -42,7 +35,7 @@ TEST_CASE("Climate shape: a table without shapes keeps the bits it had before th
     ClimateSDF c("res://climate/plain.json", 15);
     CHECK(c.sdf.get_climate() != nullptr);
     const Cascade::Spec &spec = c.sdf.get_spec();
-    uint64_t h = 14695981039346656037ull;
+    uint64_t h = ExactNoise::FNV64_BASIS;
     for (const int lod : { 0, 3, 8, 13 }) {
         for (int i = 0; i < 48; i++) {
             const Vector3i64 p(int64_t(i) * 7919 - 50000, (c.sdf.get_datum_y() >> lod) + 3 - i, int64_t(i) * -104729 + (int64_t(1) << 33));
@@ -50,17 +43,17 @@ TEST_CASE("Climate shape: a table without shapes keeps the bits it had before th
             Cascade::point_slots(spec, p, lod, slots, true);
             // The carried slots only: the pin doesn't depend on the group caps.
             for (int s = 0; s < Cascade::field_slot(int(spec.fields.size())); s++) {
-                h = fnv(h, float_bits(slots[s]));
+                h = ExactNoise::fnv64(h, float_bits(slots[s]));
             }
             for (int s = Cascade::carry_slot(0); s < Cascade::carry_slot(spec.carry_groups()); s++) {
-                h = fnv(h, float_bits(slots[s]));
+                h = ExactNoise::fnv64(h, float_bits(slots[s]));
             }
             const WorldPos pos{ VoxelPos(p.x << lod, p.y << lod, p.z << lod), Float3() };
-            h = fnv(h, float_bits(c.sdf.evaluate(pos, lod)));
+            h = ExactNoise::fnv64(h, float_bits(c.sdf.evaluate(pos, lod)));
         }
     }
     for (int l = 0; l < 15; l++) {
-        h = fnv(h, float_bits(c.sdf.skirt_depth_m(l)));
+        h = ExactNoise::fnv64(h, float_bits(c.sdf.skirt_depth_m(l)));
     }
     const uint64_t chunk_text = fnv_text(CascadeGLSL::level_shader(&c.sdf, false, false, false, true, CascadeGLSL::View::SAMPLES));
     const uint64_t point_text = fnv_text(CascadeGLSL::level_shader(&c.sdf, false, true));
@@ -89,9 +82,11 @@ TEST_CASE("Climate shape: the relaxer plays free graphs: chains per octave, sub-
     CLIMATE_REQUIRE(c.sdf.get_climate() != nullptr);
     const Table &t = *c.sdf.get_climate();
     CLIMATE_REQUIRE(t.biomes.size() == 3);
-    CLIMATE_REQUIRE(t.fields.size() == 3);
-    CHECK(t.fields[2].channel);
-    CHECK(t.fields[2].bands.size() == 3); // the hills' octave, the caves' two
+    CLIMATE_REQUIRE(t.fields.size() == 20); // t, the warp's 6 octaves' x, y, z, the sub-mix
+    const int sub = 19;
+    CHECK(std::all_of(t.fields.begin() + 1, t.fields.begin() + sub, [](const Field &p_f) { return p_f.warp && p_f.bands.size() == 1; }));
+    CHECK(t.fields[sub].channel);
+    CHECK(t.fields[sub].bands.size() == 3); // the hills' octave, the caves' two
     auto ops = [](const SampleProgram &p_p) {
         std::vector<SampleOp> o;
         for (const SampleInstr &in : p_p.code) {
@@ -103,13 +98,13 @@ TEST_CASE("Climate shape: the relaxer plays free graphs: chains per octave, sub-
     CHECK(ops(t.biomes[0].program) == std::vector<O>{ O::FIELD, O::SHAPE, O::GROUND, O::CONST, O::MUL, O::ADD });
     CHECK(ops(t.biomes[1].program) == std::vector<O>{ O::GROUND, O::SHAPE });
     CHECK(ops(t.biomes[2].program) == std::vector<O>{ O::FIELD, O::SHAPE, O::GROUND, O::CONST, O::MUL, O::ADD });
-    CHECK(t.biomes[0].program.code[0].index == 2);
-    CHECK(t.biomes[2].program.code[0].index == 2);
+    CHECK(t.biomes[0].program.code[0].index == sub);
+    CHECK(t.biomes[2].program.code[0].index == sub);
     const std::vector<Amp> &chained = t.biomes[0].amps;
-    CHECK(std::any_of(chained.begin(), chained.end(), [](const Amp &p_a) { return p_a.group == 0 && p_a.has_shape && p_a.warp != 0.0f && p_a.amp > 0.0f; }));
-    CHECK(std::any_of(chained.begin(), chained.end(), [](const Amp &p_a) { return p_a.group == 3 && p_a.has_shape && p_a.amp > 0.0f; }));
+    CHECK(std::any_of(chained.begin(), chained.end(), [](const Amp &p_a) { return p_a.group == 0 && p_a.has_shape && !p_a.warps.empty() && p_a.amp > 0.0f; }));
+    CHECK(std::any_of(chained.begin(), chained.end(), [&](const Amp &p_a) { return p_a.group == sub + 1 && p_a.has_shape && p_a.amp > 0.0f; }));
     const SampleCarry carry = sample_carry(t);
-    CHECK(carry.field[2] >= 0);
+    CHECK(carry.field[sub] >= 0);
     double bound = 0.0;
     for (const Climate::Biome &b : t.biomes) {
         CHECK(b.program.bound > 0.0);
@@ -139,47 +134,40 @@ TEST_CASE("Climate shape: the relaxer plays free graphs: chains per octave, sub-
     CHECK(over == 0);
     ov::Value data;
     CLIMATE_REQUIRE(load_table("res://climate/graph_test.json", data) == ov::str());
-    for (const auto &[kind, error] : { std::pair{ "multifractal", "a multifractal weighs one note's octaves" }, std::pair{ "warp", "a warp moves where notes are read" } }) {
+    // Refused: a multifractal past a mix (it weighs one note by the coarser multifractal notes), and a warp of a node past
+    // the notes (it moves where notes are read).
+    for (const bool warp : { false, true }) {
         ov::Value bad = data;
         ov::Value &nodes = ClimateTest::graph_nodes(bad, 2);
+        if (warp) {
+            nodes.push_back(ClimateTest::json(R"({"id": "cs0", "kind": "shape", "in": "caves", "shape": "billow"})"));
+            nodes.push_back(ClimateTest::json(R"({"id": "cw", "kind": "warp", "in": "cs0", "amount_m": 3})"));
+        }
         for (size_t n = 0; n < nodes.size(); n++) {
-            if (nodes[n]["id"].as_str() == "cs") {
-                ov::Value node = ov::Value::object();
-                node["id"] = "cs";
-                node["kind"] = kind;
-                node["in"] = ov::str(kind) == "warp" ? "cs0" : "caves";
-                node["gain"] = 2.0;
-                if (ov::str(kind) == "warp") {
-                    node.erase("gain");
-                    node["amount_m"] = 3.0;
-                    ov::Value f = ov::Value::array();
-                    for (const char *name : { "t", "r", "t" }) {
-                        f.push_back(name);
-                    }
-                    node["fields"] = f;
-                    ov::Value shape = ov::Value::object();
-                    shape["id"] = "cs0";
-                    shape["kind"] = "shape";
-                    shape["in"] = "caves";
-                    shape["shape"] = "billow";
-                    nodes.push_back(shape);
-                }
-                nodes.at(n) = node;
+            if (warp && nodes[n]["kind"].as_str() == "note") {
+                nodes.at(n)["warp"] = "cw";
+                break;
+            }
+            if (!warp && nodes[n]["id"].as_str() == "cs") {
+                nodes.at(n) = ClimateTest::json(R"({"id": "cs", "kind": "multifractal", "in": "caves", "gain": 2})");
             }
         }
         const ClimateSDF broken(bad, 15);
         CHECK(broken.sdf.get_climate() == nullptr);
-        CHECK(ov::contains(broken.sdf.get_climate_error(), error));
+        CHECK(ov::contains(broken.sdf.get_climate_error(), warp ? "not a node past them" : "a multifractal weighs a note"));
     }
     // Two sub-mixes of one biome sit on two fields even where their octaves don't meet (each read is its own sum), and
     // sub-mix fields past MAX_FIELDS are refused before anything indexes by them.
     ov::Value two = ClimateTest::json(R"({"fields": [], "biomes": [{"name": "b", "graph": {"nodes": [
-        {"id": "g", "kind": "note", "from_m": 0.4, "to_m": 26214.4, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
         {"id": "a", "kind": "note", "wavelength_m": 12.8, "seed": 11, "amp_m": 1},
         {"id": "b", "kind": "note", "wavelength_m": 51.2, "seed": 12, "amp_m": 1},
         {"id": "m", "kind": "min", "a": "a", "b": "b"},
-        {"id": "s", "kind": "add", "a": "g", "b": "m"},
+        {"id": "s", "kind": "add", "a": "ground", "b": "m"},
         {"id": "out", "kind": "output", "height": "s"}]}}]})");
+    const ov::Value ground = ClimateTest::ground_nodes(0.05);
+    for (const ov::Value &n : ground.elements()) {
+        ClimateTest::graph_nodes(two, 0).push_back(n);
+    }
     const ClimateSDF split(two, 15);
     CHECK(split.sdf.get_climate_error() == ov::str());
     CLIMATE_REQUIRE(split.sdf.get_climate() != nullptr);
@@ -263,6 +251,16 @@ TEST_CASE("Climate shape: caves are a smooth min on the mix's output, bounded by
 
 // The shapes' centring constants are the noise's own means: E[sabs(n)] and E[n^2] of perlin3, over random points of
 // random cells.
+// A generic capacity: a power of two, at least the floor, at most the max, and never under the need (a generic carry
+// clamped to MAX_CARRY under its need overran the cascade's slots).
+TEST_CASE("Climate shape: cap_for holds the need") {
+    CHECK(cap_for(5, 0, 24) == 8);
+    CHECK(cap_for(5, 16, 24) == 16);
+    CHECK(cap_for(0, 4, 24) == 4);
+    CHECK(cap_for(20, 0, 24) == 24);
+    CHECK(cap_for(30, 0, 24) == 30);
+}
+
 TEST_CASE("Climate shape: NOISE_ABS_MEAN and NOISE_SQ_MEAN are the noise's means") {
     double abs_sum = 0.0, sq_sum = 0.0;
     const int n = 1 << 20;
@@ -313,7 +311,7 @@ TEST_CASE("Climate shape: a shaped table parses into its groups, box runs equal 
     CHECK(spec.fields.back().empty());
     CLIMATE_REQUIRE(spec.modulation != nullptr);
     CHECK(spec.modulation->group_features(0) != 0u);
-    CHECK(spec.modulation->state_group() == 5); // the ground, 4 fields, then the state
+    CHECK(spec.modulation->state_group() == int(t.fields.size()) + 1); // the ground, the fields, then the state
     int64_t bad = 0;
     for (const int lod : { 0, 3, 8 }) {
         for (const int64_t base : { int64_t(5), (int64_t(1) << 32) - 2, -(int64_t(1) << 44) }) {
@@ -326,7 +324,7 @@ TEST_CASE("Climate shape: a shaped table parses into its groups, box runs equal 
     for (int i = 0; i < 64; i++) {
         float slots[Cascade::SLOTS];
         Cascade::point_slots(spec, Vector3i64(int64_t(i) * 7919, 3, int64_t(i) * -1301), 2, slots, true);
-        const float c = slots[Cascade::field_slot(4)];
+        const float c = slots[Cascade::field_slot(int(t.fields.size()))];
         written += c != 0.0f;
         CHECK(std::isfinite(c));
         CHECK(c >= -0.05f);
@@ -409,18 +407,25 @@ TEST_CASE("Climate shape: malformed shapes and terms are refused with the reason
         Table t;
         return parse(ClimateTest::json(p_json), g, t);
     };
-    // One biome whose graph is note "n" (1 m .. 100 m) through p_nodes (each reading the one before), its last p_height.
+    // One biome whose graph is note "n" (51.2 m) through p_nodes (each reading the one before), its last p_height.
     auto biome = [](const ov::str &p_nodes, const char *p_height, const ov::str &p_note = ov::str()) {
-        return R"("biomes": [{"name": "a", "graph": {"nodes": [{"id": "n", "kind": "note", "from_m": 1, "to_m": 100, "seed": 1, "steepness": 0.125)" + p_note + "}, " +
+        return R"("biomes": [{"name": "a", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 51.2, "seed": 1, "amp_m": 6.4)" + p_note + "}, " +
                 p_nodes + R"({"id": "o", "kind": "output", "height": ")" + ov::str(p_height) + "\"}]}}]}";
     };
     const ov::str f1 = R"({"fields": [{"name": "t", "bands": [{"from_m": 400, "to_m": 26000, "amp": 1}]}], )";
     CHECK(ov::contains(err(f1 + biome(R"({"id": "s", "kind": "shape", "in": "n", "shape": "spiky"}, )", "s")), "plain, billow"));
     CHECK(ov::contains(err(f1 + biome(R"({"id": "f", "kind": "field", "field": "t"}, {"id": "m", "kind": "multifractal", "in": "f", "gain": 2}, )", "m")),
-            "a multifractal weighs one note's octaves"));
-    CHECK(ov::contains(err(f1 + biome(R"({"id": "w", "kind": "warp", "in": "n", "fields": ["t"], "amount_m": 1}, )", "w")), "3 fields"));
-    // A warp reads fields: the ground's slope (the swiss turbulence's) is not offered, nor its damping (climate.hpp).
-    CHECK(ov::contains(err(f1 + biome(R"({"id": "w", "kind": "warp", "in": "n", "amount_m": 1}, )", "w")), "3 fields"));
+            "a multifractal weighs a note"));
+    // A warp is a note's input, its notes coarser than the note (the planner's rule) and plain: the ground's slope (the
+    // swiss turbulence's) is not offered, nor its damping (climate.hpp).
+    const ov::str coarse = R"({"id": "c", "kind": "note", "wavelength_m": 409.6, "seed": 3, "amp_m": 0.5}, )";
+    CHECK(ov::contains(err(f1 + biome(coarse + R"({"id": "w", "kind": "warp", "in": "c", "amount_m": 1}, )", "w")), "a note's input"));
+    CHECK(err(f1 + biome(coarse + R"({"id": "w", "kind": "warp", "in": "c", "amount_m": 1}, )", "n", R"(, "warp": "w")")) == ov::str());
+    CHECK(ov::contains(err(f1 + biome(R"({"id": "c", "kind": "note", "wavelength_m": 51.2, "seed": 3, "amp_m": 0.5}, {"id": "w", "kind": "warp", "in": "c", "amount_m": 1}, )", "n", R"(, "warp": "w")")),
+            "coarser"));
+    CHECK(ov::contains(err(f1 + biome(coarse + R"({"id": "r", "kind": "shape", "in": "c", "shape": "ridged"}, {"id": "w", "kind": "warp", "in": "r", "amount_m": 1}, )", "n", R"(, "warp": "w")")),
+            "no shape"));
+    CHECK(ov::contains(err(f1 + biome(coarse, "n", R"(, "warp": "c")")), "is a warp node"));
     CHECK(ov::contains(err(f1 + biome("", "n", R"(, "damp": 4)")), "unknown key 'damp'"));
     // An offset is a constant term: inserted without its mean, it only counts in a multifractal's state (ridged's scales
     // its |n| too).
@@ -581,7 +586,7 @@ TEST_CASE("Climate shape: every level shader variant defines the climate helpers
     const char *const NAMES[] = { "cl_flush", "cl_mul", "cl_sub", "cl_add", "cl_scale", "cl_edge", "cl_multifractal", "cl_smooth_abs", "cl_curve0", "cl_curve1",
         "cascade_warped", "climate_ground", "climate_biome", "cascade_mods", "cl_smin", "cl_sample0", "cl_curve0_0" };
     ov::Value world, graph;
-    CHECK(load_table("res://climate/world.json", world) == ov::str());
+    CHECK(load_table("res://climate/eight_biomes_test.json", world) == ov::str());
     CHECK(load_table("res://climate/graph_test.json", graph) == ov::str()); // sub-mix fields: modulated groups past the ground
     int64_t variants = 0, missing = 0, past_mods = 0;
     ov::Value caves;
@@ -726,7 +731,7 @@ TEST_CASE("Climate shape: ground terms without fields take the climate variant a
 // lifted (the bound itself; the cap is a cost choice). The curves read the weights carried to each chunk's own level 0,
 // so their steps come from the fields' L+2 / L+3 octaves.
 TEST_CASE("Climate shape: the field step between LOD L and L+1 stays within the skirt depth with ground terms") {
-    for (const auto &[path, lods] : { std::pair{ "res://climate/shaped_test.json", 15 }, std::pair{ "res://climate/example.json", 15 }, std::pair{ "res://climate/world.json", 15 }, std::pair{ "res://climate/programs_test.json", 15 } }) {
+    for (const auto &[path, lods] : { std::pair{ "res://climate/shaped_test.json", 15 }, std::pair{ "res://climate/example.json", 15 }, std::pair{ "res://climate/eight_biomes_test.json", 15 }, std::pair{ "res://climate/programs_test.json", 15 } }) {
         CAPTURE(path);
         ClimateSDF c(path, lods, 1e6f);
         CLIMATE_REQUIRE(c.sdf.get_climate() != nullptr);
@@ -791,10 +796,7 @@ static ov::Value retuned(ov::Value p_table) {
             } else if (kind == "smin" || kind == "smax") {
                 scale("k_m", 1.5);
             } else if (kind == "note") {
-                scale("max_amp_m", 0.8);
-                scale("steepness", 0.25);
                 scale("amp_m", 0.25);
-                scale("persistence", 0.9);
                 node["seed"] = node["seed"].as_double() + 1.0;
             } else if (kind == "multifractal") {
                 scale("gain", 0.9);
@@ -828,7 +830,7 @@ static ov::Value folded(ov::Value p_table, int p_kind) {
             bool chain = false;
             for (size_t i = 0; kind == "shape" && i < nodes.size(); i++) {
                 const ov::str in_kind = nodes[i]["kind"].as_str();
-                chain = chain || (nodes[i]["id"].as_str() == node["in"].as_str() && (in_kind == "note" || in_kind == "warp"));
+                chain = chain || (nodes[i]["id"].as_str() == node["in"].as_str() && in_kind == "note");
             }
             if (kind == "shape" && p_kind != 1 && (chain || p_kind == 2)) {
                 node.erase("coeffs");
@@ -849,8 +851,8 @@ static ov::Value folded(ov::Value p_table, int p_kind) {
     return p_table;
 }
 
-// p_table with every node of p_kinds taken out of its graph: whatever read one reads its input (a structural edit: the
-// mixer deleting nodes).
+// p_table with every node of p_kinds taken out of its graph: whatever read one reads its input, a note it warped reads
+// no warp (a structural edit: the mixer deleting nodes).
 static ov::Value bypassed(ov::Value p_table, std::initializer_list<const char *> p_kinds) {
     for (size_t b = 0; b < p_table["biomes"].size(); b++) {
         ov::Value &nodes = ClimateTest::graph_nodes(p_table, b);
@@ -867,6 +869,9 @@ static ov::Value bypassed(ov::Value p_table, std::initializer_list<const char *>
                     if (std::as_const(node).has(key) && node[key].as_str() == id) {
                         node[key] = in;
                     }
+                }
+                if (std::as_const(node).has("warp") && node["warp"].as_str() == id) {
+                    node.erase("warp");
                 }
                 for (size_t r = 0; std::as_const(node).has("rows") && r < node["rows"].size(); r++) {
                     if (node["rows"][r]["in"].as_str() == id) {
@@ -886,7 +891,7 @@ static ov::Value bypassed(ov::Value p_table, std::initializer_list<const char *>
 // mixer's edits compile nothing; and the generic table's bits are the specialised one's, every edit.
 TEST_CASE("Climate shape: a table's text follows its structure, the generic one's through every edit, with the specialised bits") {
     int64_t compared = 0, mismatches = 0;
-    for (const char *path : { "res://climate/shaped_test.json", "res://climate/world.json", "res://climate/programs_test.json", "res://climate/notes_test.json",
+    for (const char *path : { "res://climate/shaped_test.json", "res://climate/eight_biomes_test.json", "res://climate/programs_test.json", "res://climate/notes_test.json",
                  "res://climate/example.json", "res://climate/plain.json", "res://climate/graph_test.json", "res://climate/caves_test.json" }) {
         ov::Value data;
         CLIMATE_REQUIRE(load_table(path, data) == ov::str());

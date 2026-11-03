@@ -85,6 +85,9 @@ struct Field {
     // bands are those notes, each biome playing them like the ground's (Amp::group), its value read by sample programs
     // (FIELD). No biome is placed on it and it has no terms; the format can't name it.
     bool channel = false;
+    // A warp octave's axis (climate_parse.cpp: a note's noise at amplitude 1, read with its seed plus the axis). No
+    // biome is placed on it and it has no terms; the format can't name it.
+    bool warp = false;
 };
 
 // Where a biome sits on one field: u = (x - centre) * inv_span, its kernel's coordinate (the format's [centre, span],
@@ -95,12 +98,19 @@ struct Axis {
     float inv_span = 1.0f;
 };
 
+// One octave of a note's warp: LOD0 voxels (its warp's amount times the octave's volume and amplitude) per unit of the
+// fields field, field + 1, field + 2 (x, y, z: the octave's noise, climate_parse.cpp's warp_field).
+struct WarpTerm {
+    int field = -1;
+    float scale = 0.0f;
+};
+
 // How a biome plays the ground's note of octave k: its amplitude (LOD0 voxels: its graph's mix row volume times the
 // note's amplitude, biome_compiler.cpp), the modulated cascade's (combined_spec), and how the biome shapes it. gain > 0
 // weights it by the multifractal state, clamp(gain (1 - c), 0, 1), c the
-// complement of the previous multifractal octave's weighted signal (Musgrave: ridged gain 2, hybrid 1); warp != 0 reads
-// its noise displaced by warp LOD0 voxels times the values of the fields warp_fields (libnoise's turbulence), the
-// displacement's gradient applied by the chain rule.
+// complement of the previous multifractal octave's weighted signal (Musgrave: ridged gain 2, hybrid 1); warps read its
+// noise displaced by the sum of their terms (libnoise's turbulence), the displacement's gradient applied by the chain
+// rule.
 // Left out: weights or warps read from the ground's slope (Quilez's and de Carpentier's slope damping, the swiss
 // turbulence's warp). Their own gradient needs the ground's second derivatives, which the cascade doesn't carry, and the
 // Hermite subdivision needs a band's gradient to be its value's: without that term the finer levels' values streak along
@@ -116,8 +126,7 @@ struct Amp {
     bool has_shape = false; // else plain
     Shape shape;
     float gain = 0.0f;
-    float warp = 0.0f;
-    int warp_fields[3] = { -1, -1, -1 }; // x, y, z (with a warp)
+    std::vector<WarpTerm> warps;
 };
 
 // A piecewise cubic through control points (libnoise's Curve: each segment the cubic through its two points and their
@@ -269,8 +278,10 @@ struct Caps {
     int level_notes = 0;
     int carry = 0;
     int channels = 0; // sub-mix fields (Field::channel)
+    int warps = 0; // warp fields (Field::warp)
 };
-// The capacity holding p_need at least p_floor: the next power of two (p_need <= 0: p_floor), at most p_max.
+// The capacity holding p_need at least p_floor: the next power of two (p_need <= 0: p_floor), at most p_max unless
+// p_need is past it (then p_need: validate refuses it, never a capacity under the need).
 int cap_for(int p_need, int p_floor, int p_max);
 
 struct Table {
@@ -344,9 +355,9 @@ uint32_t name_hash(const ov::str &p_name);
 
 // A biome graph's node kind as the parser reads it (graph_kinds, in the format's order): the keys naming its inputs
 // (another node's id; a mix's rows name theirs, "rows") and its parameters. A parameter's type: "number", "seed" (a whole
-// number), "pow2" (a power of two), "field" (a field's name), "fields" (3 of them), "shape" (one of options), "coeffs" (4
+// number), "pow2" (a power of two), "field" (a field's name), "shape" (one of options), "coeffs" (4
 // numbers), "points" ([h, R] pairs), "rows" ([{ "in", "x" }]); required, else its default (NAN: none, the node's rule
-// decides: a note's wavelength_m or from_m and to_m, its steepness or amp_m). Every node also has "id", "kind" and "pos"
+// decides). Every node also has "id", "kind" and "pos"
 // (the mixer's, ignored). The biome mixer builds its nodes from it.
 struct GraphParam {
     const char *name;

@@ -96,7 +96,7 @@ int cap_for(int p_need, int p_floor, int p_max) {
     while (c < p_need) {
         c *= 2;
     }
-    return ov::min(ov::max(p_need > 0 ? c : 0, p_floor), p_max);
+    return ov::max(ov::min(ov::max(p_need > 0 ? c : 0, p_floor), p_max), p_need);
 }
 
 bool SampleProgram::reads_field(int p_field) const {

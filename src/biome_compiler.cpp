@@ -10,27 +10,19 @@
 
 namespace Climate {
 
-std::vector<int> note_octaves(const NoteNode &p_note, const Ground &p_ground) {
-    std::vector<int> ks;
-    for (int k = p_note.hi; k >= p_note.lo; k--) {
-        if (!p_note.range || (k >= ExactNoise::BAND_SHIFT && k <= p_ground.k_max)) {
-            ks.push_back(k);
-        }
-    }
-    return ks;
+bool note_plays(const NoteNode &p_note, const Ground &p_ground) {
+    return p_note.k >= ExactNoise::BAND_SHIFT && p_note.k <= p_ground.k_max;
 }
 
-float note_amp(const NoteNode &p_note, int p_k, const Ground &p_ground) {
-    double a = p_note.steepness > 0.0 ? p_note.steepness * std::ldexp(1.0, p_k) : p_note.amp * std::pow(p_note.persistence, p_note.hi - p_k);
-    a = ov::min(a, p_note.max_amp);
-    return float(ov::min(a, p_ground.note_cap));
+float note_amp(const NoteNode &p_note, const Ground &p_ground) {
+    return float(ov::min(p_note.amp_m / p_ground.voxel_size, p_ground.note_cap));
 }
 
 namespace {
 
 // Whether two amplitude entries play a note the same way (a constant note: every biome's alike and plain).
 bool plain(const Amp &p_a) {
-    return !p_a.has_shape && p_a.gain == 0.0f && p_a.warp == 0.0f;
+    return !p_a.has_shape && p_a.gain == 0.0f && p_a.warps.empty();
 }
 
 // One compiled note: its node's seed, its band, its cascade group (0 the ground, else 1 + its channel field's index), per
@@ -65,8 +57,8 @@ ov::str channels(const std::vector<BiomeGraph> &p_graphs, const Ground &p_ground
         for (int c = 1; c <= count; c++) {
             std::vector<NoteId> ids;
             for (const GraphRow &row : p_graphs[b].rows) {
-                for (const int k : row.channel == c ? note_octaves(row.note, p_ground) : std::vector<int>()) {
-                    ids.push_back(NoteId{ k, row.note.seed, octave_stretch(row, k), 0 });
+                if (row.channel == c && note_plays(row.note, p_ground)) {
+                    ids.push_back(NoteId{ row.note.k, row.note.seed, octave_stretch(row, row.note.k), 0 });
                 }
             }
             auto fits = [&](const std::vector<NoteId> &p_taken) {
@@ -87,7 +79,9 @@ ov::str channels(const std::vector<BiomeGraph> &p_graphs, const Ground &p_ground
     }
     const size_t count = ov::max(taken.size(), r_table.generic ? size_t(ov::max(0, p_ground.caps.channels)) : size_t(0));
     if (own + count > size_t(MAX_FIELDS)) {
-        return ov::format("%d fields and %d sub-mix fields, at most %d in all.", int64_t(own), int64_t(count), MAX_FIELDS);
+        const int64_t warps = std::count_if(r_table.fields.begin(), r_table.fields.end(), [](const Field &p_f) { return p_f.warp; });
+        return ov::format("%d fields, %d warp fields (3 per warp octave) and %d sub-mix fields, at most %d in all.", int64_t(own) - warps, warps, int64_t(count),
+                MAX_FIELDS);
     }
     for (size_t f = 0; f < count; f++) {
         Field field;
@@ -106,36 +100,37 @@ ov::str gather(const std::vector<BiomeGraph> &p_graphs, const Ground &p_ground, 
         const ov::str where = "biome '" + p_table.biomes[b].name + ov::str("': ");
         for (const GraphRow &row : p_graphs[b].rows) {
             const int group = row.channel == 0 ? 0 : 1 + p_field[b][size_t(row.channel - 1)];
-            for (const int k : note_octaves(row.note, p_ground)) {
-                const int stretch = octave_stretch(row, k);
-                auto same = [&](const Note &p_c) { return p_c.band.k == k && p_c.seed == row.note.seed && p_c.band.stretch == stretch && p_c.group == group; };
-                auto it = std::find_if(r_notes.begin(), r_notes.end(), same);
-                if (it == r_notes.end()) {
-                    Note note{ row.note.seed, ExactNoise::make_octave(row.note.seed, uint32_t(k), k, 0.0f), group, std::vector<int>(n, -1) };
-                    note.band.stretch = stretch;
-                    r_notes.push_back(note);
-                    it = r_notes.end() - 1;
-                }
-                if (it->entry[b] >= 0) {
-                    return where + ov::format("the note of octave k = %d is mixed twice.", k);
-                }
-                Amp a;
-                a.k = k;
-                a.seed = it->band.seed;
-                a.stretch = stretch;
-                a.group = group;
-                a.amp = float(double(row.x) * double(note_amp(row.note, k, p_ground)));
-                if (!(a.amp >= 0.0f)) {
-                    return where + ov::format("octave k = %d: the amplitude must be >= 0 (its note's, times the row's volume).", k);
-                }
-                a.has_shape = row.has_shape;
-                a.shape = row.shape;
-                a.gain = row.gain;
-                a.warp = row.warp;
-                std::copy(std::begin(row.warp_fields), std::end(row.warp_fields), std::begin(a.warp_fields));
-                it->entry[b] = int(r_amps[b].size());
-                r_amps[b].push_back(a);
+            if (!note_plays(row.note, p_ground)) {
+                continue;
             }
+            const int k = row.note.k;
+            const int stretch = octave_stretch(row, k);
+            auto same = [&](const Note &p_c) { return p_c.band.k == k && p_c.seed == row.note.seed && p_c.band.stretch == stretch && p_c.group == group; };
+            auto it = std::find_if(r_notes.begin(), r_notes.end(), same);
+            if (it == r_notes.end()) {
+                Note note{ row.note.seed, ExactNoise::make_octave(row.note.seed, uint32_t(k), k, 0.0f), group, std::vector<int>(n, -1) };
+                note.band.stretch = stretch;
+                r_notes.push_back(note);
+                it = r_notes.end() - 1;
+            }
+            if (it->entry[b] >= 0) {
+                return where + ov::format("the note of octave k = %d is mixed twice.", k);
+            }
+            Amp a;
+            a.k = k;
+            a.seed = it->band.seed;
+            a.stretch = stretch;
+            a.group = group;
+            a.amp = float(double(row.x) * double(note_amp(row.note, p_ground)));
+            if (!(a.amp >= 0.0f)) {
+                return where + ov::format("octave k = %d: the amplitude must be >= 0 (its note's, times the row's volume).", k);
+            }
+            a.has_shape = row.has_shape;
+            a.shape = row.shape;
+            a.gain = row.gain;
+            a.warps = row.warps;
+            it->entry[b] = int(r_amps[b].size());
+            r_amps[b].push_back(a);
         }
     }
     return ov::str();
@@ -513,21 +508,29 @@ int template_top(double p_voxel_m) {
 }
 
 ov::Value template_graph(double p_voxel_m) {
-    const int top = template_top(p_voxel_m);
-    ov::Value note = ov::Value::object();
-    note["id"] = "ground";
-    note["kind"] = "note";
-    note["from_m"] = std::ldexp(p_voxel_m, ExactNoise::BAND_SHIFT);
-    note["to_m"] = std::ldexp(p_voxel_m, top);
-    note["seed"] = int64_t(TEMPLATE_SEED);
-    note["steepness"] = TEMPLATE_STEEPNESS;
-    note["max_amp_m"] = TEMPLATE_MAX_AMP_M;
+    ov::Value nodes = ov::Value::array();
+    ov::Value rows = ov::Value::array();
+    for (int k = template_top(p_voxel_m); k >= ExactNoise::BAND_SHIFT; k--) {
+        ov::Value note = ov::Value::object();
+        note["id"] = ov::format("ground_%d", int64_t(k));
+        note["kind"] = "note";
+        note["wavelength_m"] = std::ldexp(p_voxel_m, k);
+        note["seed"] = int64_t(TEMPLATE_SEED);
+        note["amp_m"] = ov::min(TEMPLATE_STEEPNESS * std::ldexp(1.0, k), TEMPLATE_MAX_AMP_M / p_voxel_m) * p_voxel_m;
+        nodes.push_back(note);
+        ov::Value row = ov::Value::object();
+        row["in"] = note["id"];
+        rows.push_back(row);
+    }
+    ov::Value mix = ov::Value::object();
+    mix["id"] = "ground";
+    mix["kind"] = "mix";
+    mix["rows"] = rows;
+    nodes.push_back(mix);
     ov::Value out = ov::Value::object();
     out["id"] = "out";
     out["kind"] = "output";
     out["height"] = "ground";
-    ov::Value nodes = ov::Value::array();
-    nodes.push_back(note);
     nodes.push_back(out);
     ov::Value graph = ov::Value::object();
     graph["nodes"] = nodes;

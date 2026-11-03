@@ -17,29 +17,22 @@
 // one amplitude is a constant band (no modulation). docs/climate.md's "Biome graphs" part is this.
 namespace Climate {
 
-// A note node: the octaves lo .. hi (lo == hi for one wavelength), its seed, its amplitude rule (in LOD0 voxels) and its
-// stretch along the base's up.
+// A note node: one octave k, its seed, its amplitude (metres) and its stretch along the base's up.
 struct NoteNode {
-    int lo = 0;
-    int hi = 0;
-    bool range = false; // from_m / to_m: the octaves the LOD count has (a single wavelength past them is refused)
+    int k = 0;
     uint32_t seed = 0;
-    double steepness = 0.0; // > 0: octave k's amplitude is steepness * 2^k
-    double amp = 0.0; // else the coarsest octave's, times persistence per finer one
-    double persistence = 0.5;
-    double max_amp = INFINITY; // every octave's at most this
+    double amp_m = 0.0;
     int stretch = 0; // log2 of stretch_y (Band::stretch: octave k takes at most k - BAND_SHIFT of it)
 };
 
-// One mix row of a biome's graph: a note read through a warp, a shape and a multifractal (each optional), at volume x.
+// One mix row of a biome's graph: a note read through its warp, a shape and a multifractal (each optional), at volume x.
 struct GraphRow {
     NoteNode note;
     float x = 1.0f;
     bool has_shape = false;
     Shape shape;
     float gain = 0.0f;
-    float warp = 0.0f; // LOD0 voxels per unit of the warp fields
-    int warp_fields[3] = { -1, -1, -1 };
+    std::vector<WarpTerm> warps;
     int channel = 0; // 0 the ground; c >= 1 the biome's sub-mix c (its program reads it as FIELD -c until compile)
 };
 
@@ -49,19 +42,21 @@ struct BiomeGraph {
     std::vector<GraphRow> rows;
 };
 
-// The octaves a note covers at p_ground (a range trimmed to [BAND_SHIFT, k_max]), coarsest first.
-std::vector<int> note_octaves(const NoteNode &p_note, const Ground &p_ground);
-// Octave p_k's amplitude of p_note (LOD0 voxels), under the note's max and p_ground's note_cap.
-float note_amp(const NoteNode &p_note, int p_k, const Ground &p_ground);
+// Whether p_ground has p_note's octave ([BAND_SHIFT, k_max]: a note the LOD count doesn't have plays nothing, so a
+// world reads at any LOD count).
+bool note_plays(const NoteNode &p_note, const Ground &p_ground);
+// p_note's amplitude (LOD0 voxels), under p_ground's note_cap.
+float note_amp(const NoteNode &p_note, const Ground &p_ground);
 
 // Compiles p_graphs (p_graphs[b] for r_table.biomes[b]) into r_table.notes and each biome's amps: empty, or the first
 // error (a note mixed twice by a biome, two notes on one octave: the cascade's GPU table holds one per level).
 ov::str compile(const std::vector<BiomeGraph> &p_graphs, const Ground &p_ground, Table &r_table);
 
 // The template biome named p_name at p_voxel_m metres: the ground every new biome starts from (the biome mixer's) and
-// the ground of a world without biomes (SDFCascade). One note range of seed TEMPLATE_SEED from 8 voxels (k = BAND_SHIFT,
-// inserted on Λ_0) up to the first octave whose amplitude TEMPLATE_STEEPNESS * wavelength reaches TEMPLATE_MAX_AMP_M
-// (k = 19 at 5 cm: 26.2 km, 3.3 km), every octave at that steepness, capped there. Its "graph" value and the biome.
+// the ground of a world without biomes (SDFCascade). A mix "ground" of one note of seed TEMPLATE_SEED per octave from 8
+// voxels (k = BAND_SHIFT, inserted on Λ_0) up to the first whose amplitude TEMPLATE_STEEPNESS * wavelength reaches
+// TEMPLATE_MAX_AMP_M (k = 19 at 5 cm: 26.2 km, 3.3 km), every one at that steepness, capped there. Its "graph" value and
+// the biome.
 inline constexpr uint32_t TEMPLATE_SEED = 0xEA27u;
 inline constexpr double TEMPLATE_STEEPNESS = 0.125;
 inline constexpr double TEMPLATE_MAX_AMP_M = 65536.0 * 0.05;

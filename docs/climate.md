@@ -9,20 +9,21 @@ the tool that designs a world's biomes.
 A climate (`src/climate.hpp`, a table: format above `Climate::parse` in `src/climate_parse.cpp`; three files give it:
 `engine.json` the voxel and LODs, `climate.json` the fields that place biomes, `world.json` the biomes, merged by
 `WorldFile` into the table `parse` reads, `docs/terrain.md`) shapes **one ground**. Each biome is a **graph**: the
-notes it mixes (`n_k`, each with its own octave k, seed, amplitude and stretch), each read through a warp, a shape and
-a multifractal, mixed at a volume, then a height curve. A biome lists exactly what it uses: no engine default notes.
+notes it mixes (`n_k`, each one octave k with its own seed, amplitude and stretch), each read displaced by its warp,
+through a shape and a multifractal, mixed at a volume, then a height curve. A biome lists exactly what it uses: no engine default notes.
 The **biome compiler** (`src/biome_compiler.{hpp,cpp}`) turns every biome's graph into that one ground: a note is kept
 once whatever biome mixes it (identity: octave, seed, stretch), so a biome more costs only the notes it adds. Without
 biomes the ground is the **template biome** (`Climate::template_biome`, the mixer's start for a new biome too): seed
-0xEA27, every octave from k = 3 (0.4 m at 5 cm) to the first at the 3.3 km cap (k = 19 at 5 cm: 26.2 km), amplitude
-1/8 of the wavelength. Notes and fields reach lod_count + 4 at most (`Ground::k_max`, the cascade's top); the fields
+0xEA27, a note per octave from k = 3 (0.4 m at 5 cm) to the first at the 3.3 km cap (k = 19 at 5 cm: 26.2 km), each
+1/8 of its wavelength, mixed as "ground". Notes and fields reach lod_count + 4 at most (`Ground::k_max`, the cascade's top); the fields
 placing the biomes (temperature, humidity, wind: 6.5-26 km, under the top LOD like the ground: a world to walk, not
 continents) are macro inputs until the planned macro engine computes
 them.
 
 1. **Fields** (`Field`): a few slow scalars, each a sum of plain perlin octaves of its own seed, plus linear terms
-   (`coef * the ground` or `coef * an earlier field`, in list order): temperature, humidity, wind, the warp fields
-   wx / wy / wz. A term on the ground makes a field follow the height (colder higher up).
+   (`coef * the ground` or `coef * an earlier field`, in list order): temperature, humidity, wind. A term on the
+   ground makes a field follow the height (colder higher up). The climate is what places biomes: a warp's noise is the
+   biome graph's own (3.).
 2. **Weights** (`Climate::weights`): a biome is a place in the fields' space, `"at"`: a centre and a span on each field
    it names (`[centre, span]`, or `{min, max}`: their middle and half their gap). Its kernel `k_b` is the product over
    those fields of `smoothstep(clamp((1 - u^2) * 2, 0, 1))`, `u = (f - centre) / span`: on each field whole within
@@ -35,13 +36,14 @@ them.
    within a point of the edges' (desert 5.7% both, mountain 18.2% for 19.4%).
 3. **The ground** at a point: each note k of the compiled ground is inserted as
    `A_k * phi_b(n_k(p + warp))` blended over the biomes,
-   - `A_k = sum_b w_b * x_{b,k} * amp_k` (the biome's mix row volume times the note's amplitude: `"steepness"` times
-     its wavelength, or `"amp_m"` times `"persistence"` per finer octave, under `"max_amp_m"`; 0 for a biome that
+   - `A_k = sum_b w_b * x_{b,k} * amp_k` (the biome's mix row volume times the note's `"amp_m"`; 0 for a biome that
      doesn't mix it),
    - `phi_b(n) = c0 + c1 n + c2 |n| + c3 n^2` (the biome's shape: plain, billow, ridged, square), inserted without its
      mean,
    - times `clamp(gain (1 - c), 0, 1)` with a multifractal (c: the coarser notes' weighted signal, Musgrave's chain),
-   - read at the point moved by `warp_m * (wx, wy, wz)` with a warp.
+   - read at the point moved by `amount_m * (x, y, z)` with a warp: the note's `"warp"` input is a warp node whose
+     input is notes (a note or a mix of them, every one coarser than the note), read with their seed, seed + 1 and
+     seed + 2 for x, y and z (libnoise's turbulence).
    A note every biome plays plain at one amplitude is a constant band (no modulation, the same bits: `A = a` exactly).
    A note's `"stretch_y"` reads it squeezed along the base's up.
 4. **The biome's program** (`Biome::program`, `Climate::SampleProgram`): what its graph does past its notes' mix, at
@@ -67,13 +69,22 @@ macro layer in double on the CPU, `BaseSurface`'s region machinery).
 ## Implementation
 
 - **Parse, compile and validate** (`climate_parse.cpp`, `biome_compiler.cpp`, `climate_validate.cpp`): metres to
-  octaves (`from_m` .. `to_m` ranges keep the octaves the LOD count has, so one table covers 15 and 25 LODs; a single
-  wavelength outside is refused), each biome's graph read back from its output by the *relaxer* (the parser's
+  octaves (a note is one octave, its wavelength's nearest power of two of voxels: finer than 8 voxels is refused, past
+  the LOD count's top it plays nothing, so one table covers 15 and 25 LODs), each biome's graph read back from its output by the *relaxer* (the parser's
   `expr`), at `SDFCascade::climate_ground()`. A graph is free: any node may read any other, and the relaxer decides
   where each one plays. A node is either notes the cascade inserts (rows: a note's per-octave chain at a volume) or a
   register of the biome's sample program:
-  - a note's chain plays per octave while it reads note -> warp -> shape -> multifractal, each at most once (a warp
-    anywhere in it moves to the front: shapes are pointwise, a warp only moves where the note is read);
+  - a note's chain plays per octave while it reads note -> shape -> multifractal, each at most once; the note's warp
+    is its input, not a node of the chain (it moves where the note is read);
+  - a warp's notes are coarser than every note it moves, the *planner's rule*: a note of octave k reads the fields as
+    they stand before level k's insertions, its coarser octaves only. Each note of a warp's input (rows, every one
+    plain) is three fields (`Field::warp`: x, y, z, its octave's noise at amplitude 1 and seed + 0, 1, 2, not
+    modulated by the biomes), one per octave and seed whatever warp reads it, and a *term* of the warped note
+    (`WarpTerm`: those fields at `amount_m` times the row's volume and amplitude, `Amp::warps`). The fields hold no
+    value, so a value edit never changes the table's structure (a generic table also keeps its warp fields' count,
+    `Caps::warps`, so deleting a warp compiles nothing); world.json's warps read 4 octaves, 12 fields. The modulator
+    plays a band's terms as records of their own (`BiomeBand`: no amplitude, the warp), summed per axis like the
+    biomes';
   - a mix is linear: its rows' notes at their volumes (a mix of mixes is one mix; a mix of one row at volume 1 is that
     row, so a shape over it still plays per octave); a row past the notes (a register) is summed at the samples
     (`CONST x`, `MUL`, `ADD`);
@@ -89,8 +100,9 @@ macro layer in double on the CPU, `BaseSurface`'s region machinery).
   - `up` is `SampleOp::UP`, the sample's height above the base (`up_value`: `BaseSurface::at` times `2^lod`, exact;
     GLSL `climate_ground(ch, p, lod)` reads `base_at` where a program reads it). A cave is a smooth min on the mix's
     output, `smin(mix, up - C)` (`docs/caves.md`);
-  - refused: a multifractal past a chain (it weighs one note's octaves by the previous one's), a warp past the notes
-    (it moves where notes are read), a note under two warps, a sub-mix with two notes on one octave or a multifractal.
+  - refused: a multifractal past a chain (it weighs a note by the coarser multifractal notes), a warp read as a value
+    (it is a note's input), a warp of a node past the notes, of shaped, multifractal, warped or stretched notes, or of
+    a note not coarser than one it moves, a sub-mix with two notes on one octave or a multifractal.
 
   Existing graphs (the old row form) relax to what they were: the same notes, programs and bits. The compiler keeps a
   note per (octave, seed, stretch, group), turns each row into its biome's `Amp` on each octave (volume times the note's
@@ -131,7 +143,7 @@ macro layer in double on the CPU, `BaseSurface`'s region machinery).
   `gain > 0.0 ? ...`). Its numbers are in the shader params: a fixed part the text indexes with literals, then a heap
   (`ShaderParams::put`, read with `cl_heap`) of the variable-length records, which the fixed part points into, so a
   record growing moves no literal. Its sizes are capacities (`Climate::Caps`: notes per level, carry groups, sub-mix
-  fields; each a power of two at least what the table needs and at least the previous start's, `World::Kept`), and
+  fields, warp fields; each a power of two (the warp fields: their count) at least what the table needs and at least the previous start's, `World::Kept`), and
   the param block is at its largest. So any edit that fits the capacities keeps the text, a node deleted, a shape's
   type changed, a curve removed included: a world's restart compiles nothing; one past them compiles once with larger
   ones. The specialised text is the same per-term code with the compile's knowledge folded (literals, dead terms
@@ -228,9 +240,9 @@ computes no terrain and has no node kind the engine hasn't.
   catalogue the parser itself checks each node's keys against): every kind it reads (note, warp, shape, multifractal,
   mix, constant, field, add, subtract, multiply, min, max, smin, smax, curve, up, output), its inputs and its parameters with
   their type and default. `nodes.gd` builds each node from it: a port per input, a row per parameter the node has (a
-  slider and number box, a seed, a power of two, a field or three, a shape, coefficients, a curve), a `-` taking an
-  optional one out and `+ parameter` adding one (so a note is one octave or a range, its amplitude steepness or `amp_m`:
-  the engine says which combination it refuses). `kinds.gd` only holds titles, tooltips and sliders' ranges. A shape
+  slider and number box, a seed, a power of two, a field, a shape, coefficients, a curve), a `-` taking an
+  optional one out and `+ parameter` adding one. A note's warp is its input port (deleting the warp node leaves the
+  note unwarped). `kinds.gd` only holds titles, tooltips and sliders' ranges. A shape
   node plots the engine's phi (`ClimateReportNode.shape`: `Climate::parse_shape`, `shape_phi`) or its refusal; the
   Height curve's editor draws the engine's curve (`ClimateReportNode.curve`). The output edits the biome's `surface`
   colours. *New graph* is the engine's template biome (`ClimateReportNode.template_biome`) or an output alone; a biome
@@ -267,7 +279,18 @@ computes no terrain and has no node kind the engine hasn't.
   (`docs/discovery-lod.md`); a new structure (a node, a coefficient reaching 0) compiles once, and the device keeps
   every text's SPIR-V. While a restart loads, the view holds the last terrain's frame (a copy of it shown over the viewport, which renders
   on below, until the chunks in view are loaded, at most 1 s: a SubViewport stopped with `UPDATE_DISABLED` showed
-  black, noise and stripes): no blank ground between two loads. It loads round the orbit's pivot
+  black, noise and stripes): no blank ground between two loads. The orbit's pivot is a player, a 1.7 m capsule (a
+  scale): a left drag walks it, its feet put back on the ground by the CPU's SDF (`get_sdf_at` along `get_up_at`, the
+  game player's spawn rule) after each move and each restart, the camera kept 0.3 m above the ground; *Noclip* flies it
+  where the camera looks, through the ground. Right or middle drag orbits, the wheel zooms down to 2.5 m. *First person* puts the camera at
+  the player's eyes (1.6 m, the capsule hidden): right drag looks round, left drag moves 5 cm a pixel. WASD (the view
+  focused: a click) moves along the ground, or where the camera looks in noclip, Space and Shift up and down; 6 m/s in
+  first person (a game character's run), the orbit's distance a second otherwise. A crosshair at the view's centre
+  reads the distance from the camera to the terrain under it and the time to run it at 6 m/s (sphere tracing on
+  `get_sdf_at`, steps of 0.7 of it, a crossing bisected; 10 times a second, up to 60 km). *Run min* (5 by default, 0:
+  none) draws a faint sphere round the player where a run of that many minutes reaches at 6 m/s (2 min 720 m, 5 min
+  1.8 km): its silhouette brighter, and its line on the
+  terrain (the scene's depth within 15 m of the sphere's), the reach to design a biome's features for. It loads round the orbit's pivot
   (`set_lod_centre`), from the LOD its distance needs there (`lod_view_min`). It loads LODs 0-13 only
   (`lod_view_max`: 12.8 km chunks, ~54 km round the pivot; a reload 116 ms p50 at 13, 100 at 10). Its pixel error is the game's (4: at 12 each LOD seam showed as a ledge, for a restart only
   ~10% shorter), its world's clouds, instances and features are off (the clouds' shadows hid the relief over kilometres;

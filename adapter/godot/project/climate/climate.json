@@ -1,4 +1,5 @@
-{"fields": [
+{
+ "fields": [
   {
    "name": "temperature",
    "seed": 2001,
@@ -13,8 +14,6 @@
    "name": "wind",
    "seed": 2003,
    "bands": [{"wavelength_m": 13107.2, "amp": 1}, {"wavelength_m": 6553.6, "amp": 0.5}]
-  },
-  {"name": "wx", "seed": 905, "bands": [{"from_m": 800, "to_m": 6554, "amp": 0.5, "persistence": 0.6}]},
-  {"name": "wy", "seed": 906, "bands": [{"from_m": 800, "to_m": 6554, "amp": 0.5, "persistence": 0.6}]},
-  {"name": "wz", "seed": 907, "bands": [{"from_m": 800, "to_m": 6554, "amp": 0.5, "persistence": 0.6}]}
- ]}
+  }
+ ]
+}

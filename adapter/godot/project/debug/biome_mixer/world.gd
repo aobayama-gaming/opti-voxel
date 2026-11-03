@@ -9,7 +9,8 @@ const EngineInfo := preload("res://debug/biome_mixer/engine_info.gd")
 
 # The world's keys that are the mixer's, not the file's.
 const MIXER_KEYS := ["fields", "current", "mode", "view", "mixer_version", "name"]
-const VERSION := 2
+# 3: single-octave notes, warp nodes (an older autosave is not read).
+const VERSION := 3
 # The World mode's view settings, beside the Biome mode's (the mixer's VIEW_DEFAULTS) in the world's "view".
 const WORLD_VIEW := {"extent_m": 100000.0, "chart_x": 0, "chart_y": 1}
 # Significant digits a number keeps in the file (a float32's).
