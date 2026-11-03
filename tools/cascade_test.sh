@@ -19,7 +19,8 @@
 # example before shaped bands), 4s (the shaped test table: every operation), 4d (fieldless_test.json: a
 # modulation with no field), 4g (an Earth-sized sphere: the base regions below its switch LOD), 4w (world.json:
 # eight biomes on three climate axes, 8 groups), 4n (notes_test.json: several notes per octave, modulated), 4e
-# (programs_test.json: sample programs, smooth min / max, a field at the samples); default 4,4c. generic: every set's climate
+# (programs_test.json: sample programs, smooth min / max, a field at the samples), 4r (graph_test.json: free graphs, sub-mixes,
+# shapes at the samples), 4v (caves_test.json: caves, the base read at the samples); default 4,4c. generic: every set's climate
 # compiled generic (SDFCascade::specialize false, the biome mixer's shader), the same checks against the same CPU.
 # GPU clocks are sampled during the run (nvidia-smi).
 # Outputs land in bench/results/<timestamp>-cascade/ : cascade.json, cascade.md, godot.log, gpu.csv.

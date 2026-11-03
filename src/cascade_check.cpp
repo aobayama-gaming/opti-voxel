@@ -299,8 +299,8 @@ private:
         // The sample's ground channels (the climate's ground terms on the slots, SDFCascade::ground_channels).
         float slots[SLOTS], ch[CHANNELS];
         p_level.slots_at(int64_t(p_cpu_i), slots);
-        sdf.ground_channels(slots, ch);
         const int lod = chunks[p_chunk].lod;
+        sdf.ground_channels(slots, p_p * (int64_t(1) << lod), lod, ch);
         const ExactNoise::Float4 want = sdf.with_skirt(sdf.sdf(ch, p_p * (int64_t(1) << lod), lod), lod, Float3{ float(p_grid.x), float(p_grid.y), float(p_grid.z) });
         const float w[4] = { want.x, want.y, want.z, want.w };
         checks.samples++;
@@ -547,7 +547,7 @@ ov::Value check_biomes(ov::gpu::Device *p_device, SpikeSet p_set, const ov::str 
                 level.slots_at(p_cpu_i, slots);
                 // Air samples (the sample with its skirt above 0) keep 0: no vertex reads them.
                 float ch[CHANNELS];
-                sdf.ground_channels(slots, ch);
+                sdf.ground_channels(slots, p_p * (int64_t(1) << l), l, ch);
                 const ExactNoise::Float4 r = sdf.with_skirt(sdf.sdf(ch, p_p * (int64_t(1) << l), l), l, Float3{ float(i.x), float(i.y), float(i.z) });
                 const uint32_t want = r.w > 0.0f ? 0u : sdf.ground_material(slots);
                 const uint32_t g = got[c * cells + uint64_t(i.x) + uint64_t(cs) * (uint64_t(i.y) + uint64_t(cs) * uint64_t(i.z))];

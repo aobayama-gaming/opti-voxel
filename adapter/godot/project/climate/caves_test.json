@@ -1,0 +1,49 @@
+{
+ "comment": "Caves as a graph, for the tests (test_climate_shape.cpp, CascadeSpike set 4v): caved's ground is smin(mix, up - C) over 2 m, C = min(N, T) the carve density, N its two notes' sum (a sub-mix at the samples) less 1 m, T = min(depth - 4 m, 60 m - depth) the band's tent, depth = mix - up. plain has no caves (the carve fades with its weight), its ground through a mix row like caved's (an edit of the volumes keeps the note constant). Not a world to look at: project/climate/world.json is.",
+ "engine": {"voxel_m": 0.05, "lods": 25},
+ "climate": {
+  "fields": [
+   {"name": "t", "bands": [{"from_m": 800, "to_m": 26000, "amp": 0.5, "persistence": 0.7}]}
+  ]
+ },
+ "biomes": [
+  {
+   "name": "plain",
+   "at": {"t": [0.5, 0.6]},
+   "graph": {
+    "nodes": [
+     {"id": "ground", "kind": "note", "from_m": 0.4, "to_m": 26214.4, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
+     {"id": "mix", "kind": "mix", "rows": [{"in": "ground"}]},
+     {"id": "out", "kind": "output", "height": "mix"}
+    ]
+   },
+   "debug_color": "#80a060"
+  },
+  {
+   "name": "caved",
+   "graph": {
+    "nodes": [
+     {"id": "ground", "kind": "note", "from_m": 0.4, "to_m": 26214.4, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
+     {"id": "mix", "kind": "mix", "rows": [{"in": "ground"}]},
+     {"id": "c1", "kind": "note", "wavelength_m": 12.8, "seed": 11, "amp_m": 2},
+     {"id": "c2", "kind": "note", "wavelength_m": 25.6, "seed": 12, "amp_m": 3},
+     {"id": "noise", "kind": "mix", "rows": [{"in": "c1"}, {"in": "c2"}]},
+     {"id": "threshold", "kind": "constant", "value_m": -1},
+     {"id": "n", "kind": "add", "a": "noise", "b": "threshold"},
+     {"id": "up", "kind": "up"},
+     {"id": "depth", "kind": "subtract", "a": "mix", "b": "up"},
+     {"id": "top", "kind": "constant", "value_m": 4},
+     {"id": "floor", "kind": "constant", "value_m": 60},
+     {"id": "below_top", "kind": "subtract", "a": "depth", "b": "top"},
+     {"id": "above_floor", "kind": "subtract", "a": "floor", "b": "depth"},
+     {"id": "tent", "kind": "min", "a": "below_top", "b": "above_floor"},
+     {"id": "carve", "kind": "min", "a": "n", "b": "tent"},
+     {"id": "roof", "kind": "subtract", "a": "up", "b": "carve"},
+     {"id": "caves", "kind": "smin", "a": "mix", "b": "roof", "k_m": 2},
+     {"id": "out", "kind": "output", "height": "caves"}
+    ]
+   },
+   "debug_color": "#6080a0"
+  }
+ ]
+}

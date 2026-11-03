@@ -53,6 +53,9 @@ static constexpr int TABLE_LIST_BINDING = 8;
 static constexpr int MATERIAL_BINDING = 9;
 // The numbers of the generated climate code (Cascade::ShaderParams: a uniform block), after the base regions' (10, 11).
 static constexpr int PARAM_BINDING = 12;
+// Its largest size: a uniform block's guaranteed one (Vulkan maxUniformBufferRange, WebGPU maxUniformBufferBindingSize),
+// the size of every generic climate's block (Cascade::Spec::generic).
+static constexpr size_t MAX_PARAM_BYTES = 16384;
 
 // std430 CascadeBand[group_count * BAND_ENTRIES + the ground's other notes]: the ground's (first) band of insertion
 // level m at m, then the ground's other notes of each level (Spec::level_notes, Cascade::MAX_LEVEL_NOTES), levels in

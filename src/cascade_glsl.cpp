@@ -218,17 +218,15 @@ WorldPos level_point(uvec3 m_lo, ivec3 m_hi, uvec3 i, int m) {
 }
 )glsl";
 
-// `int <p_name>(int lod)`: p_value(lod) for lod 0 .. MAX_LEVEL, a C++ rule as a GLSL table (no formula retyped).
+// `int <p_name>(int lod)`: p_value(lod) for lod 0 .. MAX_LEVEL, a C++ rule as a table of r_params (no formula retyped;
+// the climate's levels are its values, not its text).
 template <typename Value>
-ov::str level_switch(const char *p_name, Value p_value) {
-    const int last = p_value(MAX_LEVEL);
-    ov::str code = ov::format("\nint %s(int lod) {\n    switch (lod) {\n", p_name);
-    for (int l = 0; l < MAX_LEVEL; l++) {
-        if (p_value(l) != last) {
-            code += ov::format("    case %d: return %d;\n", l, p_value(l));
-        }
+ov::str level_table(const char *p_name, Value p_value, ShaderParams &r_params) {
+    std::vector<float> values;
+    for (int l = 0; l <= MAX_LEVEL; l++) {
+        values.push_back(float(p_value(l)));
     }
-    return code + ov::format("    default: return %d;\n    }\n}\n", last);
+    return ov::format("\nint %s(int lod) {\n    return int(%s);\n}\n", p_name, r_params.table(values, ov::format("min(lod, %d)", MAX_LEVEL)));
 }
 
 // Ch and hermite_x/y/z for a spec's groups and, p_carried (a run's last level), its carry groups (the CPU's axis_rules): the first g_carry_n, the ones the level reads.
@@ -433,24 +431,24 @@ ov::str band_functions(const Spec &p_spec) {
 }
 
 // The ground's other notes of each level (Spec::level_notes past the first) in the band table: level m's at
-// bands[first[m] .. first[m] + count[m]), right after the ground's BAND_ENTRIES, levels in order; then the field
-// groups' (group_base). The ground's bands are every view's (Spec::without_fields keeps them): the offsets too.
+// bands[first[m] .. first[m] + count[m]), past every group's BAND_ENTRIES, levels in order; each group's first bands at
+// group_base. Level m's range is data (its ground entry's offset_lo.w and offset_hi.w), so the text holds no note count.
 struct ExtraNotes {
     int first[MAX_LEVEL + 1] = {};
     int count[MAX_LEVEL + 1] = {};
     int total = 0;
 
     explicit ExtraNotes(const Spec &p_spec) {
-        int at = CascadeGLSL::BAND_ENTRIES;
+        int at = p_spec.group_count() * CascadeGLSL::BAND_ENTRIES;
         for (int m = 0; m <= MAX_LEVEL; m++) {
             first[m] = at;
             count[m] = ov::max(0, p_spec.level_notes(m) - 1);
             at += count[m];
         }
-        total = at - CascadeGLSL::BAND_ENTRIES;
+        total = at - p_spec.group_count() * CascadeGLSL::BAND_ENTRIES;
     }
-    // Group p_g's first entry: the ground's at 0, a field group's past the ground's and its other notes.
-    int group_base(int p_g) const { return p_g == 0 ? 0 : total + p_g * CascadeGLSL::BAND_ENTRIES; }
+    // Group p_g's first entry: a view without the fields reads the ground's at the same offsets.
+    static int group_base(int p_g) { return p_g * CascadeGLSL::BAND_ENTRIES; }
 };
 
 // Group g's band insertion: the constant one, or the modulated one from mod[p_mod] where the modulated mask has g.
@@ -461,39 +459,34 @@ ov::str band_call(const Spec &p_spec, int p_g, const ov::str &p_mod) {
     return ov::format("ch = insert_band_%d(ch, p, band);\n", p_g);
 }
 
-// The ground's other notes of level m after its first (insert_point's order): ExtraNotes' range, note e's BandMod slot
-// note_mod(1 + e). Nothing with one note per level (the text before several notes).
+// The ground's other notes of level m after its first (insert_point's order): ExtraNotes' range, read from level m's
+// ground entry; note e's BandMod slot note_mod(1 + e). Nothing where a level holds one note (Spec::max_level_notes).
 ov::str extra_notes_code(const Spec &p_spec) {
-    const ExtraNotes extra(p_spec);
-    if (extra.total == 0) {
+    if (p_spec.max_level_notes() < 2) {
         return ov::str();
     }
-    ov::str code = "    {\n        int first = 0;\n        int count = 0;\n        switch (m) {\n";
-    for (int m = 0; m <= MAX_LEVEL; m++) {
-        if (extra.count[m] > 0) {
-            code += ov::format("        case %d: first = %d; count = %d; break;\n", m, extra.first[m], extra.count[m]);
-        }
-    }
-    code += "        default: break;\n        }\n        for (int e = 0; e < count; e++) {\n            CascadeBand band = bands[first + e];\n            if (band.info.x != 0u) {\n                ";
-    return code + band_call(p_spec, 0, ov::format("%d + e", p_spec.note_mod(1))) + "            }\n        }\n    }\n";
+    // From the table, not literals: the extra notes sit past every group's entries, so a view without the fields
+    // (whose group count differs) reads the same range.
+    ov::str code = "    {\n        CascadeBand lead = bands[m];\n        int first = int(lead.offset_lo.w);\n        int count = int(lead.offset_hi.w);\n";
+    code += "        for (int e = 0; e < count; e++) {\n            CascadeBand band = bands[first + e];\n            ";
+    return code + band_call(p_spec, 0, ov::format("%d + e", p_spec.note_mod(1))) + "        }\n    }\n";
 }
 
 // The level's insertions (the template's /*INSERT_BANDS*/): the modulated amplitudes from the channels before any
 // insertion (p_derive: and the carry derived from them, into ch), then each group's band of level m
 // (bands[ExtraNotes::group_base(group) + m]), the ground's other notes after its first.
 ov::str insert_code(const Spec &p_spec, bool p_derive) {
-    const ExtraNotes extra(p_spec);
     ov::str code;
     const char *at = p_derive ? ", p" : "";
     if (p_spec.modulation) {
         code += ov::format("    BandMod mod[%d];\n    uint modulated = cascade_mods(m, ch, mod%s);\n", p_spec.mod_count(), at);
     }
     for (int g = 0; g < p_spec.group_count(); g++) {
-        if (p_spec.group_bands(g).empty()) {
-            continue;
+        if (p_spec.group_bands(g).empty() && !p_spec.generic) {
+            continue; // a generic text inserts every group: the band table holds each one's entries, empty ones skipped
         }
         code += ov::format("    %s{\n        CascadeBand band = bands[%d + m];\n        if (band.info.x != 0u) {\n", g > 0 ? "if (g_field_bands) " : "",
-                extra.group_base(g));
+                ExtraNotes::group_base(g));
         code += "            " + band_call(p_spec, g, ov::itos(p_spec.group_mod(g))) + "        }\n    }\n";
         code += g == 0 ? extra_notes_code(p_spec) : ov::str();
     }
@@ -557,7 +550,7 @@ ov::bytes band_table(const Spec &p_spec) {
             OV_ERR_CONTINUE_MSG(m < 0 || m >= BAND_ENTRIES, ov::format("CascadeGLSL: band k=%d inserted outside the lattice table.", b.k));
             const int rank = g == 0 ? p_spec.note_rank(b) : 0;
             // A level's first band at its group's entry, the ground's other notes after the groups' (ExtraNotes).
-            const size_t base = (rank == 0 ? size_t(extra.group_base(g) + m) : size_t(extra.first[m] + rank - 1)) * BAND_BYTES;
+            const size_t base = (rank == 0 ? size_t(ExtraNotes::group_base(g) + m) : size_t(extra.first[m] + rank - 1)) * BAND_BYTES;
             uint8_t *slot = bytes.data() + base;
             OV_ERR_CONTINUE_MSG(ov::get_u32(slot + 48) != 0, ov::format("CascadeGLSL: two bands of a field on lattice %d (the GPU table holds one per level).", m));
             for (int o = 0; o < 4; o++) {
@@ -570,11 +563,16 @@ ov::bytes band_table(const Spec &p_spec) {
             ov::put_s32(slot + 32, hi32(b.offset.x));
             ov::put_s32(slot + 36, hi32(b.offset.y));
             ov::put_s32(slot + 40, hi32(b.offset.z));
-            ov::put_u32(slot + 48, b.amp != 0.0f ? 1u : 0u); // a silent note inserts nothing (LevelBands::each)
+            ov::put_u32(slot + 48, 1);
             ov::put_u32(slot + 52, b.seed);
             ov::put_u32(slot + 56, uint32_t(b.k));
             ov::put_u32(slot + 60, uint32_t(b.stretch));
         }
+    }
+    for (int m = 0; m < BAND_ENTRIES; m++) {
+        uint8_t *lead = bytes.data() + size_t(m) * BAND_BYTES; // the ground's entry of level m: its other notes' range
+        ov::put_u32(lead + 28, uint32_t(extra.first[m]));
+        ov::put_s32(lead + 44, extra.count[m]);
     }
     return bytes;
 }
@@ -632,13 +630,13 @@ ov::str view_code(const ov::str &p_code, const CascadeSource *p_sdf, const Spec 
         // FieldRange::carried(lod, m): m >= lowest(lod).
         flags += "bool g_fields = true; // the fields are carried at this level (Cascade::FieldRange)\n";
         flags += "bool g_field_bands = true; // and their bands inserted (FieldRange::inserted)\n";
-        flags += level_switch("cascade_lowest_fields", [&](int p_lod) { return p_range.lowest(p_lod); });
+        flags += level_table("cascade_lowest_fields", [&](int p_lod) { return p_range.lowest(p_lod); }, r_params);
         flag_values += "    g_fields = m >= cascade_lowest_fields(lod);\n    g_field_bands = m > cascade_lowest_fields(lod);\n";
     }
     if (carry) {
         // FieldRange::carries: read on the last level, derived above it (the groups Modulation::carry_used says).
         flags += "uint g_carry_n = 0u; // the carry groups the run's last level reads\n";
-        flags += level_switch("cascade_carry_used", [&](int p_lod) { return p_range.reads_carry(p_lod) ? p_spec.modulation->carry_used(p_lod) : 0; });
+        flags += level_table("cascade_carry_used", [&](int p_lod) { return p_range.reads_carry(p_lod) ? p_spec.modulation->carry_used(p_lod) : 0; }, r_params);
         flag_values += ov::format("    g_carry_n = pc.j == %d ? uint(cascade_carry_used(lod)) : 0u;\n", carried ? 0 : 1);
     }
     const ov::str modulation = climate ? p_spec.modulation->glsl(p_spec, carried, derive, r_params) : ov::str();
@@ -684,7 +682,7 @@ ov::str level_shader(const CascadeSource *p_sdf, bool p_debug, bool p_points, bo
     // The sample's ground channels: the cascade's, or climate_ground's with ground terms (a climate view: their field
     // range reaches every sample, so no ground-only view is compiled).
     const ov::str ground = climate && p_sdf->has_ground_terms() ? p_sdf->get_ground_glsl(*spec, params) : ov::str();
-    const ov::str c0 = ground.empty() ? ov::str("vec4(ch.c[0], ch.c[1], ch.c[2], ch.c[3])") : ov::str("climate_ground(ch)");
+    const ov::str c0 = ground.empty() ? ov::str("vec4(ch.c[0], ch.c[1], ch.c[2], ch.c[3])") : ov::str("climate_ground(ch, p, lod)");
     code = ov::replace_all(code, "/*GROUND_C0*/", c0);
     const ov::str channels = c0 + ov::str(", p, lod");
     // The fold's workgroup box: its cube's first and last samples (the sample itself per sample).
@@ -715,9 +713,17 @@ ov::str level_shader(const CascadeSource *p_sdf, bool p_debug, bool p_points, bo
     code = view_code(code, p_sdf, *spec, field_range(p_sdf, p_points), p_view, tail, params);
     const ov::str debug_store = ov::str(cubes ? "if (sample_live) " : "") + "store_debug(sample_index, ch); // CascadeSpike variant";
     code = ov::replace_all(code, "/*DEBUG_STORE*/", p_debug ? debug_store : ov::str());
-    // Last: the block holds every number the generators took.
+    // Last: the block holds every number the generators took (a generic climate's at its largest: its size in the text).
+    const int64_t heap = int64_t(params.values.size());
+    params.values.insert(params.values.end(), params.heap.begin(), params.heap.end());
+    params.heap.clear();
+    if (whole.generic) {
+        OV_ERR_FAIL_COND_V_MSG(params.values.size() * sizeof(float) > MAX_PARAM_BYTES, ov::str(), "CascadeGLSL: more shader params than a uniform block holds.");
+        params.values.resize(MAX_PARAM_BYTES / sizeof(float), 0.0f);
+    }
+    const ov::str block = ov::format("layout(set = 0, binding = %d, std140) uniform ShaderParams { vec4 cascade_param[%d]; };\n", PARAM_BINDING, params.vec4s());
     return ov::replace_all(code, "/*PARAM_BLOCK*/",
-            ov::format("layout(set = 0, binding = %d, std140) uniform ShaderParams { vec4 cascade_param[%d]; };", PARAM_BINDING, params.vec4s()));
+            block + ov::format("float cl_param(int i) {\n    return cascade_param[i >> 2][i & 3];\n}\n\nfloat cl_heap(int i) {\n    return cl_param(%d + i);\n}\n", heap));
 }
 
 ChunkParam point_param(const ChunkParam &p_param) {

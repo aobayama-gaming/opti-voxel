@@ -18,7 +18,9 @@
 // octaves, no field: a modulation with no field group), "4w" the game's world.json (eight biomes on three climate axes, 8
 // groups), "4g" an Earth-sized sphere (the base's regions, BaseRegions, below its switch LOD), "4n" notes_test.json (several
 // notes per octave, modulated: the band table's other notes, their BandMod slots), "4e" programs_test.json (sample
-// programs: smooth and hard min / max, a field read at the samples, a curve of a program).
+// programs: smooth and hard min / max, a field read at the samples, a curve of a program), "4r" graph_test.json (free graphs as
+// the relaxer plays them: a warp moved before its shape, shapes past the notes at the samples, sub-mix fields, a mix row
+// past the notes), "4v" caves_test.json (caves: smin(mix, up - C) under a band's tent, the base read at the samples).
 namespace CascadeCheckSets {
 
 enum class SpikeSet {
@@ -32,8 +34,10 @@ enum class SpikeSet {
     L4G,
     L4N,
     L4E,
+    L4R,
+    L4V,
 };
-inline constexpr const char *SET_LABELS[] = { "4", "4c", "4f", "4p", "4s", "4d", "4w", "4g", "4n", "4e" };
+inline constexpr const char *SET_LABELS[] = { "4", "4c", "4f", "4p", "4s", "4d", "4w", "4g", "4n", "4e", "4r", "4v" };
 // A set's generic variant (CascadeSpike's option generic): its climate compiled generic (SDFCascade::specialize false).
 inline constexpr int GENERIC = 64;
 inline SpikeSet base_set(SpikeSet p_v) {
@@ -87,6 +91,10 @@ inline ov::str set_world(SpikeSet p_v, const ov::str &p_world) {
             return "res://climate/notes_test.json";
         case SpikeSet::L4E:
             return "res://climate/programs_test.json";
+        case SpikeSet::L4R:
+            return "res://climate/graph_test.json";
+        case SpikeSet::L4V:
+            return "res://climate/caves_test.json";
         default:
             return "res://climate/example.json";
     }

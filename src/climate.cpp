@@ -72,21 +72,21 @@ void apply_terms(const Table &p_table, const float p_slots[Cascade::SLOTS], Floa
     }
 }
 
-bool plays(const Amp &p_amp, const Cascade::Band &p_band) {
-    return note_id(p_amp) == note_id(p_band);
+bool plays(const Amp &p_amp, const Cascade::Band &p_band, int p_group) {
+    return note_id(p_amp) == note_id(p_band, p_group);
 }
 
-const Amp *find_amp(const Biome &p_biome, const Cascade::Band &p_band) {
+const Amp *find_amp(const Biome &p_biome, const Cascade::Band &p_band, int p_group) {
     for (const Amp &a : p_biome.amps) {
-        if (plays(a, p_band)) {
+        if (plays(a, p_band, p_group)) {
             return &a;
         }
     }
     return nullptr;
 }
 
-float biome_amp(const Biome &p_biome, const Cascade::Band &p_band) {
-    const Amp *a = find_amp(p_biome, p_band);
+float biome_amp(const Biome &p_biome, const Cascade::Band &p_band, int p_group) {
+    const Amp *a = find_amp(p_biome, p_band, p_group);
     return a ? a->amp : p_band.amp;
 }
 
@@ -102,15 +102,15 @@ bool Table::has_stretch() const {
     return std::any_of(notes.begin(), notes.end(), [](const Cascade::Band &p_b) { return p_b.stretch > 0; });
 }
 
-Shape band_shape(const Biome &p_biome, const Cascade::Band &p_band) {
-    const Amp *a = find_amp(p_biome, p_band);
+Shape band_shape(const Biome &p_biome, const Cascade::Band &p_band, int p_group) {
+    const Amp *a = find_amp(p_biome, p_band, p_group);
     return a && a->has_shape ? a->shape : Shape();
 }
 
-float max_amp(const Table &p_table, const Cascade::Band &p_band) {
+float max_amp(const Table &p_table, const Cascade::Band &p_band, int p_group) {
     float m = p_table.biomes.empty() ? p_band.amp : 0.0f;
     for (const Climate::Biome &b : p_table.biomes) {
-        m = ov::max(m, biome_amp(b, p_band) * shape_bound(band_shape(b, p_band)));
+        m = ov::max(m, biome_amp(b, p_band, p_group) * shape_bound(band_shape(b, p_band, p_group)));
     }
     return m;
 }
@@ -126,7 +126,7 @@ double field_step(const Table &p_table, int p_field, int p_lod, double p_ground_
     double amp = 0.0;
     for (const Cascade::Band &b : f.bands) {
         if (b.k - ExactNoise::BAND_SHIFT == p_lod + 1 || b.k - ExactNoise::BAND_SHIFT == p_lod + 2) { // inserted on Λ_{L+1} / Λ_{L+2}
-            amp = ov::max(amp, double(b.amp));
+            amp = ov::max(amp, band_bound(p_table, p_field, b));
         }
     }
     for (const Term &t : f.terms) {
@@ -136,6 +136,10 @@ double field_step(const Table &p_table, int p_field, int p_lod, double p_ground_
 }
 
 } // namespace
+
+double band_bound(const Table &p_table, int p_field, const Cascade::Band &p_b) {
+    return p_table.fields[size_t(p_field)].channel ? double(max_amp(p_table, p_b, 1 + p_field)) : std::fabs(double(p_b.amp));
+}
 
 double ground_step(const Table &p_table, int p_lod, double p_ground_amp) {
     // ground = h + sum_b w_b D_b(h, f). The weights sum to 1, so the h part moves by at most (1 + max |dD_b/dh|) times
@@ -224,7 +228,7 @@ SampleCarry sample_carry(const Table &p_table) {
     std::fill(std::begin(s.weight), std::end(s.weight), -1);
     std::fill(std::begin(s.field), std::end(s.field), -1);
     for (size_t b = 0; b < p_table.biomes.size(); b++) {
-        if (!p_table.biomes[b].program.empty()) {
+        if (p_table.generic || !p_table.biomes[b].program.empty()) {
             s.weight[b] = s.count++;
         }
     }
@@ -233,7 +237,7 @@ SampleCarry sample_carry(const Table &p_table) {
         s.pick = s.count++;
     }
     for (int f = 0; f < int(p_table.fields.size()); f++) {
-        if (std::any_of(p_table.biomes.begin(), p_table.biomes.end(), [&](const Biome &p_b) { return p_b.program.reads_field(f); })) {
+        if (p_table.generic || std::any_of(p_table.biomes.begin(), p_table.biomes.end(), [&](const Biome &p_b) { return p_b.program.reads_field(f); })) {
             s.field[f] = s.count++;
         }
     }

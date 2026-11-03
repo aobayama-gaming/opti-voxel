@@ -67,18 +67,32 @@ vec4 cl_rcp(vec4 s) {
 }
 )glsl";
 
-// A biome's kernel (Climate::kernel: its axes' factors multiplied in order) as statements defining `vec4 <p_var>` from
-// the f<i> of glsl_weights.
-ov::str glsl_kernel(const ov::str &p_var, const std::vector<Axis> &p_at, Cascade::ShaderParams &r_params) {
-    ov::str code = "    vec4 " + p_var + ov::str(" = vec4(0.0, 0.0, 0.0, 1.0);\n");
-    for (const Axis &a : p_at) {
-        code += ov::format("    %s = cl_mul(%s, cl_axis(f%d, %s, %s, %s));\n", p_var, p_var, a.field, r_params(a.centre), r_params(a.inv_span),
-                ExactNoise::glsl_float(KERNEL_FADE));
-    }
-    return code;
+// One axis of biome kernel w[p_b] (Climate::kernel: its axes' factors multiplied in order) and one field term of f[p_f]
+// (apply_terms), from their operands: literals and params in a specialised text, run-time reads in a generic one.
+ov::str axis_statement(int64_t p_b, const ov::str &p_field, const ov::str &p_centre, const ov::str &p_inv_span) {
+    return ov::format("    w[%d] = cl_mul(w[%d], cl_axis(f[%s], %s, %s, %s));\n", p_b, p_b, p_field, p_centre, p_inv_span, ExactNoise::glsl_float(KERNEL_FADE));
+}
+
+ov::str term_statement(int64_t p_f, const ov::str &p_source, const ov::str &p_coef) {
+    return ov::format("    { precise vec4 t = f[%d] + %s * %s; f[%d] = cl_flush(t); }\n", p_f, p_source, p_coef, p_f);
 }
 
 } // namespace
+
+int64_t list_table(const std::vector<std::vector<float>> &p_lists, int p_stride, Cascade::ShaderParams &r_params) {
+    std::vector<float> table;
+    for (const std::vector<float> &l : p_lists) {
+        table.push_back(float(r_params.put({ float(l.size() / size_t(p_stride)) })));
+        r_params.put(l);
+    }
+    return r_params.append(table);
+}
+
+ov::str list_loop(int64_t p_dir, const ov::str &p_i, int p_stride, const ov::str &p_body) {
+    const ov::str list = Cascade::ShaderParams::at(ov::format("%d + %s", p_dir, p_i));
+    return ov::format("    {\n        int l = int(%s);\n        for (int i = 0; i < int(cl_heap(l)); i++) {\n            int r = l + 1 + %d * i;\n", list, p_stride) +
+            p_body + "        }\n    }\n";
+}
 
 ov::str shared_helpers_glsl() {
     return ov::replace_all(ov::str(GLSL_CLIMATE_HELPERS), "FLUSH", Cascade::glsl_flush()) + R"glsl(
@@ -95,30 +109,56 @@ vec4 cl_scale(vec4 a, float k) {
 }
 
 ov::str glsl_weights(const Table &p_table, const Cascade::Spec &p_spec, Cascade::ShaderParams &r_params) {
-    ov::str code;
+    using Cascade::ShaderParams;
     auto channels = [](int p_base) { return ov::format("vec4(pre.c[%d], pre.c[%d], pre.c[%d], pre.c[%d])", p_base + 1, p_base + 2, p_base + 3, p_base); };
-    code += "    vec4 g0 = " + channels(p_spec.gpu_base(0)) + ov::str(";\n");
-    for (size_t i = 0; i < p_table.fields.size(); i++) {
-        code += ov::format("    vec4 f%d = %s;\n", int64_t(i), channels(p_spec.gpu_base(1 + int(i))));
-        for (const Term &t : p_table.fields[i].terms) {
-            const ov::str src = t.source == GROUND ? ov::str("g0") : ov::format("f%d", t.source);
-            code += ov::format("    { precise vec4 t = f%d + %s * %s; f%d = cl_flush(t); }\n", int64_t(i), src, r_params(t.coef), int64_t(i));
+    const int64_t nf = int64_t(p_table.fields.size());
+    ov::str code = "    vec4 g0 = " + channels(p_spec.gpu_base(0)) + ov::format(";\n    vec4 f[%d];\n", ov::max(int64_t(1), nf));
+    std::vector<std::vector<float>> terms(static_cast<size_t>(nf));
+    for (int64_t i = 0; i < nf; i++) {
+        for (const Term &t : p_table.fields[size_t(i)].terms) {
+            terms[size_t(i)].insert(terms[size_t(i)].end(), { float(t.source), t.coef });
+        }
+    }
+    const int64_t term_dir = p_table.generic ? list_table(terms, 2, r_params) : 0;
+    for (int64_t i = 0; i < nf; i++) {
+        code += ov::format("    f[%d] = %s;\n", i, channels(p_spec.gpu_base(1 + int(i))));
+        if (p_table.generic) {
+            code += list_loop(term_dir, ov::itos(i), 2, "    " + term_statement(i, "(int(cl_heap(r)) < 0 ? g0 : f[int(cl_heap(r))])", ShaderParams::heap_at("r + 1")));
+            continue;
+        }
+        for (const Term &t : p_table.fields[size_t(i)].terms) {
+            code += term_statement(i, t.source == GROUND ? ov::str("g0") : ov::format("f[%d]", t.source), r_params(t.coef));
         }
     }
     const int64_t n = int64_t(p_table.biomes.size());
+    code += ov::format("    vec4 w[%d];\n", n);
     if (n == 1) {
-        return code + ov::str("    vec4 w0 = vec4(0.0, 0.0, 0.0, 1.0);\n");
+        return code + ov::str("    w[0] = vec4(0.0, 0.0, 0.0, 1.0);\n");
     }
     // Climate::weights: the kernels, their sum, the default's (1 - sum)^2, then each over the total.
+    std::vector<std::vector<float>> axes(size_t(n - 1));
+    for (int64_t b = 0; b + 1 < n; b++) {
+        for (const Axis &a : p_table.biomes[size_t(b)].at) {
+            axes[size_t(b)].insert(axes[size_t(b)].end(), { float(a.field), a.centre, a.inv_span });
+        }
+    }
+    const int64_t axis_dir = p_table.generic ? list_table(axes, 3, r_params) : 0;
     code += "    vec4 ksum = vec4(0.0);\n";
     for (int64_t b = 0; b + 1 < n; b++) {
-        code += glsl_kernel(ov::format("w%d", b), p_table.biomes[size_t(b)].at, r_params);
-        code += ov::format("    { precise vec4 t = ksum + w%d; ksum = cl_flush(t); }\n", b);
+        code += ov::format("    w[%d] = vec4(0.0, 0.0, 0.0, 1.0);\n", b);
+        if (p_table.generic) {
+            code += list_loop(axis_dir, ov::itos(b), 3, "    " + axis_statement(b, "int(cl_heap(r))", ShaderParams::heap_at("r + 1"), ShaderParams::heap_at("r + 2")));
+        } else {
+            for (const Axis &a : p_table.biomes[size_t(b)].at) {
+                code += axis_statement(b, ov::itos(a.field), r_params(a.centre), r_params(a.inv_span));
+            }
+        }
+        code += ov::format("    { precise vec4 t = ksum + w[%d]; ksum = cl_flush(t); }\n", b);
     }
-    code += ov::format("    vec4 w%d = cl_fill(ksum);\n", n - 1);
-    code += ov::format("    vec4 krcp;\n    { precise vec4 t = ksum + w%d; krcp = cl_rcp(cl_flush(t)); }\n", n - 1);
+    code += ov::format("    w[%d] = cl_fill(ksum);\n", n - 1);
+    code += ov::format("    vec4 krcp;\n    { precise vec4 t = ksum + w[%d]; krcp = cl_rcp(cl_flush(t)); }\n", n - 1);
     for (int64_t b = 0; b < n; b++) {
-        code += ov::format("    w%d = cl_mul(w%d, krcp);\n    w%d.w = min(w%d.w, 1.0);\n", b, b, b, b);
+        code += ov::format("    w[%d] = cl_mul(w[%d], krcp);\n    w[%d].w = min(w[%d].w, 1.0);\n", b, b, b, b);
     }
     return code;
 }
@@ -126,16 +166,16 @@ ov::str glsl_weights(const Table &p_table, const Cascade::Spec &p_spec, Cascade:
 ov::str pick_statements_glsl(const Table &p_table, const ov::str &p_var) {
     // The largest weight's bits and how many biomes share them, then the (hash % count)-th of those in list order: the
     // CPU's incremental list holds exactly them (nothing exceeds the last best, so it is never reset after it).
-    ov::str code = "    float " + p_var + ov::str(" = 0.0;\n    {\n        float best = w0.w;\n        uint count = 1u;\n");
+    ov::str code = "    float " + p_var + ov::str(" = 0.0;\n    {\n        float best = w[0].w;\n        uint count = 1u;\n");
     const int64_t n = int64_t(p_table.biomes.size());
     for (int64_t b = 1; b < n; b++) {
-        code += ov::format("        if (floatBitsToUint(w%d.w) == floatBitsToUint(best)) {\n            count++;\n        } else if (w%d.w > best) {\n"
-                           "            best = w%d.w;\n            count = 1u;\n        }\n",
+        code += ov::format("        if (floatBitsToUint(w[%d].w) == floatBitsToUint(best)) {\n            count++;\n        } else if (w[%d].w > best) {\n"
+                           "            best = w[%d].w;\n            count = 1u;\n        }\n",
                 b, b, b);
     }
     code += ov::format("        uint k = count == 1u ? 0u : hash_cell(p.lo, p.hi, %du) %% count;\n        bool found = false;\n", int64_t(PICK_SEED));
     for (int64_t b = 0; b < n; b++) {
-        code += ov::format("        if (!found && floatBitsToUint(w%d.w) == floatBitsToUint(best)) {\n            if (k == 0u) {\n                %s = %s;\n"
+        code += ov::format("        if (!found && floatBitsToUint(w[%d].w) == floatBitsToUint(best)) {\n            if (k == 0u) {\n                %s = %s;\n"
                            "                found = true;\n            } else {\n                k--;\n            }\n        }\n",
                 b, p_var, ExactNoise::glsl_float(float(b)));
     }

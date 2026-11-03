@@ -242,19 +242,15 @@ struct LevelBands {
     int group_of(int p_slot) const { return p_slot < MAX_GROUPS ? p_slot : 0; }
     int mod_of(int p_slot) const { return mod[p_slot]; }
     // Calls p_f(slot) for every band of the level: the ground's first, its other notes, then the fields' (each group's
-    // adds in order; groups' slots are disjoint). A silent note (amplitude 0, a generic table's) inserts nothing: the
-    // bits of the table without it.
+    // adds in order; groups' slots are disjoint).
     template <typename F>
     void each(F p_f) const {
-        auto visit = [&](int p_slot) {
-            if (band[p_slot] != nullptr && band[p_slot]->amp != 0.0f) {
-                p_f(p_slot);
-            }
-        };
         for (int g = 0; g < groups; g++) {
-            visit(g);
+            if (band[g] != nullptr) {
+                p_f(g);
+            }
             for (int e = 0; g == 0 && e < extra; e++) {
-                visit(MAX_GROUPS + e);
+                p_f(MAX_GROUPS + e);
             }
         }
     }
@@ -459,6 +455,9 @@ void Level::channels_at(const Vector3i64 &p_p, float r_ch[CHANNELS]) const {
 }
 
 bool Spec::stretched(int p_group) const {
+    if (generic && p_group <= 0 && !base.curved()) {
+        return true; // an unstretched band's base_stretched is the point itself
+    }
     for (int g = 0; g < group_count(); g++) {
         if (p_group >= 0 && g != p_group) {
             continue;
@@ -510,7 +509,7 @@ int Spec::max_level_notes() const {
             n = std::max(n, ++count[m]);
         }
     }
-    return n;
+    return std::max(n, level_notes_cap);
 }
 
 int Spec::run_top(int p_lod, bool p_all_fields) const {

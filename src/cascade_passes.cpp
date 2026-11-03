@@ -15,8 +15,7 @@ using ov::gpu::BufferKind;
 static_assert(BaseRegions::REGION_BINDING > CascadeGLSL::MATERIAL_BINDING && BaseRegions::REGION_BINDING > CascadeGLSL::TABLE_LIST_BINDING,
         "CascadePasses: the base regions' bindings follow the level shader's own.");
 static_assert(CascadeGLSL::PARAM_BINDING > BaseRegions::INDEX_BINDING, "CascadePasses: the shader params follow the base regions.");
-// A uniform block's guaranteed size (Vulkan maxUniformBufferRange, WebGPU maxUniformBufferBindingSize).
-static constexpr size_t MAX_PARAM_BYTES = 16384;
+using CascadeGLSL::MAX_PARAM_BYTES;
 
 bool CascadePasses::create(ov::gpu::Device *p_device, const SDFBase *p_sdf, const ChunkParam &p_param, uint32_t p_max_chunks, Buffer p_input,
         Buffer p_param_ubo, Buffer p_sdf_sample, Buffer p_debug, const CascadePasses *p_share_scratch, Buffer p_table_records, Buffer p_table_list,
