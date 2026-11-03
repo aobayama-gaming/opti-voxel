@@ -287,8 +287,9 @@ computes no terrain and has no node kind the engine hasn't.
   focused: a click) moves along the ground, or where the camera looks in noclip, Space and Shift up and down; 6 m/s in
   first person (a game character's run), the orbit's distance a second otherwise. A crosshair at the view's centre
   reads the distance from the camera to the terrain under it and the time to run it at 6 m/s (sphere tracing on
-  `get_sdf_at`, steps of 0.7 of it, a crossing bisected; 10 times a second, up to 60 km). *5 min run* (on by default)
-  draws a faint sphere round the player, 1.8 km (a 5 minute run at 6 m/s): its silhouette brighter, and its line on the
+  `get_sdf_at`, steps of 0.7 of it, a crossing bisected; 10 times a second, up to 60 km). *Run min* (5 by default, 0:
+  none) draws a faint sphere round the player where a run of that many minutes reaches at 6 m/s (2 min 720 m, 5 min
+  1.8 km): its silhouette brighter, and its line on the
   terrain (the scene's depth within 15 m of the sphere's), the reach to design a biome's features for. It loads round the orbit's pivot
   (`set_lod_centre`), from the LOD its distance needs there (`lod_view_min`). It loads LODs 0-13 only
   (`lod_view_max`: 12.8 km chunks, ~54 km round the pivot; a reload 116 ms p50 at 13, 100 at 10). Its pixel error is the game's (4: at 12 each LOD seam showed as a ledge, for a restart only

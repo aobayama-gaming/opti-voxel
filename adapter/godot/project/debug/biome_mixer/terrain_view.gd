@@ -46,9 +46,10 @@ const AIM_STEP := 0.7
 ## A game character's run (metres a second; Minecraft sprints at 5.6, most action games run at 5-7): WASD in first
 ## person, and the aim's distance read as the time to run it.
 const KEY_SPEED := 6.0
-## The reach sphere: where a run of this long (seconds) gets from the player, KEY_SPEED x it (1.8 km). Faint, with its
-## silhouette and its line on the terrain (the scene's depth within REACH_LINE_M of the sphere's) brighter.
-const REACH_S := 300.0
+## The reach sphere: where a run of REACH_MIN minutes (the view's box sets it, 0: none) gets from the player, KEY_SPEED
+## a second (5 min: 1.8 km). Faint, with its silhouette and its line on the terrain (the scene's depth within
+## REACH_LINE_M of the sphere's) brighter.
+const REACH_MIN := 5.0
 const REACH_LINE_M := 15.0
 const REACH_SHADER := """
 shader_type spatial;
@@ -71,7 +72,7 @@ var _aim_label := Label.new()  # the crosshair and the distance to the terrain u
 var _aim_timer := 0.0
 var _camera := Camera3D.new()
 var _player := MeshInstance3D.new()
-var _reach := MeshInstance3D.new()  # REACH_S of running round the player
+var _reach := MeshInstance3D.new()  # a run's reach round the player: a unit sphere scaled to it
 var _terrain: Node3D  # VoxelTerrain
 var _restart := Timer.new()
 var _json := ""
@@ -127,8 +128,8 @@ func _init() -> void:
 	_player.mesh = capsule
 	_viewport.add_child(_player)
 	var sphere := SphereMesh.new()
-	sphere.radius = KEY_SPEED * REACH_S
-	sphere.height = sphere.radius * 2.0
+	sphere.radius = 1.0
+	sphere.height = 2.0
 	sphere.radial_segments = 96
 	sphere.rings = 48
 	var veil := ShaderMaterial.new()
@@ -139,6 +140,7 @@ func _init() -> void:
 	_reach.mesh = sphere
 	_reach.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_viewport.add_child(_reach)
+	set_reach_minutes(REACH_MIN)
 	_restart.one_shot = true
 	_restart.wait_time = RESTART_AFTER
 	_restart.timeout.connect(_restart_terrain)
@@ -390,8 +392,10 @@ func set_noclip(p_on: bool) -> void:
 	_place_camera()
 
 
-func set_reach(p_on: bool) -> void:
-	_reach.visible = p_on
+# The reach sphere at a run of p_minutes (0: hidden).
+func set_reach_minutes(p_minutes: float) -> void:
+	_reach.visible = p_minutes > 0.0
+	_reach.scale = Vector3.ONE * maxf(p_minutes * 60.0 * KEY_SPEED, 1.0)
 
 
 func set_fpv(p_on: bool) -> void:
