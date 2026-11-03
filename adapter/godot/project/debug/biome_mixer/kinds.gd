@@ -13,7 +13,7 @@ const RANGE := [0.0, 10.0, 0.01]
 const KINDS := {
 	"note": {
 		"title": "Note",
-		"hint": "A 3D noise of one octave: wavelength_m (the nearest power of two of voxels, at least 8), amp_m. stretch_y squeezes it along the vertical. Its warp input (a Warp node) reads it displaced. A note the LOD count doesn't have plays nothing. Notes with the same seed and stretch are read once, whichever biomes play them.",
+		"hint": "A 3D noise of one octave: wavelength_m (an octave: 2^k voxels from 8, the lattice the cascade inserts it on; the menu lists them), amp_m. stretch_y squeezes it along the vertical. Its warp input (a Warp node) reads it displaced. A note the LOD count doesn't have plays nothing. Notes with the same seed and stretch are read once, whichever biomes play them.",
 		"ranges": {"wavelength_m": [0.4, 30000.0, 0.1], "amp_m": [0.0, 5000.0, 0.1]},
 	},
 	"warp": {
