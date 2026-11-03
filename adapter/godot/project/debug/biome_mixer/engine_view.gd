@@ -70,6 +70,11 @@ func _ready() -> void:
 		if not p_on:
 			_settle.start())
 	bar.add_child(_three)
+	var noclip := CheckButton.new()
+	noclip.text = "Noclip"
+	noclip.tooltip_text = "The player (the capsule, 1.7 m) flies through the ground where the camera looks; off, a left drag walks it on the ground."
+	noclip.toggled.connect(_view3d.set_noclip)
+	bar.add_child(noclip)
 	var game := Button.new()
 	game.text = "Open in game"
 	game.tooltip_text = "Runs the game on this world (the engine's terrain in 3D, with its trees, rocks and features)."

@@ -279,7 +279,10 @@ computes no terrain and has no node kind the engine hasn't.
   (`docs/discovery-lod.md`); a new structure (a node, a coefficient reaching 0) compiles once, and the device keeps
   every text's SPIR-V. While a restart loads, the view holds the last terrain's frame (a copy of it shown over the viewport, which renders
   on below, until the chunks in view are loaded, at most 1 s: a SubViewport stopped with `UPDATE_DISABLED` showed
-  black, noise and stripes): no blank ground between two loads. It loads round the orbit's pivot
+  black, noise and stripes): no blank ground between two loads. The orbit's pivot is a player, a 1.7 m capsule (a
+  scale): a left drag walks it, its feet put back on the ground by the CPU's SDF (`get_sdf_at` along `get_up_at`, the
+  game player's spawn rule) after each move and each restart, the camera kept 0.3 m above the ground; *Noclip* flies it
+  where the camera looks, through the ground. Right or middle drag orbits, the wheel zooms down to 2.5 m. It loads round the orbit's pivot
   (`set_lod_centre`), from the LOD its distance needs there (`lod_view_min`). It loads LODs 0-13 only
   (`lod_view_max`: 12.8 km chunks, ~54 km round the pivot; a reload 116 ms p50 at 13, 100 at 10). Its pixel error is the game's (4: at 12 each LOD seam showed as a ledge, for a restart only
   ~10% shorter), its world's clouds, instances and features are off (the clouds' shadows hid the relief over kilometres;

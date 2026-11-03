@@ -9,7 +9,9 @@ extends SubViewportContainer
 ## trees, rocks and features (half the workers' time and the 10-33 ms instance lists of a drag's frames).
 ## The chunks load round the orbit's pivot (VoxelTerrain.set_lod_centre), from the LOD the camera's distance needs there
 ## (lod_view_min) to LOD_VIEW_MAX, which at the pixel error reaches ~54 km from it.
-## Orbit: left drag; pan: right or middle drag; zoom: the wheel. Nothing without a RenderingDevice (the headless check).
+## The orbit's pivot is a player: a capsule of a person's height (a scale), its feet on the ground (get_sdf_at, the CPU's
+## SDF) unless noclip. Move: left drag (walking, it follows the ground; noclip: it flies where the camera looks); orbit:
+## right or middle drag; zoom: the wheel, down to the player. Nothing without a RenderingDevice (the headless check).
 
 signal status_changed
 
@@ -25,10 +27,17 @@ const LOAD_WAIT := 1.0
 const GAME_SCENE := "res://main_scene_5cm.tscn"
 ## The game's fog over views of kilometres instead of metres.
 const FOG_DENSITY := 0.00004
+## The player: a capsule of a person's height and its radius (metres).
+const PLAYER_HEIGHT := 1.7
+const PLAYER_RADIUS := 0.25
+## The camera's closest orbit (metres from the player's feet) and its least height above the ground.
+const NEAREST := 2.5
+const CAMERA_CLEARANCE := 0.3
 
 var _viewport := SubViewport.new()
 var _held := TextureRect.new()  # the last terrain's frame while the new one loads
 var _camera := Camera3D.new()
+var _player := MeshInstance3D.new()
 var _terrain: Node3D  # VoxelTerrain
 var _restart := Timer.new()
 var _json := ""
@@ -46,6 +55,7 @@ var _dist := 8000.0
 var status := ""  # the last restart's line
 var loaded_ms := -1  # the last restart until its chunks in view were loaded, -1 while loading
 var profile := {}  # --drag: "restart_ms" and "loaded_ms" appended to, when set
+var noclip := false  # the player flies through the ground, else walks on it
 
 
 func _init() -> void:
@@ -64,6 +74,15 @@ func _init() -> void:
 	add_child(_held)
 	_add_game_look()
 	_viewport.add_child(_camera)
+	var capsule := CapsuleMesh.new()
+	capsule.height = PLAYER_HEIGHT
+	capsule.radius = PLAYER_RADIUS
+	var look := StandardMaterial3D.new()
+	look.albedo_color = Color(1.0, 0.45, 0.1)
+	look.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	capsule.material = look
+	_player.mesh = capsule
+	_viewport.add_child(_player)
 	_restart.one_shot = true
 	_restart.wait_time = RESTART_AFTER
 	_restart.timeout.connect(_restart_terrain)
@@ -151,6 +170,7 @@ func _restart_terrain() -> void:
 			_shifted += p_shift)
 		_viewport.add_child(_terrain)  # starts the world: its pipelines, then the chunks
 	_aim_camera()
+	_to_ground()  # the edited ground under the player
 	_place_camera()  # the new terrain's LOD centre
 	_started = _json
 	loaded_ms = -1
@@ -237,6 +257,7 @@ func _aim_camera() -> void:
 	_up = _terrain.get_up_at(base)
 	_target = base + _up * _aim.y
 	_aim_pending = false
+	_to_ground()
 	_place_camera()
 
 
@@ -247,11 +268,34 @@ func _ground_axes() -> Array[Vector3]:
 	return [_up.cross(z), z]
 
 
+# The player's feet on the ground under them (along the terrain's up, by its SDF), unless noclip.
+func _to_ground() -> void:
+	if noclip or _terrain == null or not _terrain.is_inside_tree():
+		return
+	for i in 32:
+		var d: float = _terrain.get_sdf_at(_target)
+		if absf(d) < 0.01:
+			break
+		_target -= _terrain.get_up_at(_target) * d
+
+
+func set_noclip(p_on: bool) -> void:
+	noclip = p_on
+	_to_ground()
+	_place_camera()
+
+
 func _place_camera() -> void:
 	var axes := _ground_axes()
 	var dir := (axes[0] * sin(_yaw) + axes[1] * cos(_yaw)) * cos(_pitch) + _up * sin(_pitch)
-	_camera.position = _target + dir * _dist
-	_camera.look_at(_target, _up)
+	var eye := _target + _up * (PLAYER_HEIGHT * 0.5)  # the orbit round the capsule's middle
+	_camera.position = eye + dir * _dist
+	if not noclip and _terrain != null and _terrain.is_inside_tree():
+		var d: float = _terrain.get_sdf_at(_camera.position)
+		if d < CAMERA_CLEARANCE:  # never under the ground the player walks
+			_camera.position += _up * (CAMERA_CLEARANCE - d)
+	_camera.look_at(eye, _up)
+	_player.transform = Transform3D(Basis(Quaternion(Vector3.UP, _up)), eye)
 	if _terrain != null:
 		_terrain.set_lod_centre(_target)  # the LOD rings round the pivot, not the camera
 		_terrain.lod_view_min = _terrain.get_lod_at_distance(_dist)  # nothing finer than the pivot needs from here
@@ -263,14 +307,17 @@ func _place_camera() -> void:
 func _gui_input(p_event: InputEvent) -> void:
 	if p_event is InputEventMouseMotion:
 		var m := p_event as InputEventMouseMotion
-		if m.button_mask & MOUSE_BUTTON_MASK_LEFT:
+		if m.button_mask & (MOUSE_BUTTON_MASK_RIGHT | MOUSE_BUTTON_MASK_MIDDLE):
 			_yaw -= m.relative.x * 0.008
-			_pitch = clampf(_pitch + m.relative.y * 0.008, 0.05, 1.55)
-		elif m.button_mask & (MOUSE_BUTTON_MASK_RIGHT | MOUSE_BUTTON_MASK_MIDDLE):
+			_pitch = clampf(_pitch + m.relative.y * 0.008, -1.55 if noclip else 0.05, 1.55)
+		elif m.button_mask & MOUSE_BUTTON_MASK_LEFT:
 			var axes := _ground_axes()
 			var right := axes[0] * cos(_yaw) - axes[1] * sin(_yaw)
 			var fwd := -(axes[0] * sin(_yaw) + axes[1] * cos(_yaw))
-			_target += (-right * m.relative.x + fwd * m.relative.y) * _dist * 0.0015
+			if noclip:  # forward where the camera looks, up and down included
+				fwd = (_target + _up * (PLAYER_HEIGHT * 0.5) - _camera.position).normalized()
+			_target += (-right * m.relative.x + fwd * m.relative.y) * maxf(_dist, 10.0) * 0.0015
+			_to_ground()
 		else:
 			return
 		_place_camera()
@@ -278,7 +325,7 @@ func _gui_input(p_event: InputEvent) -> void:
 	elif p_event is InputEventMouseButton and p_event.pressed:
 		var b := p_event as InputEventMouseButton
 		if b.button_index == MOUSE_BUTTON_WHEEL_UP:
-			_dist = maxf(_dist * 0.9, 20.0)
+			_dist = maxf(_dist * 0.9, NEAREST)
 		elif b.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 			_dist /= 0.9
 		else:
