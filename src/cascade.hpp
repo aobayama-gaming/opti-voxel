@@ -301,6 +301,28 @@ struct BandMod {
     ExactNoise::Float4 warp[3] = {}; // displacement per axis, LOD0 voxels (MOD_WARP)
 };
 
+// The numbers a generated shader reads from a buffer instead of as literals: a climate's (its biomes' places, amplitudes,
+// shapes, curves, constants). Its text then depends on the table's structure alone (which nodes, which coefficients are
+// zero), so an edit of a value compiles nothing: the buffer is re-uploaded. Each call hands out the next slot, holding
+// p_value's bits, of the uniform block of vec4s (std140) the level shader binds at CascadeGLSL::PARAM_BINDING: reads at
+// constant indices, as cheap as the literals were (not a storage buffer: WebGPU caps those per stage).
+struct ShaderParams {
+    std::vector<float> values;
+    ov::str operator()(float p_value) {
+        const int64_t i = int64_t(values.size());
+        values.push_back(p_value);
+        return ov::format("cascade_param[%d].%c", i / 4, "xyzw"[i % 4]);
+    }
+    // p_values in consecutive slots, read at the GLSL index p_index (an int expression, 0 <= p_index < p_values.size()).
+    ov::str table(const std::vector<float> &p_values, const ov::str &p_index) {
+        const int64_t i = int64_t(values.size());
+        values.insert(values.end(), p_values.begin(), p_values.end());
+        return ov::format("cascade_param[(%d + (%s)) >> 2][(%d + (%s)) & 3]", i, p_index.c_str(), i, p_index.c_str());
+    }
+    // The block's vec4s (at least one): its size in the text, a function of the structure as the rest of it.
+    int64_t vec4s() const { return ov::max(int64_t(1), (int64_t(values.size()) + 3) / 4); }
+};
+
 struct Modulation {
     virtual ~Modulation() = default;
     // Bit g: group g's band on Λ_m is modulated (the others insert their constant amplitude).
@@ -341,8 +363,9 @@ struct Modulation {
     // returning modulated(m); shaped: `uint cascade_mods(int m, Ch pre, out BandMod mod[MAX_GROUPS])`, the same mask
     // (CascadeGLSL's insert code). pre in p_spec's GPU layout (Spec::gpu_base, gpu_carry); p_carried: modulate's, for the
     // samples' view (p_spec without the fields). p_derive (the fields' view, p_spec with the carry): `inout Ch pre` and a
-    // last `WorldPos p`, and where g_carry_n says, derive too, from the same weights, into pre's carry groups.
-    virtual ov::str glsl(const Spec &p_spec, bool p_carried, bool p_derive) const = 0;
+    // last `WorldPos p`, and where g_carry_n says, derive too, from the same weights, into pre's carry groups. Its numbers
+    // go to r_params.
+    virtual ov::str glsl(const Spec &p_spec, bool p_carried, bool p_derive, ShaderParams &r_params) const = 0;
 };
 
 struct Spec {

@@ -49,6 +49,8 @@ public:
     int acquire_page();
     // Main thread. The page stops drawing (hidden, group count reset on the device's thread).
     void release_page(int p_page);
+    // Main thread. Every page in use released (a pool handed to the next world's mesher, GPUDirectMesher::destroy).
+    void release_all();
     // Main thread. Frees free pages beyond p_keep_free (at most p_max per call) so VRAM follows the
     // pages in use instead of the high-water mark. Their indices are reused by later growth.
     int trim(int p_keep_free, int p_max);

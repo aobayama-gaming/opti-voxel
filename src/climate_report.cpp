@@ -51,8 +51,10 @@ Vector2i64 slice_point(size_t p_i, int p_n, const Vector2i64 &p_c) {
 // The slice: pixel (column j, row i) is the point (j - n / 2, i - n / 2) + p_c lattice spacings of Λ_m along the base's
 // tangent plane (BaseSurface::tangent_point: x right, z down), traced down the base's up to the ground (p_surface:
 // SDFCascade::ground_along) or left on the plane, then floored to Λ_m (on the flat base: the lattice point at or below).
-// p_picks: the picks too (the report's; the coarse level's where the field range reaches above).
-Sampled sample(const Table &p_table, const SDFCascade &p_sdf, bool p_surface, int p_trace, int p_m, int p_n, const Vector2i64 &p_c, bool p_picks) {
+// p_picks: the picks too (the report's; the coarse level's where the field range reaches above). p_priority: the loop's
+// (parallel_for).
+Sampled sample(const Table &p_table, const SDFCascade &p_sdf, bool p_surface, int p_trace, int p_m, int p_n, const Vector2i64 &p_c, bool p_picks,
+        ov::Priority p_priority) {
     Sampled s;
     s.nf = int(p_table.fields.size());
     s.nb = int(p_table.biomes.size());
@@ -113,8 +115,7 @@ Sampled sample(const Table &p_table, const SDFCascade &p_sdf, bool p_surface, in
             for (int b = 0; b < s.nb; b++) {
                 s.weights[i * s.nb + b] = w[b].w;
             }
-        }
-    });
+        } }, p_priority);
     return s;
 }
 
@@ -441,12 +442,13 @@ struct Slice {
     double spacing_m = 0.0;
     double us_per_point = 0.0;
 };
-static Slice sample_slice(const SDFCascade &p_sdf, bool p_surface, int p_trace, int p_m, int p_n, double p_center_x, double p_center_z, bool p_picks) {
+static Slice sample_slice(const SDFCascade &p_sdf, bool p_surface, int p_trace, int p_m, int p_n, double p_center_x, double p_center_z, bool p_picks,
+        ov::Priority p_priority) {
     Slice out;
     out.spacing_m = std::ldexp(p_sdf.climate_ground().voxel_size, p_m);
     out.c = Vector2i64{ std::llround(p_center_x / out.spacing_m), std::llround(p_center_z / out.spacing_m) };
     const uint64_t t0 = ov::now_usec();
-    out.s = sample(*p_sdf.get_climate(), p_sdf, p_surface, p_trace, p_m, p_n, out.c, p_picks);
+    out.s = sample(*p_sdf.get_climate(), p_sdf, p_surface, p_trace, p_m, p_n, out.c, p_picks, p_priority);
     out.us_per_point = double(ov::now_usec() - t0) / (double(p_n) * p_n);
     return out;
 }
@@ -486,7 +488,7 @@ ov::Value ClimateReport::run(const ov::str &p_out_dir, const ov::str &p_world_pa
         OV_ERR_FAIL_V_MSG(report, "ClimateReport: " + report["error"].as_str());
     }
     const int m = p_lattice >= 0 ? p_lattice : slice_lattice(p_extent_km, n, ground.voxel_size);
-    const Slice slice = sample_slice(sdf, p_surface, 0, m, n, p_center_x, p_center_z, true);
+    const Slice slice = sample_slice(sdf, p_surface, 0, m, n, p_center_x, p_center_z, true, ov::Priority::HIGH);
     const Sampled &s = slice.s;
     const Vector2i64 &c = slice.c;
     const double spacing_m = slice.spacing_m, us_per_point = slice.us_per_point;
@@ -520,7 +522,7 @@ ov::Value ClimateReport::run(const ov::str &p_out_dir, const ov::str &p_world_pa
 }
 
 ClimateReport::Preview ClimateReport::preview(const ov::Value &p_world, const ov::str &p_dir, double p_extent_km, int p_size, bool p_surface, double p_center_x,
-        double p_center_z) {
+        double p_center_z, ov::Priority p_priority) {
     Preview out;
     WorldFile world;
     out.error = WorldFile::parse(p_world, p_dir, world);
@@ -535,7 +537,7 @@ ClimateReport::Preview ClimateReport::preview(const ov::Value &p_world, const ov
     const double voxel = sdf.climate_ground().voxel_size;
     const int n = ov::max(p_size, 2);
     const int m = ov::min(slice_lattice(p_extent_km, n, voxel), sdf.get_spec().top_level());
-    const Slice slice = sample_slice(sdf, p_surface, m, m, n, p_center_x, p_center_z, false);
+    const Slice slice = sample_slice(sdf, p_surface, m, m, n, p_center_x, p_center_z, false, p_priority);
     const Sampled &s = slice.s;
     out.us_per_point = slice.us_per_point;
     out.size = n;

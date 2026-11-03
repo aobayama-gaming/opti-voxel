@@ -2,6 +2,7 @@
 
 #include "godot_callable.hpp"
 #include "godot_conv.hpp"
+#include "trace.hpp"
 
 #include <godot_cpp/classes/rd_sampler_state.hpp>
 #include <godot_cpp/classes/rd_shader_source.hpp>
@@ -13,10 +14,50 @@
 #include <godot_cpp/variant/callable_custom.hpp>
 
 #include <cstring>
+#include <deque>
+#include <mutex>
+#include <unordered_map>
 
 using namespace godot;
 
 namespace {
+
+// The SPIR-V of the compute shader texts this process compiled, by text: glslang is most of a pipeline's cost, and a
+// world restarted on the same structure (an edit of its values: Cascade::ShaderParams) compiles the same texts again.
+// Bytes, not Ref<RDShaderSPIRV>s, so that nothing of Godot's outlives it at exit. Any RDDevice, any thread.
+class SpirvCache {
+public:
+    static SpirvCache &get() {
+        static SpirvCache cache;
+        return cache;
+    }
+    // p_glsl's SPIR-V in r_spirv, if compiled before.
+    bool find(const ov::str &p_glsl, PackedByteArray &r_spirv) {
+        std::lock_guard<std::mutex> lock(mutex);
+        const auto found = spirv.find(p_glsl);
+        if (found == spirv.end()) {
+            return false;
+        }
+        r_spirv = godot_bytes(found->second);
+        return true;
+    }
+    void add(const ov::str &p_glsl, const PackedByteArray &p_spirv) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (spirv.size() >= MAX_TEXTS) {
+            spirv.erase(order.front()); // the oldest: bounded over a long session of structural edits
+            order.pop_front();
+        }
+        if (spirv.emplace(p_glsl, ov::bytes(p_spirv.ptr(), p_spirv.ptr() + p_spirv.size())).second) {
+            order.push_back(p_glsl);
+        }
+    }
+
+private:
+    static constexpr size_t MAX_TEXTS = 64;
+    std::mutex mutex;
+    std::unordered_map<ov::str, ov::bytes> spirv;
+    std::deque<ov::str> order; // spirv's texts, oldest first
+};
 
 PackedByteArray to_bytes(const void *p_data, uint64_t p_size) {
     PackedByteArray out;
@@ -72,6 +113,7 @@ RDDevice::~RDDevice() {
     for (auto it = entries.rbegin(); it != entries.rend(); ++it) {
         _free_entry(it->second);
     }
+    drop_parked();
     if (linear_sampler.is_valid()) {
         rd->free_rid(linear_sampler);
     }
@@ -129,11 +171,37 @@ const RDDevice::Entry *RDDevice::_get(ov::gpu::Handle p_handle) const {
     return it != entries.end() ? &it->second : nullptr;
 }
 
+RDDevice::Entry RDDevice::_take_parked(const Shape &p_shape) {
+    const auto park = parked_shapes.find(p_shape);
+    if (park == parked_shapes.end()) {
+        Entry entry;
+        entry.shape = p_shape;
+        return entry;
+    }
+    const Entry entry = park->second;
+    parked_shapes.erase(park);
+    return entry;
+}
+
 ov::gpu::Buffer RDDevice::create_buffer(ov::gpu::BufferKind p_kind, uint64_t p_size, const void *p_data) {
-    const PackedByteArray data = to_bytes(p_data, p_size);
-    const RID rid = p_kind == ov::gpu::BufferKind::UNIFORM ? rd->uniform_buffer_create(uint32_t(p_size), data)
+    Entry entry = _take_parked({ 1, uint64_t(p_kind), p_size });
+    // Zeroed on the GPU: a mesher's scratch is hundreds of MB, a CPU array of zeros a copy through staging.
+    const bool clear = p_data == nullptr && p_kind == ov::gpu::BufferKind::STORAGE && p_size > 0 && p_size % 4 == 0;
+    if (entry.rid.is_valid()) {
+        if (clear) {
+            rd->buffer_clear(entry.rid, 0, uint32_t(p_size));
+        } else {
+            rd->buffer_update(entry.rid, 0, uint32_t(p_size), to_bytes(p_data, p_size));
+        }
+    } else if (clear) {
+        entry.rid = rd->storage_buffer_create(uint32_t(p_size));
+        rd->buffer_clear(entry.rid, 0, uint32_t(p_size));
+    } else {
+        const PackedByteArray data = to_bytes(p_data, p_size);
+        entry.rid = p_kind == ov::gpu::BufferKind::UNIFORM ? rd->uniform_buffer_create(uint32_t(p_size), data)
                                                            : rd->storage_buffer_create(uint32_t(p_size), data);
-    return ov::gpu::Buffer{ _add({ rid, RID() }) };
+    }
+    return ov::gpu::Buffer{ _add(entry) };
 }
 
 void RDDevice::update_buffer(ov::gpu::Buffer p_buffer, uint64_t p_offset, uint64_t p_size, const void *p_data) {
@@ -155,8 +223,13 @@ ov::gpu::Texture RDDevice::create_texture(ov::gpu::TextureFormat p_format, uint3
     TypedArray<PackedByteArray> layers;
     if (p_data != nullptr) {
         layers.push_back(to_bytes(p_data, uint64_t(p_width) * p_height * ov::gpu::texel_bytes(p_format)));
+        return ov::gpu::Texture{ _add({ rd->texture_create(format, view, layers), RID() }) };
     }
-    return ov::gpu::Texture{ _add({ rd->texture_create(format, view, layers), RID() }) };
+    Entry entry = _take_parked({ 2 | uint64_t(p_format) << 8 | uint64_t(p_usage) << 32, uint64_t(p_width) << 32 | p_height, 1 });
+    if (!entry.rid.is_valid()) {
+        entry.rid = rd->texture_create(format, view, layers);
+    }
+    return ov::gpu::Texture{ _add(entry) };
 }
 
 ov::gpu::Texture RDDevice::create_texture_3d(ov::gpu::TextureFormat p_format, uint32_t p_width, uint32_t p_height, uint32_t p_depth, uint32_t p_usage) {
@@ -165,7 +238,11 @@ ov::gpu::Texture RDDevice::create_texture_3d(ov::gpu::TextureFormat p_format, ui
     format->set_depth(p_depth);
     Ref<RDTextureView> view;
     view.instantiate();
-    return ov::gpu::Texture{ _add({ rd->texture_create(format, view, TypedArray<PackedByteArray>()), RID() }) };
+    Entry entry = _take_parked({ 3 | uint64_t(p_format) << 8 | uint64_t(p_usage) << 32, uint64_t(p_width) << 32 | p_height, p_depth });
+    if (!entry.rid.is_valid()) {
+        entry.rid = rd->texture_create(format, view, TypedArray<PackedByteArray>());
+    }
+    return ov::gpu::Texture{ _add(entry) };
 }
 
 Ref<RDTextureFormat> RDDevice::texture_format(ov::gpu::TextureFormat p_format, uint32_t p_width, uint32_t p_height, uint32_t p_usage) {
@@ -223,14 +300,29 @@ void RDDevice::copy_texture(ov::gpu::Texture p_from, ov::gpu::Texture p_to, uint
 }
 
 ov::gpu::Pipeline RDDevice::create_compute_pipeline(const ov::str &p_name, const ov::str &p_glsl, ov::str &r_error) {
-    const String code = godot_str(p_glsl);
-    Ref<RDShaderSource> source;
-    source.instantiate();
-    source->set_stage_source(RenderingDevice::SHADER_STAGE_COMPUTE, code);
-    const Ref<RDShaderSPIRV> spirv = rd->shader_compile_spirv_from_source(source);
-    r_error = ov_str(spirv->get_stage_compile_error(RenderingDevice::SHADER_STAGE_COMPUTE));
-    if (!r_error.empty()) {
-        return ov::gpu::Pipeline();
+    const auto park = parked.find(p_glsl);
+    if (park != parked.end()) {
+        const ov::gpu::Pipeline taken{ _add(park->second) };
+        parked.erase(park);
+        pipeline_text.emplace(taken.id, p_glsl);
+        return taken;
+    }
+    OV_TRACE("device", "pipeline_create");
+    Ref<RDShaderSPIRV> spirv;
+    PackedByteArray cached;
+    if (SpirvCache::get().find(p_glsl, cached)) {
+        spirv.instantiate();
+        spirv->set_stage_bytecode(RenderingDevice::SHADER_STAGE_COMPUTE, cached);
+    } else {
+        Ref<RDShaderSource> source;
+        source.instantiate();
+        source->set_stage_source(RenderingDevice::SHADER_STAGE_COMPUTE, godot_str(p_glsl));
+        spirv = rd->shader_compile_spirv_from_source(source);
+        r_error = ov_str(spirv->get_stage_compile_error(RenderingDevice::SHADER_STAGE_COMPUTE));
+        if (!r_error.empty()) {
+            return ov::gpu::Pipeline();
+        }
+        SpirvCache::get().add(p_glsl, spirv->get_stage_bytecode(RenderingDevice::SHADER_STAGE_COMPUTE));
     }
     const RID shader = rd->shader_create_from_spirv(spirv, godot_str(p_name));
     const RID pipeline = rd->compute_pipeline_create(shader);
@@ -239,7 +331,9 @@ ov::gpu::Pipeline RDDevice::create_compute_pipeline(const ov::str &p_name, const
         rd->free_rid(shader);
         return ov::gpu::Pipeline();
     }
-    return ov::gpu::Pipeline{ _add({ pipeline, shader }) };
+    const ov::gpu::Pipeline made{ _add({ pipeline, shader }) };
+    pipeline_text.emplace(made.id, p_glsl);
+    return made;
 }
 
 ov::gpu::BindSet RDDevice::create_bind_set(ov::gpu::Pipeline p_pipeline, const std::vector<ov::gpu::Binding> &p_bindings) {
@@ -343,6 +437,30 @@ void RDDevice::free(ov::gpu::Handle p_handle) {
     if (it == entries.end()) {
         return;
     }
-    _free_entry(it->second);
+    const auto text = pipeline_text.find(p_handle.id);
+    if (parking && it->second.shape[0] != 0 && it->second.owned) {
+        parked_shapes.emplace(it->second.shape, it->second);
+    } else if (text != pipeline_text.end()) {
+        if (parking) {
+            parked.emplace(std::move(text->second), it->second);
+        } else {
+            _free_entry(it->second);
+        }
+        pipeline_text.erase(text);
+    } else {
+        _free_entry(it->second);
+    }
     entries.erase(it);
+}
+
+void RDDevice::drop_parked() {
+    for (const auto &[text, entry] : parked) {
+        _free_entry(entry);
+    }
+    parked.clear();
+    for (const auto &[shape, entry] : parked_shapes) {
+        _free_entry(entry);
+    }
+    parked_shapes.clear();
+    parking = false;
 }

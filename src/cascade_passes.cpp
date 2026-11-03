@@ -14,6 +14,9 @@ using ov::gpu::BufferKind;
 
 static_assert(BaseRegions::REGION_BINDING > CascadeGLSL::MATERIAL_BINDING && BaseRegions::REGION_BINDING > CascadeGLSL::TABLE_LIST_BINDING,
         "CascadePasses: the base regions' bindings follow the level shader's own.");
+static_assert(CascadeGLSL::PARAM_BINDING > BaseRegions::INDEX_BINDING, "CascadePasses: the shader params follow the base regions.");
+// A uniform block's guaranteed size (Vulkan maxUniformBufferRange, WebGPU maxUniformBufferBindingSize).
+static constexpr size_t MAX_PARAM_BYTES = 16384;
 
 bool CascadePasses::create(ov::gpu::Device *p_device, const SDFBase *p_sdf, const ChunkParam &p_param, uint32_t p_max_chunks, Buffer p_input,
         Buffer p_param_ubo, Buffer p_sdf_sample, Buffer p_debug, const CascadePasses *p_share_scratch, Buffer p_table_records, Buffer p_table_list,
@@ -55,14 +58,18 @@ bool CascadePasses::_create(ov::gpu::Device *p_device, const SDFBase *p_sdf, int
     for (int c = fields.everywhere() ? 1 : 0; c < (fields.empty() ? 1 : 3); c++) {
         for (int f = 0; f < (table && CascadeGLSL::View(c) != CascadeGLSL::View::FIELDS ? 2 : 1); f++) {
             const int v = 2 * c + f;
-            const ov::str code =
-                    CascadeGLSL::level_shader(p_sdf, p_debug.is_valid(), points, f == 1, p_material.is_valid(), CascadeGLSL::View(c), cubes);
+            Cascade::ShaderParams values;
+            const ov::str code = CascadeGLSL::level_shader(p_sdf, p_debug.is_valid(), points, f == 1, p_material.is_valid(), CascadeGLSL::View(c),
+                    cubes, &values);
             const ov::str name =
                     ov::str(points ? "cascade_points" : (p_debug.is_valid() ? "cascade_levels_debug" : "cascade_levels")) + (f == 1 ? "_fold" : "") + VIEW_NAMES[c];
             pipeline[v] = ov::gpu::compile(*device, name, code);
             if (!pipeline[v].is_valid() && f == 0) {
                 return false; // a fold variant that fails leaves the bare one working (record_level ERRs once)
             }
+            values.values.resize(size_t(values.vec4s()) * 4);
+            OV_ERR_FAIL_COND_V_MSG(values.values.size() * sizeof(float) > MAX_PARAM_BYTES, false, "CascadePasses: more shader params than a uniform block holds.");
+            params[v] = device->create_buffer(BufferKind::UNIFORM, values.values.size() * sizeof(float), values.values.data());
         }
     }
 
@@ -114,7 +121,9 @@ bool CascadePasses::_create(ov::gpu::Device *p_device, const SDFBase *p_sdf, int
     }
     for (int v = 0; v < VARIANTS; v++) {
         if (pipeline[v].is_valid()) {
-            uniform_set[v] = device->create_bind_set(pipeline[v], (v & 1) ? fold_bindings : bindings);
+            std::vector<Binding> own = (v & 1) ? fold_bindings : bindings;
+            own.push_back({ uint32_t(CascadeGLSL::PARAM_BINDING), BufferKind::UNIFORM, params[v] });
+            uniform_set[v] = device->create_bind_set(pipeline[v], own);
         }
     }
     return (uniform_set[0].is_valid() || fields.everywhere()) && (fields.empty() || (uniform_set[2].is_valid() && uniform_set[4].is_valid()));
@@ -125,7 +134,7 @@ void CascadePasses::free() {
         return;
     }
     for (int v = 0; v < VARIANTS; v++) {
-        for (const ov::gpu::Handle h : { ov::gpu::Handle(uniform_set[v]), ov::gpu::Handle(pipeline[v]) }) {
+        for (const ov::gpu::Handle h : { ov::gpu::Handle(uniform_set[v]), ov::gpu::Handle(pipeline[v]), ov::gpu::Handle(params[v]) }) {
             if (h.is_valid()) {
                 device->free(h);
             }
@@ -146,6 +155,7 @@ void CascadePasses::free() {
     for (int v = 0; v < VARIANTS; v++) {
         uniform_set[v] = ov::gpu::BindSet();
         pipeline[v] = ov::gpu::Pipeline();
+        params[v] = Buffer();
     }
     scratch_a = Buffer();
     scratch_b = Buffer();

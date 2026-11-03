@@ -18,7 +18,8 @@ Engine, GPU and float traps that already cost a debugging session each.
 - `thread_model=2` (separate render thread): Godot 4.6.3 aborts in `RenderingDevice::finalize` on
   every exit, even for an empty scene. `bench.sh` accepts that one abort if the bench finished.
 - `--render-thread safe` (rendering on the main thread): every bench run reports ~581 leaked
-  StorageBuffer RIDs at exit, so `bench.sh` fails (exit 3). Bench runs need the separate thread.
+  StorageBuffer RIDs at exit, so `bench.sh` fails (exit 3). Bench runs need the separate thread. (Measured before
+  the pages' command buffers were freed, below: not checked since.)
 - Reading render GPU time (`viewport_get_measured_render_time_*`) syncs the render thread: the
   bench only does it in the steady phase. Without a debugger Godot only captures the viewport's begin/end
   timestamps; with one attached its "visual" profiler exists, and turning it on
@@ -61,6 +62,15 @@ Engine, GPU and float traps that already cost a debugging session each.
   A `return` in a canvas shader's `fragment()` is a compile error: put the early-out branches in a function.
 - A RenderingDevice push block is set in whole 16 bytes (SPIR-V reflection rounds its size up): `RDDevice::dispatch`
   pads a smaller one with zeros, else the dispatch is dropped ("requires (16) bytes of push constant data").
+- A RenderingDevice buffer created from a CPU array of zeros costs its size in a memset and a staging copy on the
+  creating thread (the direct mesher's ~200 MB of scratch: 0.2 s of every start): `RDDevice::create_buffer` makes a
+  storage buffer without data and zeroes it on the GPU (`buffer_clear`).
+- A pipeline from cached SPIR-V still costs the driver's compile (`shader_create_from_spirv` +
+  `compute_pipeline_create`: 0.8 s of the direct mesher's and the cascade's passes): a restart that keeps them reuses
+  them (`RDDevice::park`, `VoxelTerrain.restart_world`).
+- Godot 4.6 never frees an indirect MultiMesh's command buffer: `MeshStorage::_multimesh_allocate_data`, which its free
+  runs, sets the RID to null. One StorageBuffer leaked per page freed (a mixer restart freed ~150: 6,142 in a 20 s
+  drag); `GodotPageHost::rt_detach_page` frees it, after the multimesh.
 - Dawn (Tint) does not keep the exact noise bit for bit: `ov_dawn --check` and `--frame-check` miss a few low bits
   of the fbm and perlin probes (open); everything else matches.
 - `texture_rd_create` only wraps RD formats that have an `Image` equivalent: RG32UI / RGBA32UI fail

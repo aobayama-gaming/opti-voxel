@@ -23,8 +23,10 @@ public:
     static String check(const String &p_json, double p_voxel_size, int p_lods);
     // ClimateReport::preview of a world file's text (its relative paths from p_dir), static: { error, size, lattice,
     // spacing_m, us_per_point, relief_m, biomes: Image, shaded: Image (RGB8), altitude_m: PackedFloat32Array, fields:
-    // PackedFloat32Array (point-major), field_names, biome_names } (the biome mixer's maps).
-    static Dictionary preview(const String &p_json, const String &p_dir, double p_extent_km, int p_size, bool p_surface, const Vector2 &p_center);
+    // PackedFloat32Array (point-major), field_names, biome_names } (the biome mixer's maps). p_background: its loop at
+    // ov::Priority::LOW, behind the frame's.
+    static Dictionary preview(const String &p_json, const String &p_dir, double p_extent_km, int p_size, bool p_surface, const Vector2 &p_center,
+            bool p_background = false);
     // A height curve node's R(h) at p_xs (metres) through p_points ([h, R] pairs, metres) at a voxel size: the engine's
     // curve (Climate::height_curve, eval_curve), drawn by the biome mixer's curve editor. Points it refuses: p_xs.
     static PackedFloat32Array curve(const Array &p_points, const PackedFloat32Array &p_xs, double p_voxel_m);

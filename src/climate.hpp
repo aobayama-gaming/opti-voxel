@@ -411,7 +411,7 @@ Float4 ground_value(const Table &p_table, const float p_slots[Cascade::SLOTS]);
 Float4 ground_value(const Table &p_table, const SampleCarry &p_carry, const float p_slots[Cascade::SLOTS]);
 // The same in GLSL: `vec4 climate_ground(Ch ch)` returning (value, d/dx, d/dy, d/dz) like the cascade's c0, after the
 // shared helpers (splices_helpers is true with ground terms), ch in p_combined's GPU layout.
-ov::str ground_glsl(const Table &p_table, const Cascade::Spec &p_combined);
+ov::str ground_glsl(const Table &p_table, const Cascade::Spec &p_combined, Cascade::ShaderParams &r_params);
 
 // The biome with the largest weight p_w at lattice point p_p of Λ_m; among equal weights (same bits), the
 // (hash % count)-th in list order, hash = ExactNoise::hash_cell(the point's LOD0 voxel, PICK_SEED): the same from every
@@ -437,7 +437,7 @@ ov::str pick_statements_glsl(const Table &p_table, const ov::str &p_var);
 // cl_edge), and apply_terms then weights as statements defining f<i> (the fields) and w<b> (the weights) from the channels
 // of `Ch pre` (p_spec's GPU layout).
 ov::str glsl_helpers();
-ov::str glsl_weights(const Table &p_table, const Cascade::Spec &p_spec);
+ov::str glsl_weights(const Table &p_table, const Cascade::Spec &p_spec, Cascade::ShaderParams &r_params);
 // Whether the level shader splices the helpers once, up front (shared_helpers_glsl), for every generated function: with a
 // shaped modulation or ground terms. Else each generator brings glsl_helpers as before them (the plain text).
 bool splices_helpers(const Table &p_table, const Cascade::Spec &p_combined);

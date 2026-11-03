@@ -56,4 +56,8 @@ struct WorldFile {
     static ov::str load(const ov::str &p_path, WorldFile &r_world);
     // A file's parsed JSON, its relative paths from the directory p_dir.
     static ov::str parse(const ov::Value &p_data, const ov::str &p_dir, WorldFile &r_world);
+    // A file's text (an editor's world, never written), its relative paths from p_dir.
+    static ov::str parse_text(const ov::str &p_text, const ov::str &p_dir, WorldFile &r_world);
+    // p_text as a JSON object in r_data: empty, or why not (p_name: the text's name in the message).
+    static ov::str parse_object(const ov::str &p_text, const ov::str &p_name, ov::Value &r_data);
 };

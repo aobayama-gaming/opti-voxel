@@ -12,7 +12,7 @@ public:
     ov::TaskId submit(std::function<void()> p_task, ov::Priority p_priority, const char *p_name) override;
     bool done(ov::TaskId p_task) override;
     void wait(ov::TaskId p_task) override;
-    void parallel_for(uint32_t p_count, const char *p_name, void (*p_fn)(void *, uint32_t), void *p_ctx) override;
+    void parallel_for(uint32_t p_count, const char *p_name, void (*p_fn)(void *, uint32_t), void *p_ctx, ov::Priority p_priority) override;
     std::unique_ptr<ov::Worker> start_worker(const char *p_name, ov::WorkerLoop &p_loop) override;
 
 private:

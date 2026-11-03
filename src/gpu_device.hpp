@@ -156,6 +156,12 @@ public:
 
     // Frees an object (a pipeline or a buffer: the bind sets using it may go with it, a later free of one is a no-op).
     virtual void free(Handle p_handle) = 0;
+
+    // A world restarting on this device (on the device's thread): from park on, the objects freed may be kept and taken
+    // by those of the next world created like them (RDDevice: pipelines by text, buffers and textures by shape);
+    // drop_parked frees those not taken. Without parking (the default) both do nothing.
+    virtual void park() {}
+    virtual void drop_parked() {}
 };
 
 // Local devices (the discoverer's, the field service's), owned by the thread that creates them. The adapter installs

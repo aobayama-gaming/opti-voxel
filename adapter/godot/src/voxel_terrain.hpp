@@ -40,15 +40,21 @@ protected:
 
 private:
     Camera3D *camera = nullptr;
-    ov::World world;
-    ov::DigTool dig_tool{ world };
-    ov::World::Settings &cfg() { return world.settings(); }
-    const ov::World::Settings &cfg() const { return world.settings(); }
+    Vector3 lod_centre;
+    bool has_lod_centre = false;
+    // A restart (restart_world) is a new World on the same device and hosts, with the settings, its chunk_param as before
+    // the first start (start() places the origin and raises the skirt in it).
+    std::unique_ptr<ov::World> world = std::make_unique<ov::World>();
+    std::unique_ptr<ov::DigTool> dig_tool = std::make_unique<ov::DigTool>(*world);
+    ChunkParam start_chunk_param;
+    ov::World::Settings &cfg() { return world->settings(); }
+    const ov::World::Settings &cfg() const { return world->settings(); }
 
     // The main RenderingDevice as the world's device (used on the render thread), and the hosts drawing its output.
     RDDevice *main_device = nullptr;
     GodotPageHost *page_host = nullptr; // GPU Direct's pages
     GodotMeshHost *mesh_host = nullptr; // the legacy meshes
+    ov::World::Hosts hosts; // the above as the world's
 
     GPUProfiler *gpu_profiler = nullptr;
     bool debug_gpu_profile = false;
@@ -57,6 +63,10 @@ private:
     bool lod_far_limit = true; // hand the world the camera's far plane (set_lod_far_limit)
 
     void _teardown();
+    // The world started on the hosts (false: it refused, an ERR said why), then its pages' and sky's parameters; the
+    // atmosphere turned off on the pages and the sky, then the world stopped.
+    bool _start_world();
+    void _stop_world(ov::World::Kept *r_kept = nullptr); // r_kept: World::stop's
     // The camera's view axis in render space.
     Vector3 _camera_forward() const;
     // What the world gets as the camera's far plane: Camera3D.far, 0 (none) without a camera or the far limit.
@@ -94,6 +104,13 @@ public:
     // the node enters the tree; the scene's camera may read voxel_size from then on.
     void set_world_path(const String &p_path);
     String get_world_path() const;
+    // The world as a world file's text (its relative paths from p_dir), read instead of world_path: an editor's world (the
+    // biome mixer), never written to a file. Before the terrain enters the tree.
+    void set_world_json(const String &p_json, const String &p_dir);
+    // The running terrain stopped and started again on the world p_json (paths from p_dir), on its device and hosts: the
+    // pipelines whose text didn't change are kept (an editor's edit of a world's numbers builds none), its chunks loaded
+    // again. The settings are kept (chunk_param as it entered the tree); the instance edits are dropped.
+    void restart_world(const String &p_json, const String &p_dir);
     void set_terrain_mode(int p_mode);
     int get_terrain_mode() const;
 
@@ -176,6 +193,18 @@ public:
     // 0: only the current view (every turn re-meshes the cone's edges).
     void set_lod_view_memory_m(float p_metres);
     float get_lod_view_memory_m() const;
+    // The coarsest LOD the view loads (< 0, default: the engine's top): a view's reach. The terrain stays the engine's.
+    void set_lod_view_max(int p_lod);
+    int get_lod_view_max() const;
+    // Where the LOD rings centre (render space, moved with the render origin like the camera's siblings) instead of
+    // the camera: an orbit view's pivot. clear_lod_centre: the camera again.
+    void set_lod_centre(const Vector3 &p_position);
+    // The finest LOD the view loads (default 0), any time: an orbit view far from its pivot needs no finer chunks than
+    // get_lod_at_distance(its distance).
+    void set_lod_view_min(int p_lod);
+    int get_lod_view_min() const;
+    int get_lod_at_distance(double p_metres) const;
+    void clear_lod_centre();
     // Scan nothing farther from the camera than its far plane (Camera3D.far, read every frame): it is never drawn.
     // With --lods above 15 the far plane follows the altitude (Presets.clip_planes), so a low camera drops the
     // coarsest LODs. Default on.

@@ -7,7 +7,8 @@
 
 namespace Cascade {
 struct Spec;
-}
+struct ShaderParams;
+} //namespace Cascade
 class BaseSurface;
 
 // What the cascade's level shader (cascade_glsl.hpp) reads of a terrain: its bands and the GLSL pieces it splices.
@@ -22,8 +23,9 @@ public:
 
     // GPU code spliced into the cascade passes (SDFCascade: the cascade's register, metres and skirt
     // functions). The shader provides the chunk_param
-    // uniform, the frame functions of gpu_frame.hpp and the exact noise of exact_noise.hpp.
-    virtual ov::str get_glsl_code() const = 0;
+    // uniform, the frame functions of gpu_frame.hpp and the exact noise of exact_noise.hpp. Its numbers that follow the
+    // world's values (the skirt depths: the ground's amplitudes) go to r_params (Cascade::ShaderParams).
+    virtual ov::str get_glsl_code(Cascade::ShaderParams &r_params) const = 0;
     // The GLSL the cascade level passes' fold variant splices after the table buffers (cascade_glsl.hpp), defining
     // `vec4 cascade_sample_sdf(vec4 c0, WorldPos p, int lod, WorldPos group_lo, WorldPos group_hi, uint chunk, out uint
     // material, out float skirt_extra)` (material: the winning record's palette index, 0 = ground; skirt_extra: metres
@@ -40,10 +42,12 @@ public:
     }
     // Whether a sample's ground is more than the cascade's ground channels (a biome's curve): then
     // the cascade level passes carry the fields at every level, point items too, and splice get_ground_glsl after their
-    // channel code, defining `vec4 climate_ground(Ch ch)`, the ground channels (value, gradient) of a sample.
+    // channel code, defining `vec4 climate_ground(Ch ch)`, the ground channels (value, gradient) of a sample. Its
+    // numbers go to r_params (Cascade::ShaderParams).
     virtual bool has_ground_terms() const { return false; }
-    virtual ov::str get_ground_glsl(const Cascade::Spec &p_view) const {
+    virtual ov::str get_ground_glsl(const Cascade::Spec &p_view, Cascade::ShaderParams &r_params) const {
         (void)p_view;
+        (void)r_params;
         return ov::str();
     }
     // The dual-number helpers the climate's generated functions share, spliced once before them all (Climate's

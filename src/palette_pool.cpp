@@ -88,14 +88,23 @@ ov::Value PalettePool::get_stats() const {
 }
 
 void PalettePool::rt_create(ov::gpu::Device *p_device) {
-    // Zeroes (an entry reads GROUND), and the ground block's base palette.
-    std::vector<uint16_t> texels(size_t(PageFormat::PALETTE_TEX_WIDTH) * rows() * PageFormat::TEXEL_CHANNELS, 0);
-    for (size_t e = 0; e < base->size(); e++) {
-        PageFormat::encode_palette_entry(texels.data(), PaletteAlloc::GROUND_BLOCK + uint32_t(e), (*base)[e]);
-    }
-    // Sampled by the page shader, written by the emit pass, cleared by copies (texture_clear).
+    // Sampled by the page shader, written by the emit pass, cleared by copies (texture_clear). Zeroes (an entry reads
+    // GROUND) cleared on the GPU: the whole texture from the CPU was 8 MB through staging at the default capacity, most of
+    // a start.
     texture = p_device->create_texture(QuadPagePool::TEX_FORMAT, PageFormat::PALETTE_TEX_WIDTH, rows(),
-            ov::gpu::TEXTURE_SAMPLED | ov::gpu::TEXTURE_STORAGE | ov::gpu::TEXTURE_UPDATE | ov::gpu::TEXTURE_COPY_DST, texels.data());
+            ov::gpu::TEXTURE_SAMPLED | ov::gpu::TEXTURE_STORAGE | ov::gpu::TEXTURE_UPDATE | ov::gpu::TEXTURE_COPY_DST);
+    p_device->clear_texture(texture);
+    // Then the ground block's base palette, its rows copied from a texture of their own.
+    const uint32_t first_row = PaletteAlloc::GROUND_BLOCK / PageFormat::PALETTE_SIZE;
+    const uint32_t base_rows = (PaletteAlloc::GROUND_BLOCK + uint32_t(base->size()) + PageFormat::PALETTE_SIZE - 1) / PageFormat::PALETTE_SIZE - first_row;
+    std::vector<uint16_t> texels(size_t(PageFormat::PALETTE_TEX_WIDTH) * base_rows * PageFormat::TEXEL_CHANNELS, 0);
+    for (size_t e = 0; e < base->size(); e++) {
+        PageFormat::encode_palette_entry(texels.data(), PaletteAlloc::GROUND_BLOCK - first_row * PageFormat::PALETTE_SIZE + uint32_t(e), (*base)[e]);
+    }
+    const ov::gpu::Texture rows_texture = p_device->create_texture(QuadPagePool::TEX_FORMAT, PageFormat::PALETTE_TEX_WIDTH, base_rows,
+            ov::gpu::TEXTURE_COPY_SRC | ov::gpu::TEXTURE_UPDATE, texels.data());
+    p_device->copy_texture(rows_texture, texture, 0, 0, 0, first_row, PageFormat::PALETTE_TEX_WIDTH, base_rows);
+    p_device->free(rows_texture); // after the copy recorded
 }
 
 void PalettePool::rt_free(ov::gpu::Device *p_device) {

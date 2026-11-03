@@ -28,6 +28,7 @@ layout(set = 0, binding = 3, std430) restrict buffer ScratchA { vec4 scratch_a[]
 layout(set = 0, binding = 4, std430) restrict buffer ScratchB { vec4 scratch_b[]; };
 layout(set = 0, binding = 5, std430) restrict readonly buffer Bands { CascadeBand bands[]; };
 layout(set = 0, binding = 6, std430) restrict writeonly buffer DebugChannels { vec4 debug_channels[]; };
+/*PARAM_BLOCK*/
 /*TABLE_BUFFERS*/
 /*MATERIAL_BUFFER*/
 
@@ -642,7 +643,8 @@ namespace {
 // carries (Cascade::FieldRange p_range: the fields, and the carry groups g_carry_n the last level reads, loaded in the
 // samples' view, derived and stored in the fields' view at j = 1), the passes, the bands, the modulation and the derive,
 // then p_tail.
-ov::str view_code(const ov::str &p_code, const CascadeSource *p_sdf, const Spec &p_spec, const FieldRange &p_range, View p_view, const ov::str &p_tail) {
+ov::str view_code(const ov::str &p_code, const CascadeSource *p_sdf, const Spec &p_spec, const FieldRange &p_range, View p_view, const ov::str &p_tail,
+        ShaderParams &r_params) {
     const Spec &whole = *p_sdf->get_cascade();
     const bool climate = p_spec.modulation != nullptr;
     const bool fields = p_view == View::FIELDS && climate;
@@ -664,7 +666,7 @@ ov::str view_code(const ov::str &p_code, const CascadeSource *p_sdf, const Spec 
         flags += level_switch("cascade_carry_used", [&](int p_lod) { return p_range.reads_carry(p_lod) ? p_spec.modulation->carry_used(p_lod) : 0; });
         flag_values += ov::format("    g_carry_n = pc.j == %d ? uint(cascade_carry_used(lod)) : 0u;\n", carried ? 0 : 1);
     }
-    const ov::str modulation = climate ? p_spec.modulation->glsl(p_spec, carried, derive) : ov::str();
+    const ov::str modulation = climate ? p_spec.modulation->glsl(p_spec, carried, derive, r_params) : ov::str();
     // The climate's shared helpers (with a shaped modulation or ground terms) and the shaped inserts' (BandMod), before
     // every generated function that uses them.
     const ov::str helpers = (climate ? p_sdf->get_climate_helpers_glsl() : ov::str()) + (shaped(p_spec) ? shaped_helpers() : ov::str());
@@ -679,7 +681,10 @@ ov::str view_code(const ov::str &p_code, const CascadeSource *p_sdf, const Spec 
 
 } // namespace
 
-ov::str level_shader(const CascadeSource *p_sdf, bool p_debug, bool p_points, bool p_fold, bool p_material, View p_view, bool p_cubes) {
+ov::str level_shader(const CascadeSource *p_sdf, bool p_debug, bool p_points, bool p_fold, bool p_material, View p_view, bool p_cubes,
+        ShaderParams *r_params) {
+    ShaderParams own;
+    ShaderParams &params = r_params != nullptr ? *r_params : own;
     const Spec &whole = *p_sdf->get_cascade();
     // The view's Ch on the whole spec's scratch planes: the ground alone (its bands, no modulation), or without the fields.
     const Spec view = p_view == View::FIELDS ? whole : (p_view == View::SAMPLES ? whole.without_fields() : whole.ground_only());
@@ -703,7 +708,7 @@ ov::str level_shader(const CascadeSource *p_sdf, bool p_debug, bool p_points, bo
     code = ov::replace_all(code, "/*AFTER_SAMPLE*/", cubes ? "\n    if (!sample_live) {\n        return; // past the fold's barriers\n    }" : "");
     // The sample's ground channels: the cascade's, or climate_ground's with ground terms (a climate view: their field
     // range reaches every sample, so no ground-only view is compiled).
-    const ov::str ground = climate && p_sdf->has_ground_terms() ? p_sdf->get_ground_glsl(*spec) : ov::str();
+    const ov::str ground = climate && p_sdf->has_ground_terms() ? p_sdf->get_ground_glsl(*spec, params) : ov::str();
     const ov::str c0 = ground.empty() ? ov::str("vec4(ch.c[0], ch.c[1], ch.c[2], ch.c[3])") : ov::str("climate_ground(ch)");
     code = ov::replace_all(code, "/*GROUND_C0*/", c0);
     const ov::str channels = c0 + ov::str(", p, lod");
@@ -730,12 +735,14 @@ ov::str level_shader(const CascadeSource *p_sdf, bool p_debug, bool p_points, bo
     code = ov::replace_all(code, "/*STRUCTS*/", ov::str(GLSL_STRUCT_DEFINITION) + ov::str(GLSL_FRAME_STRUCTS));
     code = ov::replace_all(code, "/*TABLE_BUFFERS*/", p_fold ? p_sdf->get_table_glsl(TABLE_RECORD_BINDING, TABLE_LIST_BINDING) : ov::str());
     code = ov::replace_all(code, "/*HELPERS*/", ov::str(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + (p_points ? GPUFrame::glsl_point_frame() : ov::str()) + GPUFrame::glsl_int64() + ov::str(GLSL_EXACT_NOISE));
-    code = ov::replace_all(code, "/*TERRAIN_SDF*/", p_sdf->get_glsl_code() + (p_fold ? (cubes ? ov::str(LEVEL_POINT) : ov::str()) + p_sdf->get_sample_fold_glsl(cubes ? LOCAL_SIZE : 0) : ov::str()));
+    code = ov::replace_all(code, "/*TERRAIN_SDF*/", p_sdf->get_glsl_code(params) + (p_fold ? (cubes ? ov::str(LEVEL_POINT) : ov::str()) + p_sdf->get_sample_fold_glsl(cubes ? LOCAL_SIZE : 0) : ov::str()));
     const ov::str tail = (pick ? p_sdf->get_ground_material_glsl(*spec) : ov::str()) + ground;
-    code = view_code(code, p_sdf, *spec, field_range(p_sdf, p_points), p_view, tail);
+    code = view_code(code, p_sdf, *spec, field_range(p_sdf, p_points), p_view, tail, params);
     const ov::str debug_store = ov::str(cubes ? "if (sample_live) " : "") + "store_debug(sample_index, ch); // CascadeSpike variant";
     code = ov::replace_all(code, "/*DEBUG_STORE*/", p_debug ? debug_store : ov::str());
-    return code;
+    // Last: the block holds every number the generators took.
+    return ov::replace_all(code, "/*PARAM_BLOCK*/",
+            ov::format("layout(set = 0, binding = %d, std140) uniform ShaderParams { vec4 cascade_param[%d]; };", PARAM_BINDING, params.vec4s()));
 }
 
 ChunkParam point_param(const ChunkParam &p_param) {

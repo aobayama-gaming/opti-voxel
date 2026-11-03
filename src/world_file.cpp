@@ -26,12 +26,7 @@ ov::str read_object(const ov::str &p_path, ov::Value &r_data) {
     if (!ov::read_file(p_path, text)) {
         return "world: cannot read " + p_path + ov::str(".");
     }
-    ov::str json_error;
-    r_data = ov::parse_json(text, json_error);
-    if (!r_data.is_object()) {
-        return "world: " + p_path + ov::str(" is not a JSON object.") + (json_error.empty() ? ov::str() : " " + json_error);
-    }
-    return ov::str();
+    return WorldFile::parse_object(text, p_path, r_data);
 }
 
 // The object at p_data[p_key], or the file its string names (relative to p_dir), in r_part; empty if the key is absent.
@@ -172,6 +167,21 @@ ov::str WorldFile::parse(const ov::Value &p_data, const ov::str &p_dir, WorldFil
     }
     r_world = w;
     return ov::str();
+}
+
+ov::str WorldFile::parse_object(const ov::str &p_text, const ov::str &p_name, ov::Value &r_data) {
+    ov::str json_error;
+    r_data = ov::parse_json(p_text, json_error);
+    if (!r_data.is_object()) {
+        return "world: " + p_name + ov::str(" is not a JSON object.") + (json_error.empty() ? ov::str() : " " + json_error);
+    }
+    return ov::str();
+}
+
+ov::str WorldFile::parse_text(const ov::str &p_text, const ov::str &p_dir, WorldFile &r_world) {
+    ov::Value data;
+    const ov::str err = parse_object(p_text, "the world's text", data);
+    return err.empty() ? parse(data, p_dir, r_world) : err;
 }
 
 ov::str WorldFile::load(const ov::str &p_path, WorldFile &r_world) {

@@ -9,6 +9,7 @@
 
 #include <cmath>
 #include <map>
+#include <utility>
 
 namespace ov {
 
@@ -58,14 +59,21 @@ World::~World() {
 
 bool World::load_world() {
     OV_ERR_FAIL_COND_V_MSG(started, false, "World: the world is set before start.");
-    if (config.world_path == content_path) {
+    if (config.world_path == content_path && config.world_json == content_json && config.world_dir == content_dir) {
         return true;
     }
     WorldFile loaded;
-    const str err = config.world_path.empty() ? str() : WorldFile::load(config.world_path, loaded);
+    str err;
+    if (!config.world_json.empty()) {
+        err = WorldFile::parse_text(config.world_json, config.world_dir, loaded);
+    } else if (!config.world_path.empty()) {
+        err = WorldFile::load(config.world_path, loaded);
+    }
     OV_ERR_FAIL_COND_V_MSG(!err.empty(), false, "World: " + err);
     content = loaded;
     content_path = config.world_path;
+    content_json = config.world_json;
+    content_dir = config.world_dir;
     config.chunk_param.voxel_size = float(content.voxel_m);
     return true;
 }
@@ -125,7 +133,10 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
         VLOG(1, "World: skirt_depth raised from ", chunk_param.skirt_depth, " to ", min_skirt, " voxels (the terrain's band steps)");
         chunk_param.skirt_depth = min_skirt;
     }
-    sdf->configure(chunk_param, lod_numbers);
+    {
+        OV_TRACE("world", "start_configure");
+        sdf->configure(chunk_param, lod_numbers);
+    }
     sdf->set_walk_verify(config.walk_verify);
     if (config.walk_gpu) {
         sdf->start_field_gpu(chunk_param); // attached by sdf->poll() once its device is ready
@@ -134,16 +145,22 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
     state.set_max_lod(lod_numbers);
     state.verify = config.destroy_verify;
 
+    OV_TRACE("world", "start_discoverer");
     chunk_discoverer = new ChunkDiscoverer();
     chunk_discoverer->set_config(chunk_param, sdf.get());
     chunk_discoverer->set_cull_mode(ChunkDiscoverer::CullMode(config.discovery_cull_mode));
     chunk_discoverer->set_cache(config.discovery_cache, config.discovery_verify);
-    chunk_discoverer->set_gpu(config.discoverer_mode != 0);
+    if (config.discoverer_mode != 0 && points_gpu == nullptr) {
+        points_gpu = LocalGpuThread::create();
+    }
+    chunk_discoverer->set_gpu(config.discoverer_mode != 0 ? points_gpu.get() : nullptr);
     chunk_discoverer->set_compare(config.discovery_compare);
     // The pixel error is measured against the camera's vertical FOV and the 3D render's height. The view cone holds the
     // frustum: its half-angle is the half-FOV along the screen diagonal.
     const float fov_rad = p_projection.fov_rad > 0.0f ? p_projection.fov_rad : ov::deg_to_rad(75.0f);
-    chunk_discoverer->setup_lod(lod_numbers, config.lod_pixel_error, p_projection.viewport_height, fov_rad, config.lod_pixel_error_back,
+    // The view loads LODs [0, lod_view_max]: the cascade keeps the engine's levels, the coarsest chunks are this LOD's.
+    const int view_lods = config.lod_view_max >= 0 ? ov::min(lod_numbers, config.lod_view_max + 1) : lod_numbers;
+    chunk_discoverer->setup_lod(view_lods, config.lod_pixel_error, p_projection.viewport_height, fov_rad, config.lod_pixel_error_back,
             ChunkMath::view_cone_half_angle(fov_rad, p_projection.aspect, ov::deg_to_rad(config.lod_view_margin_deg)),
             config.lod_pixel_errors);
     chunk_discoverer->set_view_memory(config.lod_view_memory_m);
@@ -152,9 +169,10 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
     chunk_discoverer->start();
 
     if (config.pipeline_mode == PIPELINE_GPU_DIRECT) {
+        OV_TRACE("world", "start_mesher");
         direct_mesher = new GPUDirectMesher();
         direct_mesher->set_dual_contouring(config.dual_contouring);
-        direct_mesher->initialize(sdf.get(), chunk_param, lod_numbers, hosts.device, hosts.pages, config.direct);
+        direct_mesher->initialize(sdf.get(), chunk_param, lod_numbers, hosts.device, hosts.pages, config.direct, std::exchange(reused_pages, nullptr));
         direct_mesher->set_debug_view(config.debug_view);
     } else {
         gpu_mesher = new GPUMesher();
@@ -185,8 +203,8 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
     }
 
     if (p_camera_pos != nullptr && p_camera_forward != nullptr) {
-        chunk_discoverer->set_camera(ChunkMath::chunk_at_render(*p_camera_pos, config.chunk_param), *p_camera_forward, p_camera_far_m * far_reach);
-        last_camera = *p_camera_pos;
+        chunk_discoverer->set_camera(ChunkMath::chunk_at_render(*p_camera_pos, config.chunk_param), *p_camera_forward, p_camera_far_m * far_reach, config.lod_view_min);
+        last_load_centre = *p_camera_pos;
         has_camera = true;
     }
     VLOG(1, "World: started, pipeline_mode=", int(config.pipeline_mode));
@@ -253,7 +271,7 @@ void World::_record_dispatch_times(const DispatchTimes &p_now) {
     last_dispatch_times = p_now;
 }
 
-void World::frame(const Float3 *p_camera_pos, const Float3 *p_camera_forward, double p_camera_far_m) {
+void World::frame(const Float3 *p_camera_pos, const Float3 *p_camera_forward, double p_camera_far_m, const Float3 *p_load_centre) {
     if (!started) {
         return;
     }
@@ -267,8 +285,9 @@ void World::frame(const Float3 *p_camera_pos, const Float3 *p_camera_forward, do
     }
 
     if (p_camera_pos != nullptr && p_camera_forward != nullptr) {
-        chunk_discoverer->set_camera(ChunkMath::chunk_at_render(*p_camera_pos, config.chunk_param), *p_camera_forward, p_camera_far_m * far_reach);
-        last_camera = *p_camera_pos;
+        const Float3 &centre = p_load_centre != nullptr ? *p_load_centre : *p_camera_pos;
+        chunk_discoverer->set_camera(ChunkMath::chunk_at_render(centre, config.chunk_param), *p_camera_forward, p_camera_far_m * far_reach, config.lod_view_min);
+        last_load_centre = centre;
         has_camera = true;
     }
     if (atmosphere && p_camera_pos != nullptr) {
@@ -373,7 +392,7 @@ void World::frame(const Float3 *p_camera_pos, const Float3 *p_camera_forward, do
 
     exec_time++;
 
-    if (frames_until_loaded < 0 && is_load_complete(has_camera ? &last_camera : nullptr)) {
+    if (frames_until_loaded < 0 && is_load_complete(has_camera ? &last_load_centre : nullptr)) {
         frames_until_loaded = exec_time;
         usec_until_loaded = int64_t(now_usec() - start_usec);
         VLOG(1, "World: load complete after ", exec_time, " frames, ", double(usec_until_loaded) / 1000.0, " ms");
@@ -533,7 +552,11 @@ void World::_poll_discovery_audit() {
     VLOG(1, "World: discovery audit: ", to_json(r));
 }
 
-bool World::is_load_complete(const Float3 *p_camera_pos) {
+int World::lod_at_distance(double p_distance_m) const {
+    return started ? chunk_discoverer->lod_at_distance(p_distance_m) : 0;
+}
+
+bool World::is_load_complete(const Float3 *p_load_centre) {
     if (!started || !scan_received || !state.dirty_chunk.is_empty()) {
         return false;
     }
@@ -541,7 +564,7 @@ bool World::is_load_complete(const Float3 *p_camera_pos) {
     // after start is otherwise "loaded" with the first scan while the next one is still running.
     // The view of the last set_camera (frame) carries the remembered views; a camera moved since is
     // caught by its chunk, a turn since by the next frame.
-    if (p_camera_pos != nullptr && (ChunkDiscoverer::view_changed(scan_view, chunk_discoverer->get_view()) || ChunkMath::chunk_at_render(*p_camera_pos, config.chunk_param) != scan_view.camera_chunk)) {
+    if (p_load_centre != nullptr && (ChunkDiscoverer::view_changed(scan_view, chunk_discoverer->get_view()) || ChunkMath::chunk_at_render(*p_load_centre, config.chunk_param) != scan_view.camera_chunk)) {
         return false;
     }
     if (direct_mesher) {
@@ -665,7 +688,7 @@ bool World::rebase(const ChunkId &p_origin, Float3 &r_shift) {
     } else {
         gpu_mesher->set_render_origin(p_origin);
     }
-    last_camera = last_camera - r_shift;
+    last_load_centre = last_load_centre - r_shift;
     if (clouds) {
         clouds->shift(r_shift);
     }
@@ -715,14 +738,14 @@ ov::Value World::debug_stats() {
     d["table"] = table;
     if (const Climate::Table *climate = sdf->get_climate()) {
         ov::Value c = ov::Value::object();
-        c["path"] = config.world_path;
+        c["path"] = config.world_json.empty() ? config.world_path : "(text from " + config.world_dir + ")"; // set_world_json: no file
         c["fields"] = int64_t(climate->fields.size());
         c["biomes"] = int64_t(climate->biomes.size());
         c["modulated"] = sdf->get_cascade()->modulation != nullptr;
         d["climate"] = c;
     }
     d["frames"] = int64_t(exec_time);
-    d["load_complete"] = is_load_complete(has_camera ? &last_camera : nullptr);
+    d["load_complete"] = is_load_complete(has_camera ? &last_load_centre : nullptr);
     d["frames_until_loaded"] = frames_until_loaded;
     d["ms_until_loaded"] = usec_until_loaded < 0 ? -1.0 : double(usec_until_loaded) / 1000.0;
 
@@ -794,9 +817,20 @@ ov::Value World::debug_stats() {
     return d;
 }
 
-void World::stop() {
+void World::stop(Kept *r_kept) {
+    QuadPagePool *pages = std::exchange(reused_pages, nullptr); // no mesher took them: start failed or never ran
     if (!started) {
+        if (r_kept != nullptr) {
+            r_kept->pages = pages;
+            r_kept->points_gpu = std::move(points_gpu);
+        } else if (pages != nullptr) {
+            pages->destroy();
+        }
+        points_gpu.reset();
         return;
+    }
+    if (pages != nullptr) {
+        pages->destroy(); // the legacy mesher's world: none taken
     }
     started = false;
 
@@ -810,16 +844,26 @@ void World::stop() {
         auditor = nullptr;
     }
 
-    chunk_discoverer->stop();
-    delete chunk_discoverer;
-    chunk_discoverer = nullptr;
+    {
+        OV_TRACE("world", "stop_discoverer");
+        chunk_discoverer->stop(); // its passes freed on the GPU thread's device, parked there
+        delete chunk_discoverer;
+        chunk_discoverer = nullptr;
+        if (r_kept != nullptr) {
+            r_kept->points_gpu = std::move(points_gpu);
+        }
+        points_gpu.reset(); // its thread frees the device
+    }
     sdf->stop_field_gpu(); // its thread frees its device; a walk still computing falls back to the CPU's field
 
-    // Release loaded chunks first: GPU Direct chunks hand their range back to the mesher.
-    for (auto &kv : state.loaded_chunk) {
-        kv.second.free();
+    {
+        OV_TRACE("world", "stop_chunks");
+        // Release loaded chunks first: GPU Direct chunks hand their range back to the mesher.
+        for (auto &kv : state.loaded_chunk) {
+            kv.second.free();
+        }
+        state.loaded_chunk.clear();
     }
-    state.loaded_chunk.clear();
 
     if (clouds) {
         clouds->destroy(); // deletes itself on the device's thread, before the atmosphere's textures go
@@ -830,8 +874,13 @@ void World::stop() {
         atmosphere = nullptr;
     }
     if (direct_mesher) {
-        direct_mesher->destroy(); // deletes itself on the device's thread
+        QuadPagePool *kept = direct_mesher->destroy(r_kept != nullptr); // deletes itself on the device's thread
+        if (r_kept != nullptr) {
+            r_kept->pages = kept;
+        }
         direct_mesher = nullptr;
+    } else if (r_kept != nullptr) {
+        r_kept->pages = nullptr;
     }
     if (gpu_mesher) {
         gpu_mesher->stop();

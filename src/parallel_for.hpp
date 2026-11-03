@@ -11,9 +11,9 @@ inline thread_local bool parallel_for_inline = false;
 
 // p_fn(i) for every i in [0, p_count) on the executor (ov/executor.hpp: Godot's worker pool), the calling thread waiting (and helping) until all
 // are done. Each i must only write what is its own, so the loop inline gives the same results. Not from inside a pool
-// task (the waits nest), unless the task holds an InlineParallelFor.
+// task (the waits nest), unless the task holds an InlineParallelFor. p_priority LOW: behind every frame's loop.
 template <typename F>
-void parallel_for(uint32_t p_count, const char *p_name, F &&p_fn) {
+void parallel_for(uint32_t p_count, const char *p_name, F &&p_fn, ov::Priority p_priority = ov::Priority::HIGH) {
     if (p_count == 0) {
         return;
     }
@@ -30,7 +30,7 @@ void parallel_for(uint32_t p_count, const char *p_name, F &&p_fn) {
         static void run(void *p_job, uint32_t p_i) { (*static_cast<Job *>(p_job)->fn)(p_i); }
     };
     Job job{ &p_fn };
-    ov::executor().parallel_for(p_count, p_name, &Job::run, &job);
+    ov::executor().parallel_for(p_count, p_name, &Job::run, &job, p_priority);
 }
 
 // Held by a pool task that calls code using parallel_for (a streamed forest key): its loops run inline.

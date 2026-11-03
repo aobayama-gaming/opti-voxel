@@ -86,7 +86,7 @@ TEST_CASE("WorldFile: world.json finds its engine and climate next to it") {
     WorldFile w;
     CHECK(WorldFile::load("res://climate/world.json", w) == ov::str());
     CHECK(w.voxel_m == 0.05);
-    CHECK(w.lods == 25);
+    CHECK(w.lods == 15);
     CHECK(w.zone.side_m == 5000.0);
     CHECK(w.instances.empty()); // every biome lists its own
     const ov::Value &biomes = w.climate_table["biomes"];

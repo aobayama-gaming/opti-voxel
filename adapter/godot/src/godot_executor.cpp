@@ -41,9 +41,11 @@ void GodotExecutor::wait(ov::TaskId p_task) {
     WorkerThreadPool::get_singleton()->wait_for_task_completion(p_task); // releases its id
 }
 
-void GodotExecutor::parallel_for(uint32_t p_count, const char *p_name, void (*p_fn)(void *, uint32_t), void *p_ctx) {
+void GodotExecutor::parallel_for(uint32_t p_count, const char *p_name, void (*p_fn)(void *, uint32_t), void *p_ctx, ov::Priority p_priority) {
     WorkerThreadPool *pool = WorkerThreadPool::get_singleton();
-    pool->wait_for_group_task_completion(pool->add_native_group_task(p_fn, p_ctx, int(p_count), -1, true, p_name));
+    // LOW: the pool's low-priority queue, which runs on its low-priority share of the threads only, after the HIGH tasks.
+    const bool high = p_priority == ov::Priority::HIGH;
+    pool->wait_for_group_task_completion(pool->add_native_group_task(p_fn, p_ctx, int(p_count), -1, high, p_name));
 }
 
 std::unique_ptr<ov::Worker> GodotExecutor::start_worker(const char *p_name, ov::WorkerLoop &p_loop) {

@@ -84,11 +84,15 @@ public:
         uint32_t max_admits_per_frame = 0;
     };
 
-    // p_device: the main device (its thread runs the rt_ work, Device::post); p_host draws the pages.
-    void initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p_lod_numbers, ov::gpu::Device *p_device, PageHost *p_host, const Settings &p_settings);
-    // Frees everything and deletes this object (on the device's thread, after pending work).
-    // Loaded chunks must have been released before.
-    void destroy();
+    // p_device: the main device (its thread runs the rt_ work, Device::post); p_host draws the pages. p_pool: the pages of
+    // a mesher destroyed before (destroy(true)), taken if they are p_device's and p_host's at this page capacity, freed if
+    // not; null: a pool of its own.
+    void initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p_lod_numbers, ov::gpu::Device *p_device, PageHost *p_host, const Settings &p_settings,
+            QuadPagePool *p_pool = nullptr);
+    // Frees everything and deletes this object (on the device's thread, after pending work). Loaded chunks must have been
+    // released before. p_keep_pool: the pages are not freed but returned, every one released (the next world's mesher
+    // starts on them: a restart neither frees nor makes a page); null otherwise.
+    QuadPagePool *destroy(bool p_keep_pool = false);
 
     // The chunks to mesh (replacing the queue), loaded in the order of ChunkMath::load_queue for p_view.
     void send_chunk(const LODHashSet &p_chunks, const ScanView &p_view);

@@ -59,6 +59,7 @@ private:
     static constexpr int VARIANTS = 6;
     ov::gpu::Pipeline pipeline[VARIANTS];
     ov::gpu::BindSet uniform_set[VARIANTS];
+    Buffer params[VARIANTS]; // each variant's Cascade::ShaderParams (PARAM_BINDING)
     Cascade::FieldRange fields; // empty: no fields variant
     Buffer scratch_a;
     Buffer scratch_b;

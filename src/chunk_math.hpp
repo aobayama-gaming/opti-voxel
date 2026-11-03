@@ -61,6 +61,9 @@ struct ScanView {
     // entirely farther than that is never drawn, in any direction, and is not scanned (ChunkMath::beyond_far).
     // 0: no far plane.
     int64_t far_ids = 0;
+    // The finest LOD scanned: a node at it is never split (0: every LOD). A view seen from far (an orbit's
+    // distance) loads nothing finer than the pixels need there.
+    int min_lod = 0;
     // The views the camera had (ChunkDiscoverer::remember_view): a camera chunk, a unit view axis, and a
     // fade = max(0, distance from the camera chunk to that one - the memory distance), so a view fades out
     // as the camera walks away from where it was. The LOD rule coarsens away from the union of their cones,

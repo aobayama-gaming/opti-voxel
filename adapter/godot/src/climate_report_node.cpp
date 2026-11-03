@@ -4,6 +4,7 @@
 #include "climate.hpp"
 #include "climate_report.hpp"
 #include "godot_conv.hpp"
+#include "world_file.hpp"
 
 #include "ov/json.hpp"
 
@@ -24,7 +25,7 @@ void ClimateReportNode::_bind_methods() {
     ClassDB::bind_static_method("ClimateReportNode", D_METHOD("template_biome", "voxel_m", "name"), &ClimateReportNode::template_biome);
     ClassDB::bind_static_method("ClimateReportNode", D_METHOD("debug_color", "name"), &ClimateReportNode::debug_color);
     ClassDB::bind_static_method("ClimateReportNode", D_METHOD("kernel_core"), &ClimateReportNode::kernel_core);
-    ClassDB::bind_static_method("ClimateReportNode", D_METHOD("preview", "json", "dir", "extent_km", "size", "surface", "center"), &ClimateReportNode::preview);
+    ClassDB::bind_static_method("ClimateReportNode", D_METHOD("preview", "json", "dir", "extent_km", "size", "surface", "center", "background"), &ClimateReportNode::preview, DEFVAL(false));
 }
 
 Dictionary ClimateReportNode::run(const String &p_out_dir, const String &p_world_path, double p_extent_km, int p_size,
@@ -37,15 +38,17 @@ String ClimateReportNode::check(const String &p_json, double p_voxel_size, int p
     return godot_str(ClimateReport::check(ov_str(p_json), p_voxel_size, p_lods));
 }
 
-Dictionary ClimateReportNode::preview(const String &p_json, const String &p_dir, double p_extent_km, int p_size, bool p_surface, const Vector2 &p_center) {
+Dictionary ClimateReportNode::preview(const String &p_json, const String &p_dir, double p_extent_km, int p_size, bool p_surface, const Vector2 &p_center,
+        bool p_background) {
     Dictionary d;
-    ov::str json_error;
-    const ov::Value world = ov::parse_json(ov_str(p_json), json_error);
-    if (!world.is_object()) {
-        d["error"] = godot_str("world: not a JSON object. " + json_error);
+    ov::Value world;
+    const ov::str err = WorldFile::parse_object(ov_str(p_json), "the world's text", world);
+    if (!err.empty()) {
+        d["error"] = godot_str(err);
         return d;
     }
-    const ClimateReport::Preview p = ClimateReport::preview(world, ov_str(p_dir), p_extent_km, p_size, p_surface, p_center.x, p_center.y);
+    const ClimateReport::Preview p = ClimateReport::preview(world, ov_str(p_dir), p_extent_km, p_size, p_surface, p_center.x, p_center.y,
+            p_background ? ov::Priority::LOW : ov::Priority::HIGH);
     d["error"] = godot_str(p.error);
     if (!p.error.empty()) {
         return d;

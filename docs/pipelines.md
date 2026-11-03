@@ -31,7 +31,9 @@ Both are core code on `ov::gpu::Device` (`gpu_device.hpp`); what draws their out
   at their own LOD) was measured worse: same GPU work, 4-6x the detail left pending at the end of a fly, +20%
   draw calls (`load_queue` keeps in-cone, finest LOD first).
   `GPUDirectMesher::compact()` re-packs pages under half full GPU to GPU and rewrites the moved
-  `ChunkOutput`s in `loaded_chunk`; spare free pages are freed (`QuadPagePool::trim`).
+  `ChunkOutput`s in `loaded_chunk`; spare free pages are freed (`QuadPagePool::trim`). A world restarted on the same
+  device and host hands its pool to the next (`World::stop(&kept)`, `World::reuse`: every page released, the
+  in-flight batches' copies landing first): the next mesher draws on the same pages, none freed or made.
 - Dual contouring (`VoxelTerrain.dual_contouring`, `--dual_contouring=1` in `bench.gd` and the main scene;
   off by default): both meshers' vertex pass places its vertex at a regularised QEF of the cell's Hermite
   data instead of the mass point (`qef_vertex` in `gpu_glsl.hpp`, rewritten into both passes by

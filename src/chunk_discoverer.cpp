@@ -36,7 +36,7 @@ void ChunkDiscoverer::_corner_verdicts(const std::vector<ChunkId> &p_wave, const
     std::vector<float> values(points.size());
     const uint64_t t_eval = now_usec();
     CascadePointsGPU::BatchStats gpu_stats;
-    r_wave.gpu = p_gpu && p_gpu->points().cull_values(points.data(), int(points.size()), p_lod, values.data(), gpu_stats);
+    r_wave.gpu = p_gpu && p_gpu->cull_values(points.data(), int(points.size()), p_lod, values.data(), gpu_stats);
     if (r_wave.gpu) {
         r_wave.batches = gpu_stats.batches;
         r_wave.gpu_ms = gpu_stats.gpu_ms;
@@ -140,12 +140,13 @@ void ChunkDiscoverer::enter() {
     has_scanned = false;
     previous_scan = LODHashSet();
 
-    // The GPU discoverer's local device lives on this thread only. Creating it (device + the point
-    // shader's compile) delays the first scan: gpu_init_ms.
+    // The point passes on the GPU thread's device (made when the thread started, kept across a world's restart, the
+    // passes taken from the last world's when built alike) delay the first scan: gpu_init_ms.
     const uint64_t t_init = now_usec();
-    if (want_gpu) {
+    if (gpu_thread != nullptr) {
+        OV_TRACE("discoverer", "gpu_init");
         gpu = new LocalPointsGPU();
-        if (!gpu->create(sdf, chunk_param, GPU_POINTS)) {
+        if (!gpu->create(sdf, chunk_param, GPU_POINTS, gpu_thread)) {
             OV_WARN_PRINT("ChunkDiscoverer: the GPU discoverer needs a cascade terrain and a local GPU device: the corners are evaluated on the CPU.");
             delete gpu;
             gpu = nullptr;
@@ -154,7 +155,7 @@ void ChunkDiscoverer::enter() {
     mutex.lock();
     stats.gpu_active = gpu != nullptr;
     stats.gpu_scratch_mb = gpu ? double(gpu->scratch_bytes()) / 1048576.0 : 0.0;
-    stats.gpu_init_usec = want_gpu ? now_usec() - t_init : 0;
+    stats.gpu_init_usec = gpu_thread != nullptr ? now_usec() - t_init : 0;
     mutex.unlock();
 }
 
@@ -365,7 +366,7 @@ void ChunkDiscoverer::scan(const ScanView &p_view, CullMode p_mode, LODHashSet &
                 r_counters.culled++;
                 continue;
             }
-            if (lod == 0 || !_should_split(p_view, node, lod)) {
+            if (lod <= p_view.min_lod || !_should_split(p_view, node, lod)) {
                 r_chunks.insert(node);
                 r_counters.out_of_view += ChunkMath::view_cone_gap(node, lod, p_view) > 0.0 ? 1 : 0;
                 continue;
@@ -489,9 +490,10 @@ ScanView ChunkDiscoverer::get_view() {
     return v;
 }
 
-ScanView ChunkDiscoverer::make_view(const ChunkId &p_camera_chunk, const Float3 &p_forward, double p_far_m) const {
+ScanView ChunkDiscoverer::make_view(const ChunkId &p_camera_chunk, const Float3 &p_forward, double p_far_m, int p_min_lod) const {
     ScanView v;
     v.camera_chunk = p_camera_chunk;
+    v.min_lod = ov::clamp(p_min_lod, 0, ov::max(get_max_lod(), 0));
     v.far_ids = ChunkMath::far_ids(p_far_m, chunk_param);
     // godot's Vector3::length_squared and normalized, in float.
     const float length_squared = p_forward.x * p_forward.x + p_forward.y * p_forward.y + p_forward.z * p_forward.z;
@@ -501,13 +503,22 @@ ScanView ChunkDiscoverer::make_view(const ChunkId &p_camera_chunk, const Float3 
     return v;
 }
 
+int ChunkDiscoverer::lod_at_distance(double p_distance_m) const {
+    const double units = p_distance_m / (double(chunk_param.chunk_world_dimension()) * 0.5);
+    int lod = 0;
+    while (lod < get_max_lod() && double(lod_distances[size_t(lod + 1)]) <= units) {
+        lod++;
+    }
+    return lod;
+}
+
 bool ChunkDiscoverer::turned_past(const Float3 &p_a, const Float3 &p_b) {
     static const double cos_turn = std::cos(ov::deg_to_rad(RESCAN_TURN_DEG));
     return p_a.x * p_b.x + p_a.y * p_b.y + p_a.z * p_b.z < cos_turn;
 }
 
 bool ChunkDiscoverer::view_changed(const ScanView &p_scanned, const ScanView &p_new) {
-    if (p_new.camera_chunk != p_scanned.camera_chunk || p_new.far_ids != p_scanned.far_ids ||
+    if (p_new.camera_chunk != p_scanned.camera_chunk || p_new.far_ids != p_scanned.far_ids || p_new.min_lod != p_scanned.min_lod ||
             p_new.memory_count != p_scanned.memory_count) {
         return true;
     }
@@ -578,8 +589,8 @@ int64_t ChunkDiscoverer::far_step(int64_t p_current, int64_t p_needed) {
     return keep ? p_current : p_needed;
 }
 
-void ChunkDiscoverer::set_camera(const ChunkId &p_camera_chunk, const Float3 &p_forward, double p_far_m) {
-    ScanView new_view = make_view(p_camera_chunk, p_forward, p_far_m);
+void ChunkDiscoverer::set_camera(const ChunkId &p_camera_chunk, const Float3 &p_forward, double p_far_m, int p_min_lod) {
+    ScanView new_view = make_view(p_camera_chunk, p_forward, p_far_m, p_min_lod);
     mutex.lock();
     new_view.far_ids = far_step(view.far_ids, new_view.far_ids);
     new_view.copy_memories_from(view);

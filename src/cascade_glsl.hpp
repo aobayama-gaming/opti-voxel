@@ -51,6 +51,8 @@ static constexpr int TABLE_RECORD_BINDING = 7;
 static constexpr int TABLE_LIST_BINDING = 8;
 // The per-sample material (chunk palette index) the meshers give create(): uint per sample, next to sdf_sample.
 static constexpr int MATERIAL_BINDING = 9;
+// The numbers of the generated climate code (Cascade::ShaderParams: a uniform block), after the base regions' (10, 11).
+static constexpr int PARAM_BINDING = 12;
 
 // std430 CascadeBand[group_count * BAND_ENTRIES + the ground's other notes]: the ground's (first) band of insertion
 // level m at m, then the ground's other notes of each level (Spec::level_notes, Cascade::MAX_LEVEL_NOTES), levels in
@@ -91,9 +93,10 @@ enum class View {
 // is the bare cascade_terrain_sdf: the same bits as the fold over empty lists, for the batches that have none. p_material: level 0 also writes each sample's material
 // (the fold's winner's palette index, 0 = ground) to sdf_material at MATERIAL_BINDING; with ground materials
 // (ground_materials), for every chunk, a ground sample's being cascade_ground_material's (its biome's).
-// p_view: the channels it carries (View; a spec without a climate has only GROUND, which FIELDS equals).
+// p_view: the channels it carries (View; a spec without a climate has only GROUND, which FIELDS equals). r_params: the
+// values the text reads at PARAM_BINDING (Cascade::ShaderParams), the text a function of the terrain's structure alone.
 ov::str level_shader(const CascadeSource *p_sdf, bool p_debug, bool p_points = false, bool p_fold = false, bool p_material = false, View p_view = View::FIELDS,
-        bool p_cubes = true);
+        bool p_cubes = true, Cascade::ShaderParams *r_params = nullptr);
 
 // The point items' ChunkParam: p_param with skirt 0 (with the items' extent 0, an item's box is its point alone).
 ChunkParam point_param(const ChunkParam &p_param);

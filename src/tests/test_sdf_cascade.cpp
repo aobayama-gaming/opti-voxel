@@ -122,7 +122,8 @@ TEST_CASE("SDFCascade: the shader stub and get_cascade") {
     SDFCascade sdf;
     sdf.configure(param, 25);
     CHECK(sdf.get_cascade() == &sdf.get_spec());
-    const String glsl = godot_str(sdf.get_glsl_code());
+    Cascade::ShaderParams params;
+    const String glsl = godot_str(sdf.get_glsl_code(params));
     CHECK(glsl.contains("vec4 cascade_terrain_sdf(vec4 c0, WorldPos p, int lod)"));
     CHECK(!glsl.contains("DATUM_LO"));
 }

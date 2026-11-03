@@ -16,7 +16,8 @@ once whatever biome mixes it (identity: octave, seed, stretch), so a biome more 
 biomes the ground is the **template biome** (`Climate::template_biome`, the mixer's start for a new biome too): seed
 0xEA27, every octave from k = 3 (0.4 m at 5 cm) to the first at the 3.3 km cap (k = 19 at 5 cm: 26.2 km), amplitude
 1/8 of the wavelength. Notes and fields reach lod_count + 4 at most (`Ground::k_max`, the cascade's top); the fields
-placing the biomes (temperature, humidity, wind: 105-419 km) are macro inputs until the planned macro engine computes
+placing the biomes (temperature, humidity, wind: 6.5-26 km, under the top LOD like the ground: a world to walk, not
+continents) are macro inputs until the planned macro engine computes
 them.
 
 1. **Fields** (`Field`): a few slow scalars, each a sum of plain perlin octaves of its own seed, plus linear terms
@@ -130,7 +131,7 @@ macro layer in double on the CPU, `BaseSurface`'s region machinery).
   and type over the biome, blended by the weights on a coarse map round the camera (`CloudClimate`, `docs/look.md`).
   They touch no cascade pass or shader.
 - **Worlds** (`adapter/godot/project/climate/`): `world.json` with `engine.json` and `climate.json` (eight biomes on temperature x humidity x wind,
-  105-419 km octaves, needs 25 LODs; each biome's notes once fitted to a real Copernicus heightmap, see git history of
+  6.5-26 km octaves, 15 LODs: the top, LOD 14, is the ground's largest note; each biome's notes once fitted to a real Copernicus heightmap, see git history of
   `tools/landforms/`; dunes and mountain carry their height curve), `example.json` (continent and terrain-type fields
   choosing mountains, hills, badlands and plains, two curves), `shaped_test.json` (every operation, CascadeSpike `4s`),
   `plain.json` (amplitudes only; pins every slot, the SDF, the skirts and both level shaders' text: a table without
@@ -199,13 +200,42 @@ computes no terrain and has no node kind the engine hasn't.
   crossing; the report and the game's sites trace at LOD 0), the shaded relief
   and the weights' blend plus every field's value at every point (the chart's cloud) and the largest altitude
   (`relief_m`: the curve editor's input span), or the engine's refusal. A mix row's M and S (mute, solo) are the view's
-  only: the text sent has those rows at volume 0, the file keeps their x. 48 points a side at once (30-60 ms), 192 on a
-  thread once the edits pause (`SETTLE` 0.35 s; 1.1-1.8 s on 16 cores: ~0.5 ms of CPU a point, each point walking the
-  cascade on its own, 6 reads). *3D* (on by default, `terrain_3d.gd`) shows the same map as a surface: each point at
-  its traced altitude (*Height x* scales it), coloured by the 2D map, unlit; orbit, pan and zoom move a mesh, so they
-  are instant. The game itself: *Open in game* writes the world (`user://biome_mixer_game.world.json`) and runs the
-  main scene on it (`--world=`) in a second Godot. A live sharp view needs the GPU (`CascadePointsGPU`: whole batches
-  of points level by level), not done yet.
+  only: the text sent has those rows at volume 0, the file keeps their x. 48 points a side (30-60 ms), then 192 once the edits pause
+  (`SETTLE` 0.35 s; ~1 s on 16 cores: ~0.5 ms of CPU a point, each point walking the cascade on its own, 6 reads), both
+  on a thread: the window never draws a map (at 48 on the main thread a drag ran at 17 fps, the map 30 ms of every
+  frame). A drag's edits draw as often as the thread keeps up (the newest world each time), and the status, the chart's
+  cloud and the 3D view follow each map shown (`EngineView.drawn`). With 3D shown the map's loop runs at
+  `ov::Priority::LOW` (`preview(..., background)`: Godot's low-priority group, on the pool's low-priority share of the
+  threads), behind the terrain's: at HIGH the main thread's `GpuTable::build_lists` waited behind the map's rows, up
+  to 40 ms a frame. *3D* (on by default, `terrain_view.gd`) is the game's terrain: a `VoxelTerrain` (GPU
+  Direct, the game's sky, fog and sun) loading the same text (`set_world_json`, no file). An edit restarts its world in
+  place (`VoxelTerrain.restart_world`: a new `ov::World` on the same node, device and page host) 50 ms after it (not
+  pushed back by the next edits: maps every ~40 ms kept it from firing), or once the last restart's chunks in view are
+  loaded (at most 1 s later): a slider drag shows each load. The climate's
+  numbers being shader params (`Cascade::ShaderParams`, `docs/cascade.md`), an edit of a value builds no pipeline: the
+  device parks the pipelines the old world frees, by text, and its buffers and textures by shape, and the new world
+  takes those of the same text or shape (`RDDevice::park`); the page pool goes from the old world to the new
+  (`World::reuse`, `docs/pipelines.md`), and so does the GPU discoverer's local device on its thread
+  (`docs/discovery-lod.md`); a new structure (a node, a coefficient reaching 0) compiles once, and the device keeps
+  every text's SPIR-V. While a restart loads, the view holds the last terrain's frame (a copy of it shown over the viewport, which renders
+  on below, until the chunks in view are loaded, at most 1 s: a SubViewport stopped with `UPDATE_DISABLED` showed
+  black, noise and stripes): no blank ground between two loads. It loads round the orbit's pivot
+  (`set_lod_centre`), from the LOD its distance needs there (`lod_view_min`). It loads LODs 0-13 only
+  (`lod_view_max`: 12.8 km chunks, ~54 km round the pivot; a reload 116 ms p50 at 13, 100 at 10). Its pixel error is the game's (4: at 12 each LOD seam showed as a ledge, for a restart only
+  ~10% shorter), its world's clouds, instances and features are off (the clouds' shadows hid the relief over kilometres;
+  the instance stream took half the workers' time of a drag and 10-33 ms of some frames' `GpuTable::build_lists`), its
+  discoverer runs on the GPU (its device kept across restarts: a scan ~1.5 ms, 46 on the CPU behind the map's rows; the
+  first world pays the device and its pipelines, ~2 s, and an edit in those seconds waits for them) and its site walk
+  on the CPU (its device is still made per world). Measured at 25 LODs, before the LOD cap (`--shot`: the first load, then two restarts on the same world, an edit's path; RTX
+  3070 laptop): World mode (~400 km) 0.89 s, then 0.18 and 0.18 s; the mountain alone 0.76 s, then 0.22 and 0.18 s
+  (were 1.2-1.3 s: a new node each, its start 1.05 s in one frame, 0.4 s the mesher's pipelines, 0.4 s the cascade's,
+  0.2 s zeroing its buffers on the CPU). Now the restart is ~12 ms of one frame (`restart_world` p50 over a 20 s drag;
+  was 46 ms: 11 freeing ~150 pages, 4 making 64, 9 the palette texture's 8 MB of zeros from the CPU, ~20 allocating the
+  mesher's buffers and textures). A 20 s slider drag (no instances): the CPU discoverer, 49 restarts, the chunks in view
+  loaded 129 ms (p50) after an edit, 345 ms p95; the GPU one kept, 114 restarts, 100 ms, 371 ms p95 (the scan 46 ->
+  1.5 ms; 43 fps, the restarts' frames, 50 with the CPU one). Before the LOD cap, ~3,000 chunks over 25 LODs load in ~170 ms at 16-26 ms a frame; the view after a restart is the first
+  load's, pixel for pixel. Orbit, pan and zoom move the camera. *Open in game* writes the world
+  (`user://biome_mixer_game.world.json`) and runs the main scene on it (`--world=`) in a second Godot.
 - **`--check`** (`checks.gd`): every engine kind has the mixer's UI; world.json read as the mixer's world and written
   back is the same file (positions aside); every world.json biome and a graph of every engine kind drawn by the engine
   and every node's GraphNode built (the launcher fails on any script error); edits on the mountain (a row out, a shape

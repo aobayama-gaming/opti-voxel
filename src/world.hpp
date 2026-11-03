@@ -8,6 +8,7 @@
 #include "clouds.hpp"
 #include "debug_log.hpp"
 #include "gpu_device.hpp"
+#include "local_gpu_thread.hpp"
 #include "mesh_host.hpp"
 #include "mesh_validator.hpp"
 #include "page_auditor.hpp"
@@ -39,6 +40,10 @@ public:
         PipelineMode pipeline_mode = PIPELINE_GPU_LEGACY;
         // The world file (WorldFile, a host path), empty for WorldFile's defaults.
         str world_path;
+        // Or the world itself, a world file's text whose relative paths start from world_dir (an editor's world, never
+        // written to a file). The host sets one of the two (VoxelTerrain's setters clear the other).
+        str world_json;
+        str world_dir;
         // 1 the world's Hermite cascade terrain, 4 the flat preset under the shapes gallery.
         int terrain_mode = 1;
         int legacy_batch_size = 1024;
@@ -60,6 +65,8 @@ public:
         std::vector<float> lod_pixel_errors; // per LOD, replaces lod_pixel_error (0 or past the end: lod_pixel_error)
         float lod_view_margin_deg = 20.0f;
         float lod_view_memory_m = -1.0f; // < 0: auto (ChunkDiscoverer::set_view_memory)
+        int lod_view_max = -1; // the coarsest LOD the view loads (< 0: the engine's top): its reach
+        int lod_view_min = 0; // the finest LOD the view loads (ScanView::min_lod), read every frame
         GPUDirectMesher::Settings direct;
         int debug_view = 0;
         int discovery_cull_mode = ChunkDiscoverer::CULL_LEGACY;
@@ -101,7 +108,7 @@ public:
     Settings &settings() { return config; }
     const Settings &settings() const { return config; }
 
-    // Reads Settings::world_path (again only if it changed): the voxel size, the LOD count and the content from then on, so
+    // Reads Settings::world_json or world_path (again only if it changed): the voxel size, the LOD count and the content from then on, so
     // a host can place its scene before start(), which calls it. False (an error) if the file was refused.
     bool load_world();
     const WorldFile &world_file() const { return content; }
@@ -112,10 +119,26 @@ public:
     // One frame: the camera (render space, null: none), the scans and meshes that landed, the next batches.
     // p_camera_far_m: the depth of the camera's far plane in metres (0: none, an infinite projection): nothing farther
     // than its frustum's corners reach (far / cos of the diagonal half-FOV), in any direction, is scanned (ChunkMath::beyond_far).
-    void frame(const Float3 *p_camera_pos, const Float3 *p_camera_forward, double p_camera_far_m = 0.0);
-    // Frees the loaded chunks, the mesher (its GPU objects on the device's thread) and the discoverer.
-    void stop();
+    // p_load_centre: where the LOD rings centre (render space, null: the camera), e.g. an orbit view's pivot.
+    void frame(const Float3 *p_camera_pos, const Float3 *p_camera_forward, double p_camera_far_m = 0.0, const Float3 *p_load_centre = nullptr);
+    // What a stopped world hands to the next one's start (stop(&kept), reuse(kept)), so that a restart on the same
+    // device and host neither frees nor makes them: GPU Direct's page pool (a pool handed to reuse, or null) and the GPU
+    // discoverer's device on its thread (or null).
+    struct Kept {
+        QuadPagePool *pages = nullptr;
+        std::unique_ptr<LocalGpuThread> points_gpu;
+    };
+    // Frees the loaded chunks, the mesher (its GPU objects on the device's thread) and the discoverer. r_kept: what it
+    // keeps for the next world goes there instead (Kept).
+    void stop(Kept *r_kept = nullptr);
+    // What a world stopped before kept (stop(&kept)), for the next start. Freed by stop if no start took it.
+    void reuse(Kept &&p_kept) {
+        reused_pages = p_kept.pages;
+        points_gpu = std::move(p_kept.points_gpu);
+    }
     bool is_started() const { return started; }
+    // The LOD the view's rule gives at p_distance_m from the camera (ChunkDiscoverer::lod_at_distance); 0 before start.
+    int lod_at_distance(double p_distance_m) const;
     // The direction towards the sun (render space, unit): the atmosphere's light from the next frame on.
     void set_sun(const Float3 &p_towards_sun) { sun = p_towards_sun; }
     // The atmosphere (null: off, or before start).
@@ -130,9 +153,9 @@ public:
     const ChunkParam &chunk_param() const { return config.chunk_param; }
     uint32_t frames() const { return exec_time; }
 
-    // True once every scanned chunk is meshed and the mesher has nothing in flight; p_camera_pos (the camera now, null:
-    // none) must still be in the scanned camera chunk.
-    bool is_load_complete(const Float3 *p_camera_pos);
+    // True once every scanned chunk is meshed and the mesher has nothing in flight; p_load_centre (the camera now, or
+    // frame's p_load_centre; null: none) must still be in the scanned centre chunk.
+    bool is_load_complete(const Float3 *p_load_centre);
     // The instance edits made so far are meshed (the legacy mesher: idle).
     bool is_edit_settled();
     int64_t pending_chunk_count() const { return int64_t(state.dirty_chunk.size()); }
@@ -196,12 +219,16 @@ public:
 private:
     Settings config;
     WorldFile content; // what load_world read
-    str content_path; // the world_path it read
+    str content_path; // the world it read: world_path, or world_json from world_dir
+    str content_json;
+    str content_dir;
     Hosts hosts;
     std::unique_ptr<SDFCascade> sdf;
     ChunkDiscoverer *chunk_discoverer = nullptr;
     GPUMesher *gpu_mesher = nullptr;
     GPUDirectMesher *direct_mesher = nullptr;
+    QuadPagePool *reused_pages = nullptr; // reuse's, until start's mesher takes it
+    std::unique_ptr<LocalGpuThread> points_gpu; // the GPU discoverer's device (reuse's or start's), outlives the discoverer
     Atmosphere *atmosphere = nullptr; // deletes itself on the device's thread (destroy)
     Clouds *clouds = nullptr; // the same; reads the atmosphere's textures, so goes first
     float cloud_cover = 0.5f;
@@ -219,7 +246,7 @@ private:
     bool destroy_dirty = false;
     // View of the scan currently in state.scanned_chunk.
     ScanView scan_view;
-    Float3 last_camera; // the camera of the last frame (and start), render space
+    Float3 last_load_centre; // the LOD rings' centre of the last frame (and start: the camera), render space
     ChunkId world_origin_chunk;
     // The world origin start() takes: the request snapped down to the root chunk span (2^lods chunk-id units), so
     // the start is the same for any requested origin; on a planet a request of (0, 0, 0) stands for its pole

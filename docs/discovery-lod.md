@@ -11,9 +11,13 @@ Which chunks are scanned, loaded and dropped. Run `tools/discovery_audit.sh` aft
   and player): -1 auto (default, the same as 1), 0 CPU, 1 GPU. The GPU path,
   `LocalPointsGPU` (`src/local_points_gpu.*`, shared with the site walks' `FieldGPU`), runs the cascade passes on point
   items (`CascadePasses::create_points`, `CascadePointsGPU::cull_values`: the unit register read back, metres on the CPU
-  with `SDFCascade::to_metres`) on a **local device (`ov::gpu::create_local_device`) owned by the discoverer thread**: created
-  at the top of `discovery_loop` and freed there before the thread exits; no other thread may touch it,
-  and it does nothing on the main RD or the render thread. No local device (headless): one
+  with `SDFCascade::to_metres`) on a **local device (`ov::gpu::create_local_device`) on a thread of its own**
+  (`LocalGpuThread`, `src/local_gpu_thread.*`, which a local RenderingDevice needs: one thread makes it, uses it and
+  frees it): the discoverer runs its passes' create, each wave's `cull_values` and their free there, waiting. The
+  World owns the thread and a restart hands it to the next world (`World::Kept`, `VoxelTerrain.restart_world`): the
+  passes freed park on the device (`Device::park`) and the next world's create takes those built alike, so a restart
+  makes no device and no pipeline (`gpu_init` 2.1 s per world -> ~2.3 ms, the mixer's 3D view). It does nothing on the
+  main RD or the render thread. No local device (headless): one
   warning, CPU. Both paths give the same bits; `--discovery_compare=1` runs a fresh CPU scan for every
   scan and ERRORs on any difference (its time counts in the discoverer's latency stat): run `discovery_audit.sh -- --terrain=cascade --discovery_compare=1`
   (and `--world=res://worlds/lods25.world.json`) after touching the discoverer, the cascade passes or `CascadePointsGPU`.
@@ -49,6 +53,15 @@ Which chunks are scanned, loaded and dropped. Run `tools/discovery_audit.sh` aft
   Cost with memory 0 (measured in PR 34): a turn re-meshes the cone's edges, and that churn fragments pages like a fly does (on dev, a fly out and
   back already leaves +64% draw calls): after one full turn at error 1 | 4, the steady state is +26% render GPU
   vs error 1 without the split. A locality-aware compaction would close it.
+- View reach in LODs (`VoxelTerrain.lod_view_max`, `World::Settings::lod_view_max`, default -1: the engine's top):
+  the discoverer loads LODs 0 to this one only, the cascade keeps the engine's levels (the same terrain). The biome
+  mixer's 3D view uses 10.
+- Load centre (`VoxelTerrain.set_lod_centre` / `clear_lod_centre`, `World::frame`'s `p_load_centre`, default the camera):
+  where the LOD rings centre, e.g. an orbit view's pivot; the camera's forward still steers back_scale and the memories.
+- View floor in LODs (`VoxelTerrain.lod_view_min`, `World::Settings::lod_view_min`, `ScanView::min_lod`, read every
+  frame): a node at it is never split, so the finer chunks are replaced by their ancestors at it.
+  `ChunkDiscoverer::lod_at_distance` (`VoxelTerrain.get_lod_at_distance`) gives the split rule's LOD at a distance; the
+  mixer floors its view at its orbit distance's LOD round the pivot (a restart loads in ~250 ms instead of timing out).
 - Far limit (`VoxelTerrain.lod_far_limit`, default on; with `--lod_far_limit=0` in bench and
   player the world gets 0, no limit): the adapter hands `World::frame` the depth of the camera's far plane (Godot:
   `Camera3D.far`, which `Presets.clip_planes` ties to the altitude, ~2,100x it with a 105 km floor, when the world's LODs are above

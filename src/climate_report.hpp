@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ov/bytes.hpp"
+#include "ov/executor.hpp"
 #include "ov/value.hpp"
 
 #include <vector>
@@ -25,7 +26,8 @@ ov::Value run(const ov::str &p_out_dir, const ov::str &p_world_path, double p_ex
 // relative paths from p_dir), sampled as run() on p_size x p_size points (row-major, x right, z down), no picks. biomes:
 // the debug colours weighted (biomes_blend.png) in the relief's light, shaded: the relief (ground_shaded.png), both RGB;
 // altitude_m: the column's surface above the base, relief_m its largest magnitude; fields: each field's value,
-// point-major in field_names' order. error: why the world was refused (nothing else set).
+// point-major in field_names' order. error: why the world was refused (nothing else set). p_priority LOW: its loop
+// behind every frame's (the mixer's 3D view: a map drawn behind it never slows the terrain's lists).
 struct Preview {
     ov::str error;
     int size = 0;
@@ -40,7 +42,8 @@ struct Preview {
     std::vector<ov::str> biome_names;
     double us_per_point = 0.0;
 };
-Preview preview(const ov::Value &p_world, const ov::str &p_dir, double p_extent_km, int p_size, bool p_surface, double p_center_x, double p_center_z);
+Preview preview(const ov::Value &p_world, const ov::str &p_dir, double p_extent_km, int p_size, bool p_surface, double p_center_x, double p_center_z,
+        ov::Priority p_priority = ov::Priority::HIGH);
 
 // Empty if p_json (a climate table's text) parses and the cascade of a voxel size and LOD count accepts it, else why
 // not (the biome mixer checks an export with it before it overwrites world.json).

@@ -150,7 +150,7 @@ TEST_CASE("CloudClimate::Stream: the first build lands, a camera within SIZE / 8
 }
 
 TEST_CASE("CloudClimate::at on the world climate: every biome sets its clouds, the cover varies by region") {
-    ClimateSDF world("res://climate/world.json", 25);
+    ClimateSDF world("res://climate/world.json", 15);
     const Climate::Table *t = world.sdf.get_climate();
     CHECK_OR_RETURN(t != nullptr);
     for (const Climate::Biome &b : t->biomes) {
@@ -158,7 +158,7 @@ TEST_CASE("CloudClimate::at on the world climate: every biome sets its clouds, t
     }
     const CloudLayer layer = CloudLayer::for_base(INFINITY, 3300.0, 0.05);
     const int64_t datum = world.sdf.get_datum_y();
-    // A 2000 km line: several periods of the 419 km axes.
+    // A 2000 km line: many periods of the 26 km axes.
     float lo = 1.0f;
     float hi = 0.0f;
     const int n = 200;

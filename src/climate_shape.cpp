@@ -216,18 +216,17 @@ Float4 run_program(const SampleProgram &p_p, const Float4 &p_ground, const float
 }
 
 // eval_curve as `vec4 <p_name>(vec4 x)`, the segment chosen by the same compares.
-ov::str curve_glsl(const Curve &p_c, const ov::str &p_name) {
-    using ExactNoise::glsl_float;
+ov::str curve_glsl(const Curve &p_c, const ov::str &p_name, Cascade::ShaderParams &r_params) {
     const size_t n = p_c.x.size();
     ov::str code = "vec4 " + p_name + "(vec4 x) {\n";
-    code += ov::format("    if (!(x.w > %s)) {\n        return vec4(0.0, 0.0, 0.0, %s);\n    }\n", glsl_float(p_c.x[0]), glsl_float(p_c.s[0]));
-    code += ov::format("    if (x.w >= %s) {\n        return vec4(0.0, 0.0, 0.0, %s);\n    }\n", glsl_float(p_c.x[n - 1]), glsl_float(p_c.y_last));
+    code += ov::format("    if (!(x.w > %s)) {\n        return vec4(0.0, 0.0, 0.0, %s);\n    }\n", r_params(p_c.x[0]), r_params(p_c.s[0]));
+    code += ov::format("    if (x.w >= %s) {\n        return vec4(0.0, 0.0, 0.0, %s);\n    }\n", r_params(p_c.x[n - 1]), r_params(p_c.y_last));
     code += "    float x0, inv, p, q, r, s;\n";
     for (size_t i = 0; i + 1 < n; i++) {
         const bool last = i + 2 >= n;
-        code += ov::str(i == 0 ? "    " : " else ") + (last ? ov::str("{") : ov::format("if (x.w < %s) {", glsl_float(p_c.x[i + 1])));
-        code += ov::format(" x0 = %s; inv = %s; p = %s; q = %s; r = %s; s = %s; }", glsl_float(p_c.x[i]), glsl_float(p_c.inv[i]), glsl_float(p_c.p[i]),
-                glsl_float(p_c.q[i]), glsl_float(p_c.r[i]), glsl_float(p_c.s[i]));
+        code += ov::str(i == 0 ? "    " : " else ") + (last ? ov::str("{") : ov::format("if (x.w < %s) {", r_params(p_c.x[i + 1])));
+        code += ov::format(" x0 = %s; inv = %s; p = %s; q = %s; r = %s; s = %s; }", r_params(p_c.x[i]), r_params(p_c.inv[i]), r_params(p_c.p[i]),
+                r_params(p_c.q[i]), r_params(p_c.r[i]), r_params(p_c.s[i]));
     }
     code += "\n    precise float a0 = (x.w - x0) * inv;\n    precise float a = (" + Cascade::glsl_flush_of("a0") + ov::str(");\n");
     code += "    precise float t0 = p * a;\n    precise float v = (" + Cascade::glsl_flush_of("t0") + ov::str(") + q;\n");
@@ -242,14 +241,13 @@ ov::str curve_glsl(const Curve &p_c, const ov::str &p_name) {
 
 // Biome p_b's program as `vec4 cl_sample<p_b>(vec4 base, Ch ch)`, D: run_program's ops (its curves cl_curve<b>_<i>
 // before it); a curve of H alone is cl_curve<b> itself (its text before programs).
-ov::str program_glsl(const SampleProgram &p_p, int p_b, const Cascade::Spec &p_spec, const SampleCarry &p_carry) {
-    using ExactNoise::glsl_float;
+ov::str program_glsl(const SampleProgram &p_p, int p_b, const Cascade::Spec &p_spec, const SampleCarry &p_carry, Cascade::ShaderParams &r_params) {
     if (p_p.curve_of_ground()) {
-        return curve_glsl(p_p.curves[0], ov::format("cl_curve%d", int64_t(p_b)));
+        return curve_glsl(p_p.curves[0], ov::format("cl_curve%d", int64_t(p_b)), r_params);
     }
     ov::str code;
     for (size_t c = 0; c < p_p.curves.size(); c++) {
-        code += curve_glsl(p_p.curves[c], ov::format("cl_curve%d_%d", int64_t(p_b), int64_t(c)));
+        code += curve_glsl(p_p.curves[c], ov::format("cl_curve%d_%d", int64_t(p_b), int64_t(c)), r_params);
     }
     code += ov::format("vec4 cl_sample%d(vec4 base, Ch ch) {\n", int64_t(p_b));
     for (size_t i = 0; i < p_p.code.size(); i++) {
@@ -261,7 +259,7 @@ ov::str program_glsl(const SampleProgram &p_p, int p_b, const Cascade::Spec &p_s
                 e = "base";
                 break;
             case SampleOp::CONST:
-                e = "vec4(0.0, 0.0, 0.0, " + glsl_float(in.value) + ")";
+                e = "vec4(0.0, 0.0, 0.0, " + r_params(in.value) + ")";
                 break;
             case SampleOp::FIELD:
                 e = carried_glsl(p_spec, "ch", p_carry.field[in.index]);
@@ -282,10 +280,10 @@ ov::str program_glsl(const SampleProgram &p_p, int p_b, const Cascade::Spec &p_s
                 e = b + ".w > " + a + ".w ? " + b + " : " + a;
                 break;
             case SampleOp::SMIN:
-                e = "cl_smin(" + a + ", " + b + ", " + glsl_float(in.value) + ", " + glsl_float(half_inv(in.value)) + ")";
+                e = "cl_smin(" + a + ", " + b + ", " + r_params(in.value) + ", " + r_params(half_inv(in.value)) + ")";
                 break;
             case SampleOp::SMAX:
-                e = "-cl_smin(-" + a + ", -" + b + ", " + glsl_float(in.value) + ", " + glsl_float(half_inv(in.value)) + ")";
+                e = "-cl_smin(-" + a + ", -" + b + ", " + r_params(in.value) + ", " + r_params(half_inv(in.value)) + ")";
                 break;
             case SampleOp::CURVE:
                 e = "cl_add(" + a + ", cl_curve" + ov::format("%d_%d", int64_t(p_b), int64_t(in.index)) + "(" + a + "))";
@@ -314,7 +312,7 @@ Float4 ground_value(const Table &p_table, const SampleCarry &carry, const float 
     return h;
 }
 
-ov::str ground_glsl(const Table &p_table, const Cascade::Spec &p_combined) {
+ov::str ground_glsl(const Table &p_table, const Cascade::Spec &p_combined, Cascade::ShaderParams &r_params) {
     const SampleCarry carry = sample_carry(p_table);
     ov::str code;
     bool smooth = false;
@@ -326,7 +324,7 @@ ov::str ground_glsl(const Table &p_table, const Cascade::Spec &p_combined) {
     code += smooth ? ov::str(GLSL_SMOOTH_MIN) : ov::str();
     for (size_t b = 0; b < p_table.biomes.size(); b++) {
         if (carry.weight[b] >= 0) {
-            code += ov::replace_all(program_glsl(p_table.biomes[b].program, int(b), p_combined, carry), "FLUSH", Cascade::glsl_flush());
+            code += ov::replace_all(program_glsl(p_table.biomes[b].program, int(b), p_combined, carry, r_params), "FLUSH", Cascade::glsl_flush());
         }
     }
     code += "\n// Climate::ground_value: the cascade's ground h, plus each curved biome's weight times its curve of h; (value, gradient).\n";
