@@ -42,7 +42,8 @@ public:
     }
     // Whether a sample's ground is more than the cascade's ground channels (a biome's curve): then
     // the cascade level passes carry the fields at every level, point items too, and splice get_ground_glsl after their
-    // channel code, defining `vec4 climate_ground(Ch ch)`, the ground channels (value, gradient) of a sample. Its
+    // channel code, defining `vec4 climate_ground(Ch ch, WorldPos p, int lod)`, the ground channels (value, gradient) of a
+    // sample (p, lod: where a program reads up, base_at). Its
     // numbers go to r_params (Cascade::ShaderParams).
     virtual bool has_ground_terms() const { return false; }
     virtual ov::str get_ground_glsl(const Cascade::Spec &p_view, Cascade::ShaderParams &r_params) const {
@@ -51,7 +52,7 @@ public:
         return ov::str();
     }
     // The dual-number helpers the climate's generated functions share, spliced once before them all (Climate's
-    // splices_helpers: a shaped modulation or ground terms); empty when each brings its own.
+    // shared_helpers_glsl, with a modulation or ground terms); empty without (no climate GLSL calls them).
     virtual ov::str get_climate_helpers_glsl() const { return ov::str(); }
 
     // The ground's base surface when it is curved (BaseSurface::curved): get_glsl_code's base_at then reads the batch's regions

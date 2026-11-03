@@ -1,0 +1,59 @@
+{
+ "comment": "Free graphs, for the tests (test_climate_shape.cpp, CascadeSpike set 4r): the relaxer's placements. chained warps its ground after its shape (the warp moves to the front of the chain) and shapes its hills twice (the second shape reads the hills' sum at the samples: a sub-mix); shaped_mix shapes its whole mix (two notes) at the samples; caved mixes its ground with a ridged sub-mix of two notes, shaped at the samples, at volume 0.5 (a mix row past the notes: a sum at the samples). Not a world to look at: project/climate/world.json is.",
+ "engine": {"voxel_m": 0.05, "lods": 25},
+ "climate": {
+  "fields": [
+   {"name": "t", "bands": [{"from_m": 800, "to_m": 26000, "amp": 0.5, "persistence": 0.7}]},
+   {"name": "r", "bands": [{"from_m": 800, "to_m": 6554, "amp": 0.5, "persistence": 0.6}]}
+  ]
+ },
+ "biomes": [
+  {
+   "name": "chained",
+   "at": {"t": [0.5, 0.6]},
+   "graph": {
+    "nodes": [
+     {"id": "ground", "kind": "note", "from_m": 0.4, "to_m": 26214.4, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
+     {"id": "gs", "kind": "shape", "in": "ground", "shape": "billow"},
+     {"id": "gw", "kind": "warp", "in": "gs", "fields": ["t", "r", "t"], "amount_m": 3},
+     {"id": "hills", "kind": "note", "wavelength_m": 204.8, "seed": 7, "amp_m": 20},
+     {"id": "h1", "kind": "shape", "in": "hills", "shape": "billow"},
+     {"id": "h2", "kind": "shape", "in": "h1", "coeffs": [0, 0.5, 0.25, 0]},
+     {"id": "mix", "kind": "mix", "rows": [{"in": "gw"}, {"in": "h2"}]},
+     {"id": "out", "kind": "output", "height": "mix"}
+    ]
+   },
+   "debug_color": "#a05030"
+  },
+  {
+   "name": "shaped_mix",
+   "at": {"t": [-0.5, 0.6]},
+   "graph": {
+    "nodes": [
+     {"id": "ground", "kind": "note", "from_m": 0.4, "to_m": 26214.4, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
+     {"id": "swell", "kind": "note", "wavelength_m": 1638.4, "seed": 3, "amp_m": 30},
+     {"id": "mix", "kind": "mix", "rows": [{"in": "ground"}, {"in": "swell"}]},
+     {"id": "s", "kind": "shape", "in": "mix", "coeffs": [0, 0.7, 0.3, 0]},
+     {"id": "out", "kind": "output", "height": "s"}
+    ]
+   },
+   "debug_color": "#80a060"
+  },
+  {
+   "name": "caved",
+   "graph": {
+    "nodes": [
+     {"id": "ground", "kind": "note", "from_m": 0.4, "to_m": 26214.4, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
+     {"id": "c1", "kind": "note", "wavelength_m": 25.6, "seed": 11, "amp_m": 3},
+     {"id": "c2", "kind": "note", "wavelength_m": 51.2, "seed": 12, "amp_m": 4},
+     {"id": "c1s", "kind": "shape", "in": "c1", "shape": "ridged"},
+     {"id": "caves", "kind": "mix", "rows": [{"in": "c1s"}, {"in": "c2"}]},
+     {"id": "cs", "kind": "shape", "in": "caves", "shape": "square", "scale": 0.5},
+     {"id": "mix", "kind": "mix", "rows": [{"in": "ground"}, {"in": "cs", "x": 0.5}]},
+     {"id": "out", "kind": "output", "height": "mix"}
+    ]
+   },
+   "debug_color": "#6080a0"
+  }
+ ]
+}

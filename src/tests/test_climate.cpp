@@ -250,8 +250,8 @@ TEST_CASE("Climate: malformed tables are refused with the reason") {
         { R"({"biomes": [{"name": "a", "graph": {"nodes": [{"id": "o", "kind": "output", "height": "x"}]}}]})", "no node 'x'" },
         { R"({"biomes": [{"name": "a", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 4000, "seed": 1, "amp_m": 1}, {"id": "n", "kind": "note", "wavelength_m": 400, "seed": 1, "amp_m": 1}, {"id": "o", "kind": "output", "height": "n"}]}}]})",
                 "two nodes are 'n'" },
-        { R"({"biomes": [{"name": "a", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 4000, "seed": 1, "amp_m": 1}, {"id": "m", "kind": "multifractal", "in": "n", "gain": 1}, {"id": "s", "kind": "shape", "in": "m", "shape": "ridged"}, {"id": "o", "kind": "output", "height": "s"}]}}]})",
-                "in that order" },
+        { R"({"biomes": [{"name": "a", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 4000, "seed": 1, "amp_m": 1}, {"id": "m", "kind": "multifractal", "in": "n", "gain": 1}, {"id": "q", "kind": "multifractal", "in": "m", "gain": 1}, {"id": "o", "kind": "output", "height": "q"}]}}]})",
+                "a multifractal weighs one note's octaves" },
         { R"({"biomes": [{"name": "a", "height_m": 100}]})", "unknown key 'height_m'" },
         { R"({"biomes": [{"name": "a", "debug_color": "red"}]})", "#rrggbb" },
         { R"({"biomes": [{"name": "a", "debug_color": "#-00001"}]})", "#rrggbb" },
@@ -724,14 +724,18 @@ TEST_CASE("Climate: modulated cascade, box runs equal point queries in every slo
 
 TEST_CASE("Climate: carried only where the ground needs it, refused where it can't apply") {
     GroundFixture g(0.05, 15);
-    // A mix row is a note (a climate field isn't one: a graph reads a field past its notes, in its program).
+    // A mix row may be any node: a climate field is summed at the samples (the relaxer: a program reading it).
     Table t;
     const ov::str fields = R"({"fields": [{"name": "t", "bands": [{"from_m": 400, "to_m": 26000, "amp": 1}]},
             {"name": "h", "bands": [{"from_m": 400, "to_m": 6500, "amp": 1}]}], )";
-    CHECK(ov::contains(parse_json(fields + R"("biomes": [{"name": "a", "at": {"t": [1, 1.2]}, "graph": {"nodes": [{"id": "h", "kind": "field", "field": "h"},
+    {
+        Table mixed;
+        CHECK(parse_json(fields + R"("biomes": [{"name": "a", "at": {"t": [1, 1.2]}, "graph": {"nodes": [{"id": "h", "kind": "field", "field": "h"},
                        {"id": "m", "kind": "mix", "rows": [{"in": "h"}]}, {"id": "o", "kind": "output", "height": "m"}]}}, {"name": "b"}]})",
-                               g.ground, t),
-            "a mix row is a note"));
+                      g.ground, mixed) == ov::str());
+        CLIMATE_REQUIRE(mixed.biomes.size() == 2);
+        CHECK(mixed.biomes[0].program.reads_field(1));
+    }
     // Fields with the template's notes (a pick only): carried nowhere in the ground's runs (no field scratch, no fields
     // variant), and its top lattice is the ground's.
     const ov::str ground = ClimateTest::ground_graph(0.05);
@@ -919,7 +923,7 @@ TEST_CASE("Climate: a modulation without fields takes the modulated GPU variant"
     for (const bool points : { false, true }) {
         const Cascade::FieldRange range = CascadeGLSL::field_range(&sdf, points);
         CHECK_FALSE(range.empty());
-        CHECK(ov::contains(CascadeGLSL::level_shader(&sdf, false, points, false, !points, CascadeGLSL::View::FIELDS), "cascade_amplitudes("));
+        CHECK(ov::contains(CascadeGLSL::level_shader(&sdf, false, points, false, !points, CascadeGLSL::View::FIELDS), "cascade_mods("));
     }
 }
 

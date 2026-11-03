@@ -68,11 +68,34 @@ macro layer in double on the CPU, `BaseSurface`'s region machinery).
 
 - **Parse, compile and validate** (`climate_parse.cpp`, `biome_compiler.cpp`, `climate_validate.cpp`): metres to
   octaves (`from_m` .. `to_m` ranges keep the octaves the LOD count has, so one table covers 15 and 25 LODs; a single
-  wavelength outside is refused), each biome's graph read back from its output (a curve, a mix, each row a note through
-  a warp, a shape and a multifractal, in that order), at `SDFCascade::climate_ground()`. The compiler keeps a note per
-  (octave, seed, stretch), turns each row into its biome's `Amp` on each octave (volume times the note's amplitude,
-  under a planet's `note_cap`), folds the notes every biome plays alike into constant bands and lists the others in
-  every biome (0 where it doesn't mix them). Refused: more than `MAX_FIELDS` (24) fields or `MAX_BIOMES` (16) biomes,
+  wavelength outside is refused), each biome's graph read back from its output by the *relaxer* (the parser's
+  `expr`), at `SDFCascade::climate_ground()`. A graph is free: any node may read any other, and the relaxer decides
+  where each one plays. A node is either notes the cascade inserts (rows: a note's per-octave chain at a volume) or a
+  register of the biome's sample program:
+  - a note's chain plays per octave while it reads note -> warp -> shape -> multifractal, each at most once (a warp
+    anywhere in it moves to the front: shapes are pointwise, a warp only moves where the note is read);
+  - a mix is linear: its rows' notes at their volumes (a mix of mixes is one mix; a mix of one row at volume 1 is that
+    row, so a shape over it still plays per octave); a row past the notes (a register) is summed at the samples
+    (`CONST x`, `MUL`, `ADD`);
+  - any other node reading notes (a second shape, a shape over a mix of several notes, a curve, min / max, ...)
+    reads their sum at the samples: the notes are *lifted* to a register. The lift with the coarsest octave (then the most
+    octaves, then the first) is the ground (`GROUND`: the cascade's H; chosen by structure, so no value edit moves it); every other one is a *sub-mix*, a channel field (`Field::channel`: its bands are those
+    notes, each biome playing them like the ground's, `Amp::group`, modulated per biome, shapes and warps per octave
+    too) the program reads with `FIELD`. The compiler puts each biome's sub-mixes on the first channel field none of
+    whose octaves another note takes (a field group inserts one band per level), so sub-mixes of different biomes share
+    fields;
+  - a shape past the notes is `SampleOp::SHAPE`: phi of the sum (metres as LOD0 voxels), its constant term counting,
+    `|a|` unsmoothed;
+  - `up` is `SampleOp::UP`, the sample's height above the base (`up_value`: `BaseSurface::at` times `2^lod`, exact;
+    GLSL `climate_ground(ch, p, lod)` reads `base_at` where a program reads it). A cave is a smooth min on the mix's
+    output, `smin(mix, up - C)` (`docs/caves.md`);
+  - refused: a multifractal past a chain (it weighs one note's octaves by the previous one's), a warp past the notes
+    (it moves where notes are read), a note under two warps, a sub-mix with two notes on one octave or a multifractal.
+
+  Existing graphs (the old row form) relax to what they were: the same notes, programs and bits. The compiler keeps a
+  note per (octave, seed, stretch, group), turns each row into its biome's `Amp` on each octave (volume times the note's
+  amplitude, under a planet's `note_cap`), folds the notes every biome plays alike into constant bands and lists the
+  others in every biome (0 where it doesn't mix them). Refused: more than `MAX_FIELDS` (24) fields or `MAX_BIOMES` (16) biomes,
   more than `Cascade::MAX_LEVEL_NOTES` (8) notes on one octave or two multifractal ones (the state holds one octave's
   signal; an octave with a modulated note modulates all of its notes), a note mixed twice by one biome, a negative
   amplitude, a
@@ -95,6 +118,30 @@ macro layer in double on the CPU, `BaseSurface`'s region machinery).
   costs no extra noise read (the warp fields' own octaves are inserted on their coarse lattices and interpolated
   down). Slope damping and the swiss turbulence (warps read from the ground's slope) were built and dropped: their
   own gradient needs the ground's second derivatives, which the cascade doesn't carry.
+- **Generic or specialised** (`Ground::specialize`, set by `SDFCascade::specialize`, `World::Settings::
+  specialize_shaders`, the `VoxelTerrain` property `specialize_shaders`; the game specialises, the mixer's 3D view
+  doesn't): one compiler and one modulator, and a term's text is the same code either way. *Specialised*, the table's
+  structure is its values': a note silent everywhere is dropped, a note every biome plays alike is a constant band,
+  and a term whose coefficient is 0 (an amplitude on |n| or n^2, a multifractal gain, a state coefficient, a warp) is
+  not in the text. *Generic* (`Table::generic`), the text is an interpreter of the compiled table: it holds every
+  feature (shapes, the multifractal state, warps, on the ground and on the sub-mixes), loops over data where the
+  specialised text unrolls (the modulator's levels, entries, biomes and parts; the field terms and the biome axes; the
+  sample programs, `cl_run` over their instruction records; the extra notes of a level, from its ground entry in the
+  band table; the per-LOD switches as param tables) and tests each value where `biome_mod` does (`if (k != 0.0)`,
+  `gain > 0.0 ? ...`). Its numbers are in the shader params: a fixed part the text indexes with literals, then a heap
+  (`ShaderParams::put`, read with `cl_heap`) of the variable-length records, which the fixed part points into, so a
+  record growing moves no literal. Its sizes are capacities (`Climate::Caps`: notes per level, carry groups, sub-mix
+  fields; each a power of two at least what the table needs and at least the previous start's, `World::Kept`), and
+  the param block is at its largest. So any edit that fits the capacities keeps the text, a node deleted, a shape's
+  type changed, a curve removed included: a world's restart compiles nothing; one past them compiles once with larger
+  ones. The specialised text is the same per-term code with the compile's knowledge folded (literals, dead terms
+  out), so the bits are the same: the extra carry parts hold 0 (`Cascade::flush`), the extra state group is never
+  read, a constant level takes the constant inserts, a silent band inserts nothing (the unit test "a table's text
+  follows its structure, the generic one's through every edit, with the specialised bits": 7 tables, 7 edits each;
+  on the GPU `cascade_test.sh --generic=1`). The template ground (no
+  climate) is specialised either way: nothing edits it. Cost (`cascade_test.sh` timing, µs per chunk, 2026-11-03):
+  generic is +7..9% on 4w, +12..21% on 4s, +9..13% on 4c over specialised, the same on the bare ground; a mixer edit
+  restarts in ~15 ms (a warp to 0 froze 3.4 s specialised).
 - **One climate per point, none per sample** (the carry): a run's last level, its samples, evaluates no climate. The
   level above derives it from the climate its own bands read (`Cascade::Modulation::derive`; on the GPU at the end of
   `cascade_mods`) into the carry groups (`Cascade::carry_slot`): the last level's `BandMod` parts and the samples'
@@ -106,7 +153,8 @@ macro layer in double on the CPU, `BaseSurface`'s region machinery).
   `H + sum_b w_b * D_b` with the carried weights, each program's registers in order with the climate's flushed dual
   ops (`dadd`, `dmul`, ...; GLSL `cl_*`), op for op. A field a program reads is carried to the samples like the weights
   (`SampleCarry::field`, derived on the level above). The compiler bounds each term (`SampleProgram::bound`, `slope`,
-  `field_slope`: interval arithmetic on the value and on its deviation from H, so a curve of H keeps its own bound);
+  `field_slope`: each register's upper and lower affine forms in `z = up - H` (unbounded) and H (`bound_program`), so
+  a curve of H keeps its own bound and a cave's tent bounds its carve by its floor; a term without a bound is refused);
   validate holds the bound under the cap and the slope under `MAX_CURVE_SLOPE`, and the skirts take the step
   (`Climate::ground_step`: the ground's step times 1 + the largest slope, plus each weight's change times its term's
   bound, plus each field's step times its slope; unit test: the L | L+1 step stays within the skirt on
@@ -135,7 +183,7 @@ macro layer in double on the CPU, `BaseSurface`'s region machinery).
   `tools/landforms/`; dunes and mountain carry their height curve), `example.json` (continent and terrain-type fields
   choosing mountains, hills, badlands and plains, two curves), `shaped_test.json` (every operation, CascadeSpike `4s`),
   `plain.json` (amplitudes only; pins every slot, the SDF, the skirts and both level shaders' text: a table without
-  shapes generates the old text bit for bit), `fieldless_test.json` (one biome, no field: CascadeSpike `4d`). The test tables are world files with an inline engine and climate.
+  shapes keeps the bits it had before them; its text is the shaped one since the plain amplitudes' own was folded in), `fieldless_test.json` (one biome, no field: CascadeSpike `4d`). The test tables are world files with an inline engine and climate.
 - **Checks**: `tools/unit_test.sh "Climate*"`; `tools/climate_report.sh` (pure CPU: biome maps, the pick drift, where
   biomes meet with a `--spawn`, relief per biome, gradient error, field maps) before any GPU run;
   `cascade_test.sh --sets=4,4c,4f,4p,4s,4d,4w` (G1 on the carried channels, G3, points, G10 the
@@ -178,7 +226,7 @@ computes no terrain and has no node kind the engine hasn't.
   without positions is laid out in columns by its distance from the output, spaced by its built nodes' sizes.
 - **The kinds are the engine's** (`engine_info.gd`, `ClimateReportNode.graph_kinds`: `Climate::graph_kinds`, the
   catalogue the parser itself checks each node's keys against): every kind it reads (note, warp, shape, multifractal,
-  mix, constant, field, add, subtract, multiply, min, max, smin, smax, curve, output), its inputs and its parameters with
+  mix, constant, field, add, subtract, multiply, min, max, smin, smax, curve, up, output), its inputs and its parameters with
   their type and default. `nodes.gd` builds each node from it: a port per input, a row per parameter the node has (a
   slider and number box, a seed, a power of two, a field or three, a shape, coefficients, a curve), a `-` taking an
   optional one out and `+ parameter` adding one (so a note is one octave or a range, its amplitude steepness or `amp_m`:

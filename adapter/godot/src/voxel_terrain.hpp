@@ -297,6 +297,8 @@ public:
     // Remember each LOD tree node's cull verdict across scans (exact: the SDF does not change).
     void set_discovery_cache(bool p_enable);
     bool get_discovery_cache() const;
+    void set_specialize_shaders(bool p_enable);
+    bool get_specialize_shaders() const;
     // Debug: recompute every cached verdict and report mismatches as errors.
     void set_discovery_verify(bool p_enable);
     bool get_discovery_verify() const;

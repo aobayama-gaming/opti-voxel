@@ -7,6 +7,7 @@
 #include <godot_cpp/classes/file_access.hpp>
 #include <godot_cpp/classes/json.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <utility>
 
@@ -67,12 +68,197 @@ TEST_CASE("Climate shape: a table without shapes keeps the bits it had before th
     CHECK(h == 13659167188471627091ull); // re-pinned when the ground's octave k got the seed make_octave(seed, k)
     // The shader texts (the modulation's arrays sized by the spec's group count, the ground over its base surface). Both
     // re-pinned when the climate's numbers moved to the shader params (Cascade::ShaderParams, a uniform block: each value put
-    // back as its literal gave the old texts' hashes), and when the skirt depths joined them (they follow the amplitudes).
-    CHECK(chunk_text == 8829140549294215735ull);
+    // back as its literal gave the old texts' hashes), when the skirt depths joined them (they follow the amplitudes), and when
+    // the plain amplitudes' text folded into the shaped one (cascade_mods, insert_band_shaped: the bits kept). Both again
+    // when the per-LOD switches became param tables (level_table) and a level's extra notes data (its ground entry).
+    CHECK(chunk_text == 15766694351514418112ull);
     // The point shader re-pinned when point items became any lattice point with its unit register (point_frame, 16 B),
     // and (all three) when the derive moved before the level's insertions (one climate per point).
     // The bits and the point shader re-pinned when the biomes became a centre and span per field (Climate::weights).
-    CHECK(point_text == 8001590302712550601ull);
+    CHECK(point_text == 2307510855263589523ull);
+}
+
+// Free graphs (graph_test.json) as the relaxer plays them: chained's warp after its shape moves before it (one chain per
+// octave) and its hills' second shape reads their sum at the samples (a sub-mix); shaped_mix shapes its two notes' mix
+// at the samples (on the ground); caved's mix takes a shaped sub-mix of two notes at volume 0.5 (a sum at the samples).
+// The sub-mixes share one field (no octave in common); every SDF path gives the point query's bits, within the programs'
+// bounds. A multifractal past a mix, a warp past a shape at the samples: why not.
+TEST_CASE("Climate shape: the relaxer plays free graphs: chains per octave, sub-mixes and shapes at the samples") {
+    ClimateSDF c("res://climate/graph_test.json", 15);
+    CHECK(c.sdf.get_climate_error() == ov::str());
+    CLIMATE_REQUIRE(c.sdf.get_climate() != nullptr);
+    const Table &t = *c.sdf.get_climate();
+    CLIMATE_REQUIRE(t.biomes.size() == 3);
+    CLIMATE_REQUIRE(t.fields.size() == 3);
+    CHECK(t.fields[2].channel);
+    CHECK(t.fields[2].bands.size() == 3); // the hills' octave, the caves' two
+    auto ops = [](const SampleProgram &p_p) {
+        std::vector<SampleOp> o;
+        for (const SampleInstr &in : p_p.code) {
+            o.push_back(in.op);
+        }
+        return o;
+    };
+    using O = SampleOp;
+    CHECK(ops(t.biomes[0].program) == std::vector<O>{ O::FIELD, O::SHAPE, O::GROUND, O::CONST, O::MUL, O::ADD });
+    CHECK(ops(t.biomes[1].program) == std::vector<O>{ O::GROUND, O::SHAPE });
+    CHECK(ops(t.biomes[2].program) == std::vector<O>{ O::FIELD, O::SHAPE, O::GROUND, O::CONST, O::MUL, O::ADD });
+    CHECK(t.biomes[0].program.code[0].index == 2);
+    CHECK(t.biomes[2].program.code[0].index == 2);
+    const std::vector<Amp> &chained = t.biomes[0].amps;
+    CHECK(std::any_of(chained.begin(), chained.end(), [](const Amp &p_a) { return p_a.group == 0 && p_a.has_shape && p_a.warp != 0.0f && p_a.amp > 0.0f; }));
+    CHECK(std::any_of(chained.begin(), chained.end(), [](const Amp &p_a) { return p_a.group == 3 && p_a.has_shape && p_a.amp > 0.0f; }));
+    const SampleCarry carry = sample_carry(t);
+    CHECK(carry.field[2] >= 0);
+    double bound = 0.0;
+    for (const Climate::Biome &b : t.biomes) {
+        CHECK(b.program.bound > 0.0);
+        bound = std::max(bound, b.program.bound);
+    }
+    const Cascade::Spec &spec = c.sdf.get_spec();
+    int64_t points = 0, mismatches = 0, over = 0;
+    for (const int lod : { 0, 4, 9 }) {
+        Cascade::Box box;
+        for (int a = 0; a < 3; a++) {
+            box.lo[a] = (a == 1 ? (c.sdf.get_datum_y() >> lod) : (int64_t(-77777) >> lod)) - 2;
+            box.hi[a] = box.lo[a] + 3;
+        }
+        const Cascade::Level level = Cascade::run(spec, box, lod, nullptr, true);
+        Cascade::for_each_point(box, [&](const Vector3i64 &p_p, int64_t p_i) {
+            float slots[Cascade::SLOTS], ch[Cascade::CHANNELS];
+            level.slots_at(p_i, slots);
+            c.sdf.ground_channels(slots, p_p * (int64_t(1) << lod), lod, ch);
+            const VoxelPos v(p_p.x << lod, p_p.y << lod, p_p.z << lod);
+            points++;
+            mismatches += float_bits(c.sdf.sdf(ch, v, lod).w) != float_bits(c.sdf.evaluate(WorldPos{ v, Float3() }, lod));
+            over += std::fabs(double(ch[Cascade::VALUE]) - double(slots[Cascade::VALUE])) > bound * (1.0 + 1e-6);
+        });
+    }
+    CHECK(points == 192);
+    CHECK(mismatches == 0);
+    CHECK(over == 0);
+    ov::Value data;
+    CLIMATE_REQUIRE(load_table("res://climate/graph_test.json", data) == ov::str());
+    for (const auto &[kind, error] : { std::pair{ "multifractal", "a multifractal weighs one note's octaves" }, std::pair{ "warp", "a warp moves where notes are read" } }) {
+        ov::Value bad = data;
+        ov::Value &nodes = ClimateTest::graph_nodes(bad, 2);
+        for (size_t n = 0; n < nodes.size(); n++) {
+            if (nodes[n]["id"].as_str() == "cs") {
+                ov::Value node = ov::Value::object();
+                node["id"] = "cs";
+                node["kind"] = kind;
+                node["in"] = ov::str(kind) == "warp" ? "cs0" : "caves";
+                node["gain"] = 2.0;
+                if (ov::str(kind) == "warp") {
+                    node.erase("gain");
+                    node["amount_m"] = 3.0;
+                    ov::Value f = ov::Value::array();
+                    for (const char *name : { "t", "r", "t" }) {
+                        f.push_back(name);
+                    }
+                    node["fields"] = f;
+                    ov::Value shape = ov::Value::object();
+                    shape["id"] = "cs0";
+                    shape["kind"] = "shape";
+                    shape["in"] = "caves";
+                    shape["shape"] = "billow";
+                    nodes.push_back(shape);
+                }
+                nodes.at(n) = node;
+            }
+        }
+        const ClimateSDF broken(bad, 15);
+        CHECK(broken.sdf.get_climate() == nullptr);
+        CHECK(ov::contains(broken.sdf.get_climate_error(), error));
+    }
+    // Two sub-mixes of one biome sit on two fields even where their octaves don't meet (each read is its own sum), and
+    // sub-mix fields past MAX_FIELDS are refused before anything indexes by them.
+    ov::Value two = ClimateTest::json(R"({"fields": [], "biomes": [{"name": "b", "graph": {"nodes": [
+        {"id": "g", "kind": "note", "from_m": 0.4, "to_m": 26214.4, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
+        {"id": "a", "kind": "note", "wavelength_m": 12.8, "seed": 11, "amp_m": 1},
+        {"id": "b", "kind": "note", "wavelength_m": 51.2, "seed": 12, "amp_m": 1},
+        {"id": "m", "kind": "min", "a": "a", "b": "b"},
+        {"id": "s", "kind": "add", "a": "g", "b": "m"},
+        {"id": "out", "kind": "output", "height": "s"}]}}]})");
+    const ClimateSDF split(two, 15);
+    CHECK(split.sdf.get_climate_error() == ov::str());
+    CLIMATE_REQUIRE(split.sdf.get_climate() != nullptr);
+    std::vector<int> reads;
+    for (const SampleInstr &in : split.sdf.get_climate()->biomes[0].program.code) {
+        if (in.op == SampleOp::FIELD) {
+            reads.push_back(in.index);
+        }
+    }
+    CHECK(reads.size() == 2);
+    CHECK((reads.size() == 2 && reads[0] != reads[1]));
+    for (int f = 0; f < MAX_FIELDS; f++) {
+        ov::Value field = ClimateTest::json(R"({"bands": [{"from_m": 800, "to_m": 1600, "amp": 0.5}]})");
+        field["name"] = ov::format("f%d", int64_t(f));
+        two["fields"].push_back(field);
+    }
+    const ClimateSDF crowded(two, 15);
+    CHECK(crowded.sdf.get_climate() == nullptr);
+    CHECK(ov::contains(crowded.sdf.get_climate_error(), "sub-mix fields"));
+}
+
+// Caves as a graph (caves_test.json): caved's ground is smin(mix, up - C), C = min(N, T) under the band's tent T. Its
+// bound is the tent's floor plus the smooth min's dip (affine forms in up - H); below the ground, columns open air only
+// within the band (N > 0 there), the ground is never raised, and every SDF path gives the point query's bits. Without
+// the tent the term has no bound: refused.
+TEST_CASE("Climate shape: caves are a smooth min on the mix's output, bounded by their band") {
+    ClimateSDF c("res://climate/caves_test.json", 15);
+    CHECK(c.sdf.get_climate_error() == ov::str());
+    CLIMATE_REQUIRE(c.sdf.get_climate() != nullptr);
+    const Table &t = *c.sdf.get_climate();
+    CLIMATE_REQUIRE(t.biomes.size() == 2);
+    const SampleProgram &p = t.biomes[1].program;
+    CHECK(p.reads_up());
+    CHECK(t.fields.back().channel); // the carve noise: a sub-mix
+    const double vs = 0.05, k = 2.0 / vs, top = 4.0 / vs, floor = 60.0 / vs;
+    CHECK(p.bound == doctest::Approx(floor + k / 4.0));
+    CHECK(p.slope <= MAX_CURVE_SLOPE);
+    const Cascade::Spec &spec = c.sdf.get_spec();
+    const int64_t datum = c.sdf.get_datum_y();
+    const int lod = 2;
+    int64_t points = 0, air = 0, outside = 0, raised = 0, over = 0, mismatches = 0;
+    for (int col = 0; col < 8; col++) {
+        const int64_t x = (int64_t(col) * 7919 - 30000) >> lod, z = (int64_t(col) * -6007 + 11000) >> lod;
+        float slots[Cascade::SLOTS], ch[Cascade::CHANNELS];
+        Cascade::point_slots(spec, Vector3i64(x, datum >> lod, z), lod, slots, true);
+        const int64_t surface = datum + int64_t(slots[Cascade::VALUE]);
+        for (int64_t y = (surface - int64_t(floor) - 200) >> lod; y <= (surface + 100) >> lod; y++) {
+            const Vector3i64 q(x, y, z);
+            const VoxelPos v(q.x << lod, q.y << lod, q.z << lod);
+            Cascade::point_slots(spec, q, lod, slots, true);
+            c.sdf.ground_channels(slots, v, lod, ch);
+            const double bare = slots[Cascade::VALUE], h = ch[Cascade::VALUE], up = double(v.y - datum), depth = bare - up;
+            points++;
+            raised += h > bare + 1e-6 * (1.0 + std::fabs(bare));
+            over += std::fabs(h - bare) > p.bound * (1.0 + 1e-6);
+            const bool opened = depth > k && up - h > 0.0;
+            air += opened;
+            outside += opened && (depth < top - k || depth > floor + k);
+            mismatches += float_bits(c.sdf.sdf(ch, v, lod).w) != float_bits(c.sdf.evaluate(WorldPos{ v, Float3() }, lod));
+        }
+    }
+    MESSAGE("caves: ", air, " of ", points, " samples opened below the ground");
+    CHECK(points > 2000);
+    CHECK(air > 0);
+    CHECK(outside == 0);
+    CHECK(raised == 0);
+    CHECK(over == 0);
+    CHECK(mismatches == 0);
+    ov::Value bad;
+    CLIMATE_REQUIRE(load_table("res://climate/caves_test.json", bad) == ov::str());
+    ov::Value &nodes = ClimateTest::graph_nodes(bad, 1);
+    for (size_t n = 0; n < nodes.size(); n++) {
+        if (nodes[n]["id"].as_str() == "carve") {
+            nodes.at(n)["b"] = "n"; // C = N everywhere: up - C as deep as up goes
+        }
+    }
+    const ClimateSDF unbounded(bad, 15);
+    CHECK(unbounded.sdf.get_climate() == nullptr);
+    CHECK(ov::contains(unbounded.sdf.get_climate_error(), "without bound"));
 }
 
 // The shapes' centring constants are the noise's own means: E[sabs(n)] and E[n^2] of perlin3, over random points of
@@ -126,7 +312,7 @@ TEST_CASE("Climate shape: a shaped table parses into its groups, box runs equal 
     CHECK(spec.fields.size() == t.fields.size() + 1); // the state group, band-less
     CHECK(spec.fields.back().empty());
     CLIMATE_REQUIRE(spec.modulation != nullptr);
-    CHECK(spec.modulation->shaped());
+    CHECK(spec.modulation->group_features(0) != 0u);
     CHECK(spec.modulation->state_group() == 5); // the ground, 4 fields, then the state
     int64_t bad = 0;
     for (const int lod : { 0, 3, 8 }) {
@@ -164,7 +350,7 @@ TEST_CASE("Climate shape: ground terms reach every SDF path, the samples' and th
         Cascade::for_each_point(box, [&](const Vector3i64 &p_p, int64_t p_i) {
             float slots[Cascade::SLOTS], ch[Cascade::CHANNELS];
             level.slots_at(p_i, slots);
-            s.sdf.ground_channels(slots, ch);
+            s.sdf.ground_channels(slots, p_p * (int64_t(1) << lod), lod, ch);
             const VoxelPos v(p_p.x << lod, p_p.y << lod, p_p.z << lod);
             const float want = s.sdf.sdf(ch, v, lod).w;
             points++;
@@ -177,7 +363,7 @@ TEST_CASE("Climate shape: ground terms reach every SDF path, the samples' and th
     CHECK(lifted == points);
     CHECK(CascadeGLSL::field_range(&s.sdf, true).everywhere()); // point items read the fields too
     Cascade::ShaderParams params;
-    CHECK(ov::contains(s.sdf.get_ground_glsl(s.sdf.get_spec(), params), "vec4 climate_ground(Ch ch)"));
+    CHECK(ov::contains(s.sdf.get_ground_glsl(s.sdf.get_spec(), params), "vec4 climate_ground(Ch ch, WorldPos p, int lod)"));
     // The skirts take the curves' step: deeper than the same ground without them (their slope scales the ground's
     // step), the cap (skirt_depth cells) lifted.
     ShapedSDF deep(15, 1e6f);
@@ -231,7 +417,7 @@ TEST_CASE("Climate shape: malformed shapes and terms are refused with the reason
     const ov::str f1 = R"({"fields": [{"name": "t", "bands": [{"from_m": 400, "to_m": 26000, "amp": 1}]}], )";
     CHECK(ov::contains(err(f1 + biome(R"({"id": "s", "kind": "shape", "in": "n", "shape": "spiky"}, )", "s")), "plain, billow"));
     CHECK(ov::contains(err(f1 + biome(R"({"id": "f", "kind": "field", "field": "t"}, {"id": "m", "kind": "multifractal", "in": "f", "gain": 2}, )", "m")),
-            "a mix row is a note"));
+            "a multifractal weighs one note's octaves"));
     CHECK(ov::contains(err(f1 + biome(R"({"id": "w", "kind": "warp", "in": "n", "fields": ["t"], "amount_m": 1}, )", "w")), "3 fields"));
     // A warp reads fields: the ground's slope (the swiss turbulence's) is not offered, nor its damping (climate.hpp).
     CHECK(ov::contains(err(f1 + biome(R"({"id": "w", "kind": "warp", "in": "n", "amount_m": 1}, )", "w")), "3 fields"));
@@ -265,7 +451,7 @@ TEST_CASE("Climate shape: the example world parses at any LOD count, shaped, and
         CHECK(c.sdf.has_ground_materials());
         const Cascade::Spec &spec = c.sdf.get_spec();
         CLIMATE_REQUIRE(spec.modulation != nullptr);
-        CHECK(spec.modulation->shaped());
+        CHECK(spec.modulation->group_features(0) != 0u);
         int64_t bad = 0;
         for (const int lod : { 0, 5, 11 }) {
             bad += ClimateTest::box_point_mismatches(spec, Vector3i64(int64_t(18022 * 20) >> lod, (c.sdf.get_datum_y() >> lod) - 1, int64_t(65536 * 20) >> lod), 3, lod, true);
@@ -291,7 +477,7 @@ TEST_CASE("Climate shape: several notes per octave, modulated, box runs equal po
     const int extra = 2 * 3 + 1 * 2; // two more notes on octaves 11 .. 13, one more on 10 and 14
     CHECK(CascadeGLSL::band_table(spec).size() == (size_t(spec.group_count()) * CascadeGLSL::BAND_ENTRIES + extra) * CascadeGLSL::BAND_BYTES);
     const ov::str code = CascadeGLSL::level_shader(&c.sdf, false, false, false, true, CascadeGLSL::View::FIELDS);
-    CHECK(ov::contains(code, "for (int e = 0; e < count; e++)"));
+    CHECK(ov::contains(code, "int count = int(lead.offset_hi.w);")); // the level's extra notes, listed in its ground entry
     CHECK(ov::contains(code, ov::format("BandMod mod[%d]", spec.group_count() + 2)));
     int64_t bad = 0;
     for (const int lod : { 0, 4, 8 }) {
@@ -339,7 +525,7 @@ TEST_CASE("Climate shape: sample programs reach every SDF path, within their bou
         Cascade::for_each_point(box, [&](const Vector3i64 &p_p, int64_t p_i) {
             float slots[Cascade::SLOTS], ch[Cascade::CHANNELS];
             level.slots_at(p_i, slots);
-            c.sdf.ground_channels(slots, ch);
+            c.sdf.ground_channels(slots, p_p * (int64_t(1) << lod), lod, ch);
             const VoxelPos v(p_p.x << lod, p_p.y << lod, p_p.z << lod);
             points++;
             mismatches += float_bits(c.sdf.sdf(ch, v, lod).w) != float_bits(c.sdf.evaluate(WorldPos{ v, Float3() }, lod));
@@ -364,8 +550,9 @@ TEST_CASE("Climate shape: sample programs reach every SDF path, within their bou
     int high = 0, low = 0;
     for (int i = 0; i < 400; i++) {
         float slots[Cascade::SLOTS], ch[Cascade::CHANNELS];
-        Cascade::point_slots(capped.sdf.get_spec(), Vector3i64(int64_t(i) * 1237 - 250000, capped.sdf.get_datum_y() >> 6, int64_t(i) * -2711), 6, slots, true);
-        capped.sdf.ground_channels(slots, ch);
+        const Vector3i64 p(int64_t(i) * 1237 - 250000, capped.sdf.get_datum_y() >> 6, int64_t(i) * -2711);
+        Cascade::point_slots(capped.sdf.get_spec(), p, 6, slots, true);
+        capped.sdf.ground_channels(slots, p * int64_t(64), 6, ch);
         const double hh = double(slots[Cascade::VALUE]) * vs, h = double(ch[Cascade::VALUE]) * vs;
         if (hh > 40.0 + 25.0) {
             high++;
@@ -382,7 +569,7 @@ TEST_CASE("Climate shape: sample programs reach every SDF path, within their bou
 }
 
 // Every level shader variant (chunks / points, with / without the fields) defines each climate helper it calls: a shaped
-// table with and without curves (the shared helpers are spliced once, up front; splices_helpers), and several notes per
+// table with and without curves (the shared helpers are spliced once, up front; get_climate_helpers_glsl), and several notes per
 // octave.
 TEST_CASE("Climate shape: every level shader variant defines the climate helpers it calls") {
     const ov::Value with_terms = shaped_table();
@@ -393,10 +580,13 @@ TEST_CASE("Climate shape: every level shader variant defines the climate helpers
     CHECK(load_table("res://climate/programs_test.json", programs) == ov::str());
     const char *const NAMES[] = { "cl_flush", "cl_mul", "cl_sub", "cl_add", "cl_scale", "cl_edge", "cl_multifractal", "cl_smooth_abs", "cl_curve0", "cl_curve1",
         "cascade_warped", "climate_ground", "climate_biome", "cascade_mods", "cl_smin", "cl_sample0", "cl_curve0_0" };
-    ov::Value world;
+    ov::Value world, graph;
     CHECK(load_table("res://climate/world.json", world) == ov::str());
+    CHECK(load_table("res://climate/graph_test.json", graph) == ov::str()); // sub-mix fields: modulated groups past the ground
     int64_t variants = 0, missing = 0, past_mods = 0;
-    for (const ov::Value &table : { with_terms, without, notes, programs, world }) {
+    ov::Value caves;
+    CHECK(load_table("res://climate/caves_test.json", caves) == ov::str());
+    for (const ov::Value &table : { with_terms, without, notes, programs, world, graph, caves }) {
         SDFCascade sdf;
         sdf.climate_data = table;
         ChunkParam param;
@@ -412,10 +602,11 @@ TEST_CASE("Climate shape: every level shader variant defines the climate helpers
                 for (size_t at = code.find("BandMod mod["); at != ov::str::npos; at = code.find("BandMod mod[", at + 12)) {
                     slots = std::min(slots, std::atoi(code.c_str() + at + 12));
                 }
-                for (size_t at = code.find(" mod["); at != ov::str::npos; at = code.find(" mod[", at + 5)) {
-                    const int slot = std::atoi(code.c_str() + at + 5);
-                    const bool declared = at >= 7 && code.compare(at - 7, 7, "BandMod") == 0;
-                    if (!declared && std::isdigit(static_cast<unsigned char>(code[at + 5])) && slot >= slots) {
+                for (size_t at = code.find("mod["); at != ov::str::npos; at = code.find("mod[", at + 4)) {
+                    const int slot = std::atoi(code.c_str() + at + 4);
+                    const bool word = at == 0 || !(std::isalnum(static_cast<unsigned char>(code[at - 1])) || code[at - 1] == '_');
+                    const bool declared = at >= 8 && code.compare(at - 8, 8, "BandMod ") == 0;
+                    if (word && !declared && std::isdigit(static_cast<unsigned char>(code[at + 4])) && slot >= slots) {
                         past_mods++;
                         MESSAGE("variant points=", points, " view=", int(view), ": mod[", slot, "] past ", slots, " slots");
                         break;
@@ -434,7 +625,7 @@ TEST_CASE("Climate shape: every level shader variant defines the climate helpers
             }
         }
     }
-    CHECK(variants == 20);
+    CHECK(variants == 28);
     CHECK(missing == 0);
     CHECK(past_mods == 0);
     // A run's last level (the SAMPLES view: no field groups) reads a level's other notes where the band table holds
@@ -615,7 +806,7 @@ static ov::Value retuned(ov::Value p_table) {
                 }
             } else if (kind == "mix") {
                 for (size_t i = 0; i < node["rows"].size(); i++) {
-                    node["rows"].at(i)["x"] = node["rows"][i]["x"].as_double() * 1.1;
+                    node["rows"].at(i)["x"] = (std::as_const(node)["rows"][i].has("x") ? node["rows"][i]["x"].as_double() : 1.0) * 1.1;
                 }
             }
         }
@@ -623,33 +814,135 @@ static ov::Value retuned(ov::Value p_table) {
     return p_table;
 }
 
-// Only engine.json makes new GLSL: a table whose values moved and structure didn't compiles to the same level shaders
-// (both views, chunks and points), its numbers in the shader params instead (Cascade::ShaderParams).
-TEST_CASE("Climate shape: an edit of a table's values keeps its shader text, its params move") {
-    for (const char *path : { "res://climate/programs_test.json", "res://climate/shaped_test.json", "res://climate/world.json" }) {
-        ov::Value data;
-        CLIMATE_REQUIRE(load_table(path, data) == ov::str());
-        ClimateSDF a(data, 25);
-        ClimateSDF b(retuned(data), 25);
-        CLIMATE_REQUIRE(a.sdf.get_climate() != nullptr);
-        CLIMATE_REQUIRE(b.sdf.get_climate() != nullptr);
-        int64_t moved = 0;
-        size_t most = 0;
-        for (const bool points : { false, true }) {
-            for (const CascadeGLSL::View view : { CascadeGLSL::View::FIELDS, CascadeGLSL::View::SAMPLES }) {
-                Cascade::ShaderParams pa, pb;
-                const ov::str ta = CascadeGLSL::level_shader(&a.sdf, false, points, false, !points, view, true, &pa);
-                const ov::str tb = CascadeGLSL::level_shader(&b.sdf, false, points, false, !points, view, true, &pb);
-                CHECK(ta == tb);
-                CHECK(pa.values.size() == pb.values.size());
-                CHECK(pa.vec4s() * 16 <= 16384); // CascadePasses' uniform block (MAX_PARAM_BYTES)
-                most = std::max(most, pa.values.size());
-                for (size_t i = 0; i < pa.values.size() && i < pb.values.size(); i++) {
-                    moved += float_bits(pa.values[i]) != float_bits(pb.values[i]);
+// p_table with the edits whose values the specialised compile folds (p_kind): 0 every shape on a note's chain another
+// type (a shape at the samples kept: its type moves the program's bounds, not its structure), 1 the values
+// at 0 (warp amounts, gains, each biome's first mix row), 2 neutral (every row at volume 1, shapes plain, no warp or
+// gain: notes every biome plays alike turn constant). The structure kept.
+static ov::Value folded(ov::Value p_table, int p_kind) {
+    static const char *const SHAPES[] = { "ridged", "plain", "billow", "square" };
+    for (size_t b = 0; b < p_table["biomes"].size(); b++) {
+        ov::Value &nodes = ClimateTest::graph_nodes(p_table, b);
+        for (size_t n = 0; n < nodes.size(); n++) {
+            ov::Value &node = nodes.at(n);
+            const ov::str kind = node["kind"].as_str();
+            bool chain = false;
+            for (size_t i = 0; kind == "shape" && i < nodes.size(); i++) {
+                const ov::str in_kind = nodes[i]["kind"].as_str();
+                chain = chain || (nodes[i]["id"].as_str() == node["in"].as_str() && (in_kind == "note" || in_kind == "warp"));
+            }
+            if (kind == "shape" && p_kind != 1 && (chain || p_kind == 2)) {
+                node.erase("coeffs");
+                node.erase("offset");
+                node.erase("scale");
+                node["shape"] = p_kind == 0 ? SHAPES[(b + n) % 4] : "plain";
+            } else if (kind == "warp" && p_kind != 0) {
+                node["amount_m"] = 0.0;
+            } else if (kind == "multifractal" && p_kind != 0) {
+                node["gain"] = 0.0;
+            } else if (kind == "mix" && p_kind != 0) {
+                for (size_t i = 0; i < node["rows"].size(); i++) {
+                    node["rows"].at(i)["x"] = p_kind == 2 ? 1.0 : (i == 0 ? 0.0 : node["rows"][i]["x"].as_double());
                 }
             }
         }
-        MESSAGE(std::string(path), ": ", moved, " params moved, at most ", int64_t(most), " in a shader");
-        CHECK(moved > 0);
+    }
+    return p_table;
+}
+
+// p_table with every node of p_kinds taken out of its graph: whatever read one reads its input (a structural edit: the
+// mixer deleting nodes).
+static ov::Value bypassed(ov::Value p_table, std::initializer_list<const char *> p_kinds) {
+    for (size_t b = 0; b < p_table["biomes"].size(); b++) {
+        ov::Value &nodes = ClimateTest::graph_nodes(p_table, b);
+        for (size_t n = nodes.size(); n-- > 0;) {
+            const ov::str kind = nodes[n]["kind"].as_str();
+            if (std::none_of(p_kinds.begin(), p_kinds.end(), [&](const char *p_k) { return kind == p_k; })) {
+                continue;
+            }
+            const ov::str id = nodes[n]["id"].as_str();
+            const ov::Value in = nodes[n]["in"];
+            for (size_t o = 0; o < nodes.size(); o++) {
+                ov::Value &node = nodes.at(o);
+                for (const char *key : { "in", "height" }) {
+                    if (std::as_const(node).has(key) && node[key].as_str() == id) {
+                        node[key] = in;
+                    }
+                }
+                for (size_t r = 0; std::as_const(node).has("rows") && r < node["rows"].size(); r++) {
+                    if (node["rows"][r]["in"].as_str() == id) {
+                        node["rows"].at(r)["in"] = in;
+                    }
+                }
+            }
+            nodes.remove_at(n);
+        }
+    }
+    return p_table;
+}
+
+// A table's text follows its structure alone (Cascade::ShaderParams hold its numbers): the specialised one's through an
+// edit of its values (retuned), the generic one's (Table::generic, SDFCascade::specialize false) through every edit,
+// those the specialised compile folds included (a shape's type, a value at 0, notes turning constant), so the biome
+// mixer's edits compile nothing; and the generic table's bits are the specialised one's, every edit.
+TEST_CASE("Climate shape: a table's text follows its structure, the generic one's through every edit, with the specialised bits") {
+    int64_t compared = 0, mismatches = 0;
+    for (const char *path : { "res://climate/shaped_test.json", "res://climate/world.json", "res://climate/programs_test.json", "res://climate/notes_test.json",
+                 "res://climate/example.json", "res://climate/plain.json", "res://climate/graph_test.json", "res://climate/caves_test.json" }) {
+        ov::Value data;
+        CLIMATE_REQUIRE(load_table(path, data) == ov::str());
+        ov::str first[2]; // the table's own texts: generic, specialised
+        int64_t moved[2] = {}, params = 0;
+        Climate::Caps caps; // the first compile's, kept like World::Kept keeps them through the mixer's restarts
+        auto text = [&](const ClimateSDF &p_c) {
+            ov::str t;
+            for (const bool points : { false, true }) {
+                for (const CascadeGLSL::View view : { CascadeGLSL::View::FIELDS, CascadeGLSL::View::SAMPLES }) {
+                    Cascade::ShaderParams p;
+                    t += CascadeGLSL::level_shader(&p_c.sdf, false, points, false, !points, view, true, &p);
+                    CHECK(p.vec4s() * 16 <= 16384); // CascadePasses' uniform block (MAX_PARAM_BYTES)
+                    params = std::max(params, int64_t(p.values.size()));
+                }
+            }
+            return t;
+        };
+        for (int e = 0; e < 8; e++) {
+            const ov::Value table = e == 0 ? data
+                    : e == 1               ? retuned(data)
+                    : e < 5                ? folded(data, e - 2)
+                    : e == 5               ? bypassed(data, { "shape" })
+                    : e == 6               ? bypassed(data, { "warp", "multifractal" })
+                                           : bypassed(data, { "curve" });
+            ClimateSDF generic(table, 25, false, caps), specialised(table, 25);
+            caps = generic.sdf.generic_caps();
+            CLIMATE_REQUIRE(generic.sdf.get_climate() != nullptr);
+            CLIMATE_REQUIRE(specialised.sdf.get_climate() != nullptr);
+            const ov::str texts[2] = { text(generic), text(specialised) };
+            for (int g = 0; g < 2; g++) {
+                if (e == 0) {
+                    first[g] = texts[g];
+                }
+                moved[g] += texts[g] != first[g];
+            }
+            CHECK((e != 1 || texts[1] == first[1])); // retuned: the specialised structure kept
+            for (const int lod : { 0, 2, 6, 11 }) {
+                for (int i = 0; i < 40; i++) {
+                    const Vector3i64 p(int64_t(i) * 7919 - 50000, (generic.sdf.get_datum_y() >> lod) + 20 - i, int64_t(i) * -104729 + (int64_t(1) << 33));
+                    const WorldPos pos = ClimateTest::lattice_pos(p, lod);
+                    compared++;
+                    mismatches += float_bits(generic.sdf.evaluate(pos, lod)) != float_bits(specialised.sdf.evaluate(pos, lod));
+                }
+            }
+        }
+        MESSAGE(std::string(path), ": of 7 edits the generic text moved on ", moved[0], ", the specialised on ", moved[1], "; at most ", params, " params");
+        CHECK(moved[0] == 0);
+    }
+    MESSAGE("generic vs specialised: ", compared, " samples, ", mismatches, " differ");
+    CHECK(mismatches == 0);
+    // No climate: the template ground, specialised either way (nothing edits it; generic, it paid cascade_mods: +11%).
+    const ClimateSDF bare_generic(ov::Value(), 25, false), bare(ov::Value(), 25);
+    for (const bool points : { false, true }) {
+        Cascade::ShaderParams pg, ps;
+        CHECK(CascadeGLSL::level_shader(&bare_generic.sdf, false, points, false, !points, CascadeGLSL::View::FIELDS, true, &pg) ==
+                CascadeGLSL::level_shader(&bare.sdf, false, points, false, !points, CascadeGLSL::View::FIELDS, true, &ps));
     }
 }

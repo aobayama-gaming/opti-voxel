@@ -123,6 +123,8 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
         OV_ERR_PRINT("World: ring_m needs radius_m (the tube): the flat world.");
     }
     sdf->climate_data = content.climate_table; // parsed and checked by configure() (an ERR there: no climate)
+    sdf->specialize = config.specialize_shaders;
+    sdf->caps = reused_caps;
     sdf->set_instance_band(config.archetype_band && config.terrain_mode != 4); // the gallery: a crease test at every LOD, never eroded
     sdf->set_moment_blobs(config.archetype_moments);
     sdf->set_instance_erode(config.archetype_erode);
@@ -819,6 +821,9 @@ ov::Value World::debug_stats() {
 
 void World::stop(Kept *r_kept) {
     QuadPagePool *pages = std::exchange(reused_pages, nullptr); // no mesher took them: start failed or never ran
+    if (r_kept != nullptr) {
+        r_kept->caps = sdf ? sdf->generic_caps() : reused_caps;
+    }
     if (!started) {
         if (r_kept != nullptr) {
             r_kept->pages = pages;

@@ -1,8 +1,39 @@
-# Caves: a 3D noise carve density (plan)
+# Caves: a 3D noise carve density
 
-Not built yet: this is the plan, staged as PRs. The surface stays the climate's height field (`docs/climate.md`);
-caves are carved out of it by a second density made of 3D noise, read only in depth bands below the surface. Islands,
-arches and cave mouths placed one by one stay instances (`docs/trees.md`, biome features); this is the field-wide part.
+The surface stays the climate's height field (`docs/climate.md`); caves are carved out of it by a second density made
+of 3D noise, read only in depth bands below the surface. Islands, arches and cave mouths placed one by one stay
+instances (`docs/trees.md`, biome features); this is the field-wide part.
+
+## Built: caves as a graph
+
+A cave is a node chain of a biome's graph, no carve kind: a smooth min on the mix's output (the mix builds the ground's
+height), `h' = smin(h, up - C)`, which is the model's `smax(up - h, C)` below exactly. `up` is the sample's height
+above the base (`SampleOp::UP`); the carve density `C` is a sub-mix of cave notes (the relaxer carries it to the
+samples as a channel field, its octaves inserted by the cascade like any band) under the band's tent, all of it
+ordinary nodes (`climate/caves_test.json`):
+
+```
+depth = mix - up
+tent  = min(depth - top, floor - depth)
+C     = min(noise + threshold, tent)
+out   = smin(mix, up - C, k)
+```
+
+- **Bounds.** `bound_program` keeps each register's affine forms in `z = up - H` and `H`, so the tent bounds the term:
+  `-floor - k/4 <= h' - H <= 0` (unit test: exactly `floor + k/4`). A graph reading `up` without a tent has no bound
+  and is refused. The skirts and validate take that bound like any program's.
+- **Where it moves h.** Below the band's top the term is nonzero wherever `C > -depth`, also deep in the rock: `h'`
+  moves but `up - h' = C < 0` stays solid. Air opens only where `C > 0`, inside the band (unit test: columns through
+  the band, air only between top and floor within the dip; GPU set `4v`, bit for bit).
+- **Paths.** CPU `SDFCascade::ground_channels(slots, voxel, lod)` and GLSL `climate_ground(ch, p, lod)` read the base
+  only where a program reads `up` (generic: always); the discoverer's corners (CPU and GPU point items) and the samples
+  go through them, so the cull sees the caves.
+
+Still the plan below: per-layer strengths per biome as a world table (the graph has them per biome today), the
+per-chunk skip of the noise outside the band, the placement on the bare ground with the cave-mouth reject, the rock
+material and no sky light underground, the skirt fix on ceilings, culling hidden caves, the `L`-scaled noise (a graph's
+`C` is whatever its notes give: its gradient reaches the SDF's normalisation like the ground's), and a slice view in
+the mixer.
 
 ## Model
 

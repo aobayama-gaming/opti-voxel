@@ -6,8 +6,6 @@
 // CascadeGLSL's level shader (cascade_glsl.cpp).
 namespace CascadeShapedGLSL {
 
-// Whether p_spec's modulation shapes any band (its GLSL is then cascade_mods and the shaped inserts).
-bool shaped(const Cascade::Spec &p_spec);
 // `vec4 g = <noise>(<p_pos>, band...)`, through base_stretched and base_stretch_gradient (the base's up) when the group
 // stretches a band (Cascade::band_noise).
 ov::str noise_code(const Cascade::Spec &p_spec, int p_group, const ov::str &p_pos);

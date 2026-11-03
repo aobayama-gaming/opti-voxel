@@ -14,6 +14,7 @@
 #include "ov/value.hpp"
 #include "sdf_table.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 // The cascade test terrain (CascadeTerrain, PR 2) as the meshed terrain: a 3D height field of perlin3 octaves carried down
@@ -41,6 +42,11 @@ public:
     // the biomes' graphs. Without one, or one it refuses (an ERR, and no climate), the template biome's ground
     // (Climate::template_biome).
     ov::Value climate_data = ov::Value::object();
+    // Set before configure(): the climate compiled specialised to its values (Climate::Ground::specialize, a little
+    // faster), or generic (false, the biome mixer's: its GPU text reads the table as data, so an edit compiles nothing),
+    // its capacities at least caps (a restart's previous ones: generic_caps).
+    bool specialize = true;
+    Climate::Caps caps;
 
     // Set before configure(). DEFAULT: the climate's notes. FLAT (the shapes gallery): no note and the ground at
     // FLAT_GROUND_M, a plane y = datum (the same passes, a zero height).
@@ -174,10 +180,15 @@ uint cascade_ground_material(Ch ch) {
     // planet's relief (the flat world: the exact range's top).
     Climate::Ground climate_ground() const {
         const double relief = base.curved() ? PLANET_RELIEF * base.get_radius() : double(ExactNoise::exact_pow2(40));
-        return Climate::Ground{ double(voxel_size), k_max, float(relief), base.curved() ? relief / PLANET_HEADROOM : INFINITY };
+        return Climate::Ground{ double(voxel_size), k_max, float(relief), base.curved() ? relief / PLANET_HEADROOM : INFINITY, specialize, caps };
     }
     float skirt_depth_m(int p_lod) const override { return skirt_depth_table[p_lod]; }
     const Cascade::Spec &get_spec() const { return spec; }
+    // The capacities the climate's generic text has (its spec's), for the next start's caps.
+    Climate::Caps generic_caps() const {
+        const int channels = int(std::count_if(table.fields.begin(), table.fields.end(), [](const Climate::Field &p_f) { return p_f.channel; }));
+        return Climate::Caps{ spec.max_level_notes(), spec.carry_groups(), channels };
+    }
     int64_t get_datum_y() const { return base.datum_y(); }
     const BaseSurface &get_base() const override { return base; }
     const BaseSurface *get_curved_base() const override { return base.curved() ? &base : nullptr; }
@@ -207,20 +218,22 @@ uint cascade_ground_material(Ch ch) {
         }
         float slots[Cascade::SLOTS];
         Cascade::point_slots(spec, p, p_lod, slots);
-        ground_channels(slots, r_ch);
+        ground_channels(slots, p_voxel, p_lod, r_ch);
     }
 
     // Whether the ground at a sample is more than the cascade's channels (Climate::Table::has_programs): the
     // samples then read terms derived on the level above them (FieldRange::sample, CPU and GPU, point items too).
     bool has_ground_terms() const override { return ground_terms; }
-    // The ground channels of a point's slots p_slots (a run's last level, the samples' terms carried):
-    // Climate::ground_value, or the cascade's ground channels as they are (GLSL: climate_ground, get_ground_glsl).
-    void ground_channels(const float p_slots[Cascade::SLOTS], float r_ch[Cascade::CHANNELS]) const {
+    // The ground channels of a point's slots p_slots (a run's last level, the samples' terms carried) at LOD0 voxel
+    // p_voxel of Λ_lod: Climate::ground_value (UP from the base there), or the cascade's ground channels as they are
+    // (GLSL: climate_ground, get_ground_glsl).
+    void ground_channels(const float p_slots[Cascade::SLOTS], const VoxelPos &p_voxel, int p_lod, float r_ch[Cascade::CHANNELS]) const {
         for (int c = 0; c < Cascade::CHANNELS; c++) {
             r_ch[c] = p_slots[c];
         }
         if (has_ground_terms()) {
-            const ExactNoise::Float4 g = Climate::ground_value(table, carry, p_slots);
+            const ExactNoise::Float4 up = reads_up ? Climate::up_value(base.at(p_voxel, p_lod), p_lod) : ExactNoise::Float4{};
+            const ExactNoise::Float4 g = Climate::ground_value(table, carry, p_slots, up);
             r_ch[Cascade::VALUE] = g.w;
             r_ch[Cascade::DX] = g.x;
             r_ch[Cascade::DY] = g.y;
@@ -231,7 +244,7 @@ uint cascade_ground_material(Ch ch) {
     ov::str get_ground_glsl(const Cascade::Spec &p_view, Cascade::ShaderParams &r_params) const override {
         return has_ground_terms() ? Climate::ground_glsl(table, p_view, r_params) : ov::str();
     }
-    ov::str get_climate_helpers_glsl() const override { return Climate::splices_helpers(table, spec) ? Climate::shared_helpers_glsl() : ov::str(); }
+    ov::str get_climate_helpers_glsl() const override { return spec.modulation || table.has_programs() ? Climate::shared_helpers_glsl() : ov::str(); }
 
     // CascadeTerrain::height_sdf of the channels of Λ_lod over the base at LOD0 voxel p_voxel: the unit gradient
     // and the distance in voxels of LOD p_lod (GLSL cascade_terrain_unit, bit for bit).
@@ -485,7 +498,10 @@ private:
             ov::Value t = ov::Value::object();
             t["biomes"] = ov::Value::array();
             t["biomes"].push_back(Climate::template_biome(double(voxel_size)));
-            const ov::str err = Climate::parse(t, climate_ground(), table);
+            // Specialised whatever specialize says: nothing edits the template.
+            Climate::Ground ground = climate_ground();
+            ground.specialize = true;
+            const ov::str err = Climate::parse(t, ground, table);
             OV_ERR_FAIL_COND_MSG(!err.empty(), "SDFCascade: the template ground: " + err);
         }
         if (preset == Preset::FLAT) {
@@ -496,6 +512,7 @@ private:
         }
         spec = Climate::combined_spec(table, spec);
         ground_terms = table.has_programs();
+        reads_up = std::any_of(table.biomes.begin(), table.biomes.end(), [](const Climate::Biome &p_b) { return p_b.program.reads_up(); });
         carry = Climate::sample_carry(table);
         std::vector<std::pair<ov::str, Material::Params>> grounds;
         for (size_t b = 0; has_ground_materials() && b < table.biomes.size(); b++) {
@@ -515,6 +532,7 @@ private:
     Climate::Table table; // the compiled ground: climate_data's, or the template's
     bool given = false; // table is climate_data's (get_climate)
     bool ground_terms = false; // table.has_programs(), read per sample
+    bool reads_up = false; // a program reads UP: the base at each sample
     Climate::SampleCarry carry; // Climate::sample_carry(table), read per sample
     ov::str climate_error;
 };

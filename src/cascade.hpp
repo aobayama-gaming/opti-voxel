@@ -313,12 +313,27 @@ struct ShaderParams {
         values.push_back(p_value);
         return ov::format("cascade_param[%d].%c", i / 4, "xyzw"[i % 4]);
     }
-    // p_values in consecutive slots, read at the GLSL index p_index (an int expression, 0 <= p_index < p_values.size()).
-    ov::str table(const std::vector<float> &p_values, const ov::str &p_index) {
+    // p_values in consecutive slots: the first one's index (a generic text reads a table's slots at indices it computes:
+    // at()).
+    int64_t append(const std::vector<float> &p_values) {
         const int64_t i = int64_t(values.size());
         values.insert(values.end(), p_values.begin(), p_values.end());
-        return ov::format("cascade_param[(%d + (%s)) >> 2][(%d + (%s)) & 3]", i, p_index.c_str(), i, p_index.c_str());
+        return i;
     }
+    // The GLSL read of the slot at p_index, an int expression (CascadeGLSL::level_shader defines cl_param).
+    static ov::str at(const ov::str &p_index) { return "cl_param(" + p_index + ")"; }
+    // A generic text's variable-length records (lists, programs, the modulator's plan): after values (level_shader
+    // appends them last), so a record's length never moves the index of a value the text names. p_values' index on
+    // the heap, read by heap_at (cl_heap: cl_param past the values, their count a literal of the structure).
+    std::vector<float> heap;
+    int64_t put(const std::vector<float> &p_values) {
+        const int64_t i = int64_t(heap.size());
+        heap.insert(heap.end(), p_values.begin(), p_values.end());
+        return i;
+    }
+    static ov::str heap_at(const ov::str &p_index) { return "cl_heap(" + p_index + ")"; }
+    // p_values in consecutive slots, read at the GLSL index p_index (an int expression, 0 <= p_index < p_values.size()).
+    ov::str table(const std::vector<float> &p_values, const ov::str &p_index) { return at(ov::format("%d + (%s)", append(p_values), p_index)); }
     // The block's vec4s (at least one): its size in the text, a function of the structure as the rest of it.
     int64_t vec4s() const { return ov::max(int64_t(1), (int64_t(values.size()) + 3) / 4); }
 };
@@ -352,16 +367,13 @@ struct Modulation {
     }
     // The field group the ground's MOD_STATE band overwrites, or -1 (a band-less group: nothing else writes it).
     virtual int state_group() const { return -1; }
-    // Whether any band uses a BandMod feature: else the GLSL is the plain amplitudes' (the same text as before them).
-    virtual bool shaped() const { return false; }
     // The features group p_group's bands use at some level (the union): its GLSL insert has the code for them only.
     virtual uint32_t group_features(int p_group) const {
         (void)p_group;
         return 0u;
     }
-    // The same in GLSL, bit for bit. Not shaped: `uint cascade_amplitudes(int m, Ch pre, out vec4 amp[MAX_GROUPS])`
-    // returning modulated(m); shaped: `uint cascade_mods(int m, Ch pre, out BandMod mod[MAX_GROUPS])`, the same mask
-    // (CascadeGLSL's insert code). pre in p_spec's GPU layout (Spec::gpu_base, gpu_carry); p_carried: modulate's, for the
+    // The same in GLSL, bit for bit: `uint cascade_mods(int m, Ch pre, out BandMod mod[MAX_GROUPS])` returning
+    // modulated(m) (CascadeGLSL's insert code). pre in p_spec's GPU layout (Spec::gpu_base, gpu_carry); p_carried: modulate's, for the
     // samples' view (p_spec without the fields). p_derive (the fields' view, p_spec with the carry): `inout Ch pre` and a
     // last `WorldPos p`, and where g_carry_n says, derive too, from the same weights, into pre's carry groups. Its numbers
     // go to r_params.
@@ -383,6 +395,11 @@ struct Spec {
     // The base a stretched band stretches along (BaseSurface::stretched): the ground's (SDFCascade), flat at datum 0
     // otherwise.
     BaseSurface base = BaseSurface::flat(0);
+    // A generic climate's (Climate::Table::generic): its text a function of its capacities, not of its bands or values:
+    // the ground's stretch path on a flat base whatever its bands, at least level_notes_cap notes per level (mod_count),
+    // the shader params' block at its largest (CascadeGLSL::level_shader).
+    bool generic = false;
+    int level_notes_cap = 0;
 
     int insert_level(const Band &p_band) const { return p_band.k - insert_shift; }
     // Some band of group p_group (any group: -1) is stretched along y (Band::stretch): its GLSL inserts go through

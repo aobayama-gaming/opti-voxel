@@ -46,7 +46,7 @@ ov::str validate_bands(const std::vector<Cascade::Band> &p_bands, const Ground &
         if (find_band(p_bands, b, p_notes) != &b) {
             return p_where + ov::format("octave k = %d is listed twice.", b.k);
         }
-        if (!ExactNoise::in_exact_range(b.amp)) {
+        if (b.amp != 0.0f && !ExactNoise::in_exact_range(b.amp)) { // 0: silent (a generic table keeps its silent notes)
             return p_where + ov::format("octave k = %d: amplitude %s outside [2^-16, 2^40].", b.k, b.amp);
         }
     }
@@ -55,7 +55,7 @@ ov::str validate_bands(const std::vector<Cascade::Band> &p_bands, const Ground &
 
 ov::str validate_field(const Table &p_table, int p_i, const Ground &p_ground) {
     const Field &f = p_table.fields[size_t(p_i)];
-    if (!ov::is_valid_ascii_identifier(f.name) || f.name == "ground") {
+    if (!f.channel && (!ov::is_valid_ascii_identifier(f.name) || f.name == "ground")) {
         return ov::format("climate field %d: the name must be an identifier (letters, digits, _), and 'ground' is reserved.", p_i);
     }
     const ov::str where = "climate field '" + f.name + ov::str("': ");
@@ -81,7 +81,8 @@ ov::str validate_field(const Table &p_table, int p_i, const Ground &p_ground) {
 }
 
 ov::str validate_amp(const Table &p_table, const Ground &p_ground, const Amp &p_amp) {
-    if (std::none_of(p_table.notes.begin(), p_table.notes.end(), [&](const Cascade::Band &p_b) { return plays(p_amp, p_b); })) {
+    const std::vector<Cascade::Band> *bands = bands_of(p_table, p_amp.group - 1);
+    if (bands == nullptr || std::none_of(bands->begin(), bands->end(), [&](const Cascade::Band &p_b) { return plays(p_amp, p_b, p_amp.group); })) {
         return ov::format("an amplitude names octave k = %d, which no note has.", p_amp.k);
     }
     if (!std::isfinite(p_amp.amp) || p_amp.amp < 0.0f) {
@@ -165,6 +166,9 @@ ov::str validate_biome(const Table &p_table, size_t p_i, const Ground &p_ground)
         return where + ov::format("its graph past its notes is %d nodes, at most %d.", int64_t(pr.code.size()), MAX_SAMPLE_INSTRS);
     }
     const char *what = pr.curve_of_ground() ? "its curve" : "its graph past its notes";
+    if (!std::isfinite(pr.bound)) {
+        return where + ov::format("%s moves the ground without bound: a read of up needs a band (min(depth - top, floor - depth), depth the mix - up) under its carve.", what);
+    }
     if (pr.bound > p_ground.amp_cap || (pr.bound > 0.0 && !ExactNoise::in_exact_range(float(pr.bound)))) {
         return where + ov::format("%s moves the ground by up to %s voxels, over the ground's cap of %s.", what, pr.bound, p_ground.amp_cap);
     }
@@ -186,6 +190,12 @@ ov::str validate_biome(const Table &p_table, size_t p_i, const Ground &p_ground)
         }
         if ((in.op == SampleOp::CONST && in.value != 0.0f && !moderate(in.value)) || (in.op == SampleOp::FIELD && (in.index < 0 || in.index >= int(p_table.fields.size())))) {
             return where + ov::str("a constant out of range, or a field that doesn't exist.");
+        }
+        for (int t = 0; in.op == SampleOp::SHAPE && t < 4; t++) {
+            const float c = pr.shapes[size_t(in.index)].c[t];
+            if (c != 0.0f && !moderate(c)) {
+                return where + ov::format("a shape past the notes has coefficient %s, outside [2^-40, 2^40].", c);
+            }
         }
     }
     return validate_amps(p_table, p_ground, b, where);

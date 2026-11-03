@@ -81,6 +81,10 @@ struct Field {
     uint32_t seed = 0;
     std::vector<Cascade::Band> bands; // coarsest first, at most one per octave
     std::vector<Term> terms;
+    // A sub-mix (biome_compiler.cpp: notes some biome's graph reads past a non-linear node, other than its ground): its
+    // bands are those notes, each biome playing them like the ground's (Amp::group), its value read by sample programs
+    // (FIELD). No biome is placed on it and it has no terms; the format can't name it.
+    bool channel = false;
 };
 
 // Where a biome sits on one field: u = (x - centre) * inv_span, its kernel's coordinate (the format's [centre, span],
@@ -102,10 +106,12 @@ struct Axis {
 // Hermite subdivision needs a band's gradient to be its value's: without that term the finer levels' values streak along
 // the lattice axes (measured, the climate report's gradient error: 6% and visible streaks, 2.5% for the plain ground).
 struct Amp {
-    // The note's identity (its band's octave, seed and stretch: several notes may share an octave).
+    // The note's identity (its band's octave, seed and stretch: several notes may share an octave; its cascade group: 0
+    // the ground, else a sub-mix field's, 1 + its index).
     int k = 0;
     uint32_t seed = 0;
     int stretch = 0;
+    int group = 0;
     float amp = 0.0f;
     bool has_shape = false; // else plain
     Shape shape;
@@ -152,9 +158,12 @@ float curve_bound(const Curve &p_curve);
 // GLSL cl_*), op for op on the GPU (ground_glsl). Its term at a sample is D = f(H) - H, the ground
 // h = H + sum_b w_b D_b (ground_value); a curve of H alone is D = C(H) itself (eval_curve: the curves' bits).
 //   GROUND: H. CONST: value (LOD0 voxels). FIELD: field `index`'s value (carried to the samples, SampleCarry::field).
+//   UP: the sample's height above the base (the base's distance and gradient, LOD0 voxels): a cave is smin(h, up - C).
 //   ADD, SUB, MUL: a op b. MIN, MAX: the whole register with the smaller / larger value (b < a ? b : a).
 //   SMIN, SMAX: Quilez's polynomial smooth min / max of a and b over `value` voxels (k > 0).
 //   CURVE: a + curves[index](a), the curve's R(a).
+//   SHAPE: shapes[index] of a, phi(a) = c[0] + c[1] a + c[2] |a| + c[3] a^2 (a shape node past a mix: a's sum, metres
+//   as LOD0 voxels; |a| unsmoothed, no mean taken out), each term where its coefficient isn't 0.
 enum class SampleOp : uint8_t {
     GROUND,
     CONST,
@@ -167,6 +176,8 @@ enum class SampleOp : uint8_t {
     SMIN,
     SMAX,
     CURVE,
+    SHAPE,
+    UP,
 };
 struct SampleInstr {
     SampleOp op = SampleOp::GROUND;
@@ -180,6 +191,7 @@ inline constexpr int MAX_SAMPLE_INSTRS = 64;
 struct SampleProgram {
     std::vector<SampleInstr> code; // empty: no term (D = 0); the last register is f
     std::vector<Curve> curves;
+    std::vector<Shape> shapes;
     // Bounds of its term (validate, skirts; biome_compiler.cpp): max |D| (LOD0 voxels), max |dD/dH|, max |dD/df| per field.
     double bound = 0.0;
     double slope = 0.0;
@@ -188,6 +200,7 @@ struct SampleProgram {
     // A curve of H alone: D is eval_curve(curves[0], H) itself.
     bool curve_of_ground() const { return code.size() == 2 && code[0].op == SampleOp::GROUND && code[1].op == SampleOp::CURVE && code[1].a == 0; }
     bool reads_field(int p_field) const;
+    bool reads_up() const;
 };
 
 // A biome's ground look (its material, biome_material): albedo on gentle slopes and on steep ones (linear colours),
@@ -249,6 +262,17 @@ struct Biome {
     uint32_t debug_color = 0; // 0xRRGGBB, reports and debug views
 };
 
+// A generic table's capacities: the sizes its text has (notes per level, carry groups), each a power of two at least
+// what the table needs and at least the caller's (Ground::caps: a restart's previous ones, World::Kept), so an edit
+// needing less, or as much, compiles nothing.
+struct Caps {
+    int level_notes = 0;
+    int carry = 0;
+    int channels = 0; // sub-mix fields (Field::channel)
+};
+// The capacity holding p_need at least p_floor: the next power of two (p_need <= 0: p_floor), at most p_max.
+int cap_for(int p_need, int p_floor, int p_max);
+
 struct Table {
     std::vector<Field> fields;
     std::vector<Biome> biomes;
@@ -256,12 +280,18 @@ struct Table {
     // plays plain at one amplitude is a constant band at it, which no biome lists; the others are modulated, every biome
     // listing them (amplitude 0 where its graph doesn't mix it).
     std::vector<Cascade::Band> notes;
+    // Generic (Ground::specialize false): its GPU text reads its notes, terms and programs as data (docs/climate.md), its
+    // sizes at least caps. The same table and the same bits as the specialised one.
+    bool generic = false;
+    Caps caps = Caps();
 
     // The field named p_name, -1 if none.
     int field_index(const ov::str &p_name) const;
-    // Whether a biome weights a band by the multifractal state: the combined spec carries one more field group for it.
+    // Whether a biome weights a band by the multifractal state (a generic table's always: its text holds every path its
+    // values may take): the combined spec carries one more field group for it.
     bool has_state() const;
-    // Whether a biome has a sample program: the ground at a sample is then more than the cascade's (ground_value).
+    // Whether a biome has a sample program (generic: always): the ground at a sample is then more than the cascade's
+    // (ground_value).
     bool has_programs() const;
     // Whether a ground note is stretched along the base's up.
     bool has_stretch() const;
@@ -278,6 +308,9 @@ struct Ground {
     // A note's own amplitude at most this (LOD0 voxels): a planet's relief over SDFCascade::PLANET_HEADROOM, so a biome's
     // volume up to it still fits under amp_cap; infinite on the flat world.
     double note_cap = INFINITY;
+    // False: a generic table (Table::generic), its capacities at least caps.
+    bool specialize = true;
+    Caps caps = Caps();
 };
 
 // Empty if p_table is well formed, else the first error: field and biome counts, unique names, bands (k in
@@ -291,6 +324,8 @@ ov::str validate(const Table &p_table, const Ground &p_ground);
 
 // The bands a term's source names: the ground's notes (GROUND), a field's, or null.
 const std::vector<Cascade::Band> *bands_of(const Table &p_table, int p_source);
+// The largest |value| band p_b of field p_field takes: its amplitude, a sub-mix's every biome's (max_amp).
+double band_bound(const Table &p_table, int p_field, const Cascade::Band &p_b);
 
 // The table of a JSON object (units in metres; the format is described above parse() in climate_parse.cpp),
 // validated; on error r_table is left empty and the error returned.
@@ -336,9 +371,9 @@ Cascade::Spec combined_spec(const Table &p_table, const Cascade::Spec &p_ground)
 
 // The amplitude biome p_biome gives the note p_band: its entry's, or the note's own (a constant note) without one. The
 // modulation's per-biome amplitudes.
-float biome_amp(const Biome &p_biome, const Cascade::Band &p_band);
+float biome_amp(const Biome &p_biome, const Cascade::Band &p_band, int p_group = 0);
 // The largest biome_amp of any biome, times its shape's bound: bounds that follow amplitudes (skirts) take it.
-float max_amp(const Table &p_table, const Cascade::Band &p_band);
+float max_amp(const Table &p_table, const Cascade::Band &p_band, int p_group = 0);
 // The ground's largest |H| (LOD0 voxels): each note's max_amp summed (validate's curves, the compiler's program bounds).
 double ground_reach(const Table &p_table);
 // A note's identity (several notes may share an octave): its octave, its band's seed and its stretch.
@@ -346,21 +381,22 @@ struct NoteId {
     int k = 0;
     uint32_t seed = 0;
     int stretch = 0;
-    bool operator==(const NoteId &p_o) const { return k == p_o.k && seed == p_o.seed && stretch == p_o.stretch; }
+    int group = 0;
+    bool operator==(const NoteId &p_o) const { return k == p_o.k && seed == p_o.seed && stretch == p_o.stretch && group == p_o.group; }
 };
-inline NoteId note_id(const Cascade::Band &p_band) {
-    return NoteId{ p_band.k, p_band.seed, p_band.stretch };
+inline NoteId note_id(const Cascade::Band &p_band, int p_group = 0) {
+    return NoteId{ p_band.k, p_band.seed, p_band.stretch, p_group };
 }
 inline NoteId note_id(const Amp &p_amp) {
-    return NoteId{ p_amp.k, p_amp.seed, p_amp.stretch };
+    return NoteId{ p_amp.k, p_amp.seed, p_amp.stretch, p_amp.group };
 }
-// Biome p_biome's entry of the note p_band (its octave, seed and stretch), or null.
-const Amp *find_amp(const Biome &p_biome, const Cascade::Band &p_band);
-// Whether p_amp is the entry of the note p_band.
-bool plays(const Amp &p_amp, const Cascade::Band &p_band);
-// The shape biome p_biome gives the note p_band: its entry's, else plain. What the modulation inserts and max_amp
-// bounds.
-Shape band_shape(const Biome &p_biome, const Cascade::Band &p_band);
+// Biome p_biome's entry of the note p_band of cascade group p_group (0 the ground; a sub-mix field's), or null.
+const Amp *find_amp(const Biome &p_biome, const Cascade::Band &p_band, int p_group = 0);
+// Whether p_amp is the entry of the note p_band of group p_group.
+bool plays(const Amp &p_amp, const Cascade::Band &p_band, int p_group = 0);
+// The shape biome p_biome gives the note p_band of group p_group: its entry's, else plain. What the modulation inserts
+// and max_amp bounds.
+Shape band_shape(const Biome &p_biome, const Cascade::Band &p_band, int p_group = 0);
 // The skirt's band step at LOD p_lod (LOD0 voxels) with the biomes' curves, from the cascade's p_ground_amp: the ground
 // h + sum_b w_b C_b(h) moves by (1 + max |C_b'|) times h's step, plus each weight's change times |C_b|'s bound: a
 // weight moves by at most BLEND_SLOPE times the kernels' sum of KERNEL_SLOPE |1 / span| times their fields' steps.
@@ -393,7 +429,8 @@ void state(const Table &p_table, const float p_slots[Cascade::SLOTS], State &r_s
 // The carry groups of a table's sample terms, the first of Modulation's carry (the bands' amplitudes follow): derived on
 // a run's level above its last (Cascade::Modulation::derive) and read by its samples. weight[b]: biome b's weight if it
 // has a sample program; pick: the biome (its index in the value, copied from the floor parent, not interpolated);
-// field[f]: field f's value if a program reads it. -1: none.
+// field[f]: field f's value if a program reads it. -1: none. A generic table carries every biome's weight and every
+// field (in order: weight[b] = b), whatever its programs.
 struct SampleCarry {
     int weight[MAX_BIOMES];
     int pick = -1;
@@ -405,12 +442,14 @@ SampleCarry sample_carry(const Table &p_table);
 ov::str carried_glsl(const Cascade::Spec &p_spec, const ov::str &p_ch, int p_c);
 
 // The ground at a sample: the cascade's ground channels H of p_slots (a point's slots), then H + sum_b w_b D_b(H) over
-// the biomes with a sample program, w_b carried (SampleCarry). Without programs, the cascade's channels, bit for bit.
-Float4 ground_value(const Table &p_table, const float p_slots[Cascade::SLOTS]);
-// The same with the table's sample_carry given (per sample: computed once at configure).
-Float4 ground_value(const Table &p_table, const SampleCarry &p_carry, const float p_slots[Cascade::SLOTS]);
-// The same in GLSL: `vec4 climate_ground(Ch ch)` returning (value, d/dx, d/dy, d/dz) like the cascade's c0, after the
-// shared helpers (splices_helpers is true with ground terms), ch in p_combined's GPU layout.
+// the biomes with a sample program, w_b carried (p_carry, the table's sample_carry), p_up the sample's UP (up_value).
+// Without programs, the cascade's channels, bit for bit.
+Float4 ground_value(const Table &p_table, const SampleCarry &p_carry, const float p_slots[Cascade::SLOTS], const Float4 &p_up);
+// SampleOp::UP at a sample of LOD p_lod from the base's register there (BaseSurface::at: in voxels of the LOD), in LOD0
+// voxels: exact (a power of two).
+Float4 up_value(const Float4 &p_base, int p_lod);
+// The same in GLSL: `vec4 climate_ground(Ch ch, WorldPos p, int lod)` returning (value, d/dx, d/dy, d/dz) like the
+// cascade's c0, after the shared helpers (spliced with ground terms) and base_at, ch in p_combined's GPU layout.
 ov::str ground_glsl(const Table &p_table, const Cascade::Spec &p_combined, Cascade::ShaderParams &r_params);
 
 // The biome with the largest weight p_w at lattice point p_p of Λ_m; among equal weights (same bits), the
@@ -429,19 +468,21 @@ ov::Color srgb_to_linear(uint32_t p_rgb);
 Material::Params biome_material(const Biome &p_biome);
 
 // The carried pick in GLSL, bit for bit: `uint climate_biome(Ch ch)`, ch the channels of a run's last level in
-// p_combined's GPU layout. The derive's pick statements (on its w<b>, at point p of Λ_m) are pick_statements_glsl,
+// p_combined's GPU layout. The derive's pick statements (on its w[b], at point p of Λ_m) are pick_statements_glsl,
 // assigning `float <p_var>`.
 ov::str pick_glsl(const Table &p_table, const Cascade::Spec &p_combined);
 ov::str pick_statements_glsl(const Table &p_table, const ov::str &p_var);
-// The pieces both generated functions share (climate_glsl.cpp): the dual-number helpers (cl_flush, cl_mul, cl_sub,
-// cl_edge), and apply_terms then weights as statements defining f<i> (the fields) and w<b> (the weights) from the channels
-// of `Ch pre` (p_spec's GPU layout).
-ov::str glsl_helpers();
+// A generic text's lists (Table::generic: its numbers and their counts are data): p_lists[i]'s records, p_stride floats
+// each, into r_params after a directory of their offsets, each list its record count then its records; the
+// directory's index. list_loop: statements looping over list p_i (an int expression), p_body run with `int r` at each
+// record.
+int64_t list_table(const std::vector<std::vector<float>> &p_lists, int p_stride, Cascade::ShaderParams &r_params);
+ov::str list_loop(int64_t p_dir, const ov::str &p_i, int p_stride, const ov::str &p_body);
+// apply_terms then weights as statements defining `vec4 g0`, `vec4 f[]` (the fields) and `vec4 w[]` (the weights) from
+// the channels of `Ch pre` (p_spec's GPU layout); a generic table's terms and axes read from r_params at run time.
 ov::str glsl_weights(const Table &p_table, const Cascade::Spec &p_spec, Cascade::ShaderParams &r_params);
-// Whether the level shader splices the helpers once, up front (shared_helpers_glsl), for every generated function: with a
-// shaped modulation or ground terms. Else each generator brings glsl_helpers as before them (the plain text).
-bool splices_helpers(const Table &p_table, const Cascade::Spec &p_combined);
-// glsl_helpers plus cl_add and cl_scale (Cascade::dadd, dscale).
+// The dual-number helpers (cl_flush, cl_mul, cl_sub, cl_fill, cl_axis, cl_rcp, cl_add, cl_scale: Climate's and Cascade's
+// dflush, dmul, dsub, dadd, dscale).
 ov::str shared_helpers_glsl();
 
 } // namespace Climate

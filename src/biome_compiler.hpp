@@ -40,9 +40,11 @@ struct GraphRow {
     float gain = 0.0f;
     float warp = 0.0f; // LOD0 voxels per unit of the warp fields
     int warp_fields[3] = { -1, -1, -1 };
+    int channel = 0; // 0 the ground; c >= 1 the biome's sub-mix c (its program reads it as FIELD -c until compile)
 };
 
-// A biome's graph as the compiler reads it: its mix rows (the curve and the look are the Biome's own).
+// A biome's graph as the compiler reads it: its rows, the ground's and its sub-mixes' (the relaxer's, climate_parse.cpp;
+// its program and look are the Biome's own).
 struct BiomeGraph {
     std::vector<GraphRow> rows;
 };

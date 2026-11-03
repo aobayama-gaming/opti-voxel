@@ -138,7 +138,7 @@ WorldPos warped(const WorldPos &p_pos, const ExactNoise::Float4 p_warp[3]) {
 }
 
 // A modulated band's 4 channels (BandMod p_mod, Modulation), p_slope = 2^-shift. The plain term in the order of the
-// GPU's insert_band_mod: value n.w A, slope n.s (A p_slope) + n.w dA; the shaped terms (insert_band_shaped) added to it
+// GPU's insert_band_shaped: value n.w A, slope n.s (A p_slope) + n.w dA; then its shaped terms, added to it
 // as flushed dual products, and r_state (MOD_STATE) the state's new channels.
 void modulated_channels(const Spec &p_spec, const Band &p_band, const BandMod &p_mod, float p_slope, const Vector3i64 &p_p, float r_o[4],
         ExactNoise::Float4 *r_state) {
@@ -455,6 +455,9 @@ void Level::channels_at(const Vector3i64 &p_p, float r_ch[CHANNELS]) const {
 }
 
 bool Spec::stretched(int p_group) const {
+    if (generic && p_group <= 0 && !base.curved()) {
+        return true; // an unstretched band's base_stretched is the point itself
+    }
     for (int g = 0; g < group_count(); g++) {
         if (p_group >= 0 && g != p_group) {
             continue;
@@ -506,7 +509,7 @@ int Spec::max_level_notes() const {
             n = std::max(n, ++count[m]);
         }
     }
-    return n;
+    return std::max(n, level_notes_cap);
 }
 
 int Spec::run_top(int p_lod, bool p_all_fields) const {

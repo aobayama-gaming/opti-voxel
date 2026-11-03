@@ -1,6 +1,7 @@
 #include "biome_compiler.hpp"
 #include "climate.hpp"
 
+#include "ov/containers.hpp"
 #include "ov/files.hpp"
 #include "ov/format.hpp"
 #include "ov/json.hpp"
@@ -56,19 +57,25 @@ namespace Climate {
 //              mixes it, the same noise at any LOD count. The ground is a 3D noise whose vertical slope is as large as
 //              its horizontal one: past dh/dy = 1 it folds into overhangs; stretched octaves keep it a height field
 //              where they dominate.
-//     "warp":  "in": a note, "fields": ["wx", "wy", "wz"], "amount_m": 80: the note read displaced by amount_m times
+//     "warp":  "in": notes (a note, a mix of them, their shapes), "fields": ["wx", "wy", "wz"], "amount_m": 80: the note read displaced by amount_m times
 //              the three fields' values (libnoise's turbulence).
 //     "shape": "in", "shape": "plain" | "billow" | "ridged" | "square", "scale": a, "offset": o (both optional): a n + o,
 //              2 |a n| - 1 + o, (o - |a n|)^2 (o default 1), (a n)^2 + o; or "coeffs": [c1, cn, cabs, csq] (Shape). A
 //              band inserts its shape without its mean; |n| is smoothed below the lattice's resolution (Cascade::smooth_abs).
+//              Past a note's chain (a second shape, a mix of several notes, a node past the notes) it shapes their sum at
+//              the samples, its constant term counting (SampleOp::SHAPE).
 //     "multifractal": "in", "gain": 2: the octave weighted by clamp(gain (1 - c), 0, 1), c the multifractal state's
 //              complement (the previous multifractal octave's weighted signal: Musgrave's ridged multifractal with gain
 //              2 and the ridged shape, hybrid with 1 and plain + offset).
-//     "mix":   "rows": [ { "in": id, "x": 1.2 (volume, default 1) } ]: the rows' sum, each row a note through a warp, a
-//              shape and a multifractal (each optional, in that order).
+//     "mix":   "rows": [ { "in": id, "x": 1.2 (volume, default 1) } ]: the rows' sum, each row any node.
 //     "curve": "in", "points": [[h, R], ...] (h increasing, metres): the ground height h becomes R(h) where the biome's
 //              weight is 1 (R - h through libnoise's cubic, constant past the ends; Biome).
-//     "output": "height": a mix, a curve of one, or one row.
+//     "up":    the sample's height above the base (metres as LOD0 voxels): a cave is "smin" (k_m) of the mix and
+//              up - C, C a carve density (> 0 in the air it adds, its band's tent built from the depth mix - up).
+//     "output": "height": any node.
+//     Any node may read any other (no loop): the relaxer (expr) decides where each plays, per octave in the cascade or
+//     at the samples, notes read past a node at the samples becoming a sub-mix field (docs/climate.md, "Parse, compile
+//     and validate").
 //     The biome compiler (biome_compiler.hpp) keeps each note once whatever biome mixes it. Octave k reads the weights
 //     from the fields' octaves coarser than k only (Cascade::Modulation).
 const std::vector<GraphKind> &graph_kinds() {
@@ -88,6 +95,7 @@ const std::vector<GraphKind> &graph_kinds() {
         { "smin", { "a", "b" }, { { "k_m", "number", true, NAN, "" } } },
         { "smax", { "a", "b" }, { { "k_m", "number", true, NAN, "" } } },
         { "curve", { "in" }, { { "points", "points", true, NAN, "" } } },
+        { "up", {}, {} },
         { "output", { "height" }, {} },
     };
     return KINDS;
@@ -487,108 +495,193 @@ private:
 
     static bool is_kind(const ov::Value *p_n, const char *p_kind) { return p_n != nullptr && (*p_n)["kind"].as_str() == p_kind; }
 
-    // A mix row from its last node p_n back to its note: a multifractal, a shape and a warp (each optional, in that
-    // order), then the note.
-    void row(const std::vector<ov::Value> &p_nodes, const ov::Value *p_n, const ov::str &p_where, GraphRow &r_row) {
-        const ov::Value *n = p_n;
-        if (is_kind(n, "multifractal") && node_keys(*n, p_where, "multifractal")) {
-            r_row.gain = float(number(*n, "gain", p_where));
-            n = input(p_nodes, *n, "in", p_where);
-        }
-        if (is_kind(n, "shape") && node_keys(*n, p_where, "shape")) {
-            r_row.has_shape = shape(*n, p_where, r_row.gain > 0.0f, r_row.shape);
-            n = input(p_nodes, *n, "in", p_where);
-        }
-        if (is_kind(n, "warp") && node_keys(*n, p_where, "warp")) {
-            r_row.warp = float(number(*n, "amount_m", p_where) / ground.voxel_size);
-            const ov::Value wf = array(*n, "fields", p_where);
-            if (wf.size() != 3) {
-                fail(p_where, "a warp's 'fields' names 3 fields (x, y, z).");
-            }
-            for (int64_t i = 0; i < int64_t(wf.size()) && i < 3 && error.empty(); i++) {
-                r_row.warp_fields[i] = source(wf[i].is_string() ? wf[i].as_str() : ov::str(), p_where, false, int(table.fields.size()), "a field");
-            }
-            n = input(p_nodes, *n, "in", p_where);
-        }
-        if (!error.empty()) {
-            return;
-        }
-        if (!is_kind(n, "note")) {
-            fail(p_where, "a mix row is a note through a warp, a shape and a multifractal (each optional, in that order).");
-            return;
-        }
-        note(*n, p_where + ov::str(" note '") + (*n)["id"].as_str() + ov::str("'"), r_row.note);
-    }
+    // The relaxer (docs/climate.md, "Biome graphs"): a graph's node is either notes the cascade inserts (rows, each a
+    // note's per-octave chain at a volume: their sum) or a register of the biome's sample program. A note's chain plays
+    // per octave while it reads note -> warp -> shape -> multifractal (each optional, at most once; a warp anywhere in it:
+    // it only moves where the note is read); a node past that, or any node past a mix, reads their sum at the samples
+    // (the notes lifted to a register: the ground's or a sub-mix's, graph()). Mixes are linear: a mix of mixes is one.
+    struct Value {
+        std::vector<GraphRow> rows;
+        int reg = -1;
+    };
 
-    static bool is_spine(const ov::Value *p_n) {
-        return is_kind(p_n, "mix") || is_kind(p_n, "note") || is_kind(p_n, "warp") || is_kind(p_n, "shape") || is_kind(p_n, "multifractal");
-    }
-
-    // The notes' spine p_n (a mix of rows, or one row) into r_g's rows.
-    void spine(const std::vector<ov::Value> &p_nodes, const ov::Value *p_n, const ov::str &p_where, BiomeGraph &r_g) {
-        if (!is_kind(p_n, "mix")) {
-            r_g.rows.emplace_back();
-            row(p_nodes, p_n, p_where, r_g.rows.back());
-            return;
-        }
-        const ov::str mix_where = p_where + ov::str(" mix '") + (*p_n)["id"].as_str() + ov::str("'");
-        if (!node_keys(*p_n, mix_where, "mix")) {
-            return;
-        }
-        const ov::Value rows = array(*p_n, "rows", mix_where);
-        for (int64_t i = 0; i < int64_t(rows.size()) && error.empty(); i++) {
-            const ov::str where = mix_where + ov::format(" row %d", i);
-            const ov::Value r = dict(rows[i], where);
-            if (!keys(r, where, { "in", "x" })) {
-                return;
-            }
-            r_g.rows.emplace_back();
-            r_g.rows.back().x = float(number(r, "x", where, 1.0));
-            row(p_nodes, input(p_nodes, r, "in", where), where, r_g.rows.back());
-        }
-    }
-
-    // How a graph is read back from its output: the notes' spine (one per biome), the program's GROUND register.
+    // How a graph is read back from its output: each node's value once (by id; a multifractal's shape apart: it reads
+    // the state), the note sums lifted to registers (their rows and the instruction graph() makes the ground's or a
+    // sub-mix's read), the depth (a loop).
     struct Reading {
-        ov::str spine;
-        int ground = -1;
+        ov::HashMap<ov::str, Value, ov::DefaultHash> memo;
+        std::vector<std::pair<std::vector<GraphRow>, int>> lifts;
         int depth = 0;
     };
 
-    // Node p_n's register in r_b's program (SampleProgram): the notes' spine is GROUND (its rows into r_g), the other
-    // kinds their ops on what they read: "constant" value_m, "field" (a climate field's value), "add" / "subtract" /
-    // "multiply" / "min" / "max" (a, b), "smin" / "smax" (a, b, k_m), "curve" (in, points).
-    int expr(const std::vector<ov::Value> &p_nodes, const ov::Value *p_n, const ov::str &p_where, Biome &r_b, BiomeGraph &r_g, Reading &r_read) {
+    // Whether p_v is one note's chain a per-octave node may extend (at volume 1, no multifractal yet).
+    static bool per_octave(const Value &p_v) {
+        return p_v.reg < 0 && p_v.rows.size() == 1 && p_v.rows[0].x == 1.0f && p_v.rows[0].gain == 0.0f;
+    }
+
+    int emit(Biome &r_b, SampleOp p_op, int p_a = -1, int p_b = -1, float p_value = 0.0f, int p_index = 0) {
+        r_b.program.code.push_back(SampleInstr{ p_op, p_a, p_b, p_value, p_index });
+        return int(r_b.program.code.size()) - 1;
+    }
+
+    // r_v as a register: its own, or its notes lifted (a placeholder graph() makes the ground's or a sub-mix's read).
+    int lift(Value &r_v, Biome &r_b, Reading &r_read) {
+        if (r_v.reg < 0 && error.empty()) {
+            r_read.lifts.emplace_back(r_v.rows, int(r_b.program.code.size()));
+            r_v.reg = emit(r_b, SampleOp::FIELD);
+        }
+        return r_v.reg;
+    }
+
+    // Node p_n's register (its notes lifted once, whatever reads it).
+    int reg(const std::vector<ov::Value> &p_nodes, const ov::Value *p_n, const ov::str &p_where, Biome &r_b, Reading &r_read) {
+        Value v = expr(p_nodes, p_n, p_where, r_b, r_read);
+        if (v.reg >= 0 || !error.empty()) {
+            return v.reg;
+        }
+        const int r = lift(v, r_b, r_read);
+        if (Value *m = r_read.memo.getptr((*p_n)["id"].as_str())) {
+            m->reg = r;
+        }
+        return r;
+    }
+
+    // Node p_n's value; p_state: a multifractal reads it (its shape's constant term counts).
+    Value expr(const std::vector<ov::Value> &p_nodes, const ov::Value *p_n, const ov::str &p_where, Biome &r_b, Reading &r_read, bool p_state = false) {
         if (!error.empty() || p_n == nullptr) {
-            return -1;
+            return Value();
         }
-        SampleProgram &pr = r_b.program;
         const ov::str id = (*p_n)["id"].as_str();
-        const ov::str kind = (*p_n)["kind"].as_str();
-        const ov::str where = p_where + ov::str(" node '") + id + ov::str("'");
-        auto emit = [&](SampleOp p_op, int p_a = -1, int p_b = -1, float p_value = 0.0f, int p_index = 0) {
-            pr.code.push_back(SampleInstr{ p_op, p_a, p_b, p_value, p_index });
-            return int(pr.code.size()) - 1;
-        };
-        if (++r_read.depth > 4096) {
-            fail(where, "the graph loops.");
-            return -1;
+        const ov::str key = p_state ? id + ov::str("|state") : id;
+        if (const Value *m = r_read.memo.getptr(key)) {
+            return *m;
         }
-        if (is_spine(p_n)) {
-            if (r_read.spine.empty()) {
-                r_read.spine = id;
-                spine(p_nodes, p_n, p_where, r_g);
-                r_read.ground = emit(SampleOp::GROUND);
-            } else if (r_read.spine != id) {
-                fail(where, "a biome mixes its notes once: one mix (or one row) that its other nodes read.");
+        if (++r_read.depth > 4096) {
+            fail(p_where + ov::str(" node '") + id + ov::str("'"), "the graph loops.");
+            return Value();
+        }
+        const Value v = node_value(p_nodes, p_n, p_where, r_b, r_read, p_state);
+        r_read.memo.insert(key, v);
+        return v;
+    }
+
+    // A warp, a shape or a multifractal (p_kind): the note chain it extends per octave, or a shape at the samples.
+    Value chain_value(const ov::str &kind, const std::vector<ov::Value> &p_nodes, const ov::Value *p_n, const ov::str &p_where, const ov::str &where, Biome &r_b,
+            Reading &r_read, bool p_state) {
+        Value out;
+        if (kind == "warp") {
+            out = expr(p_nodes, input(p_nodes, *p_n, "in", where), p_where, r_b, r_read, p_state);
+            if (out.reg >= 0) {
+                fail(where, "a warp moves where notes are read: its input is notes (a note, a mix of them, their shapes), not a node past them.");
+                return out;
             }
-            return r_read.ground;
+            const float amount = float(number(*p_n, "amount_m", where) / ground.voxel_size);
+            const ov::Value wf = array(*p_n, "fields", where);
+            if (wf.size() != 3) {
+                fail(where, "a warp's 'fields' names 3 fields (x, y, z).");
+            }
+            int fields[3] = { -1, -1, -1 };
+            for (int64_t i = 0; i < int64_t(wf.size()) && i < 3 && error.empty(); i++) {
+                fields[i] = source(wf[i].is_string() ? wf[i].as_str() : ov::str(), where, false, int(table.fields.size()), "a field");
+            }
+            for (GraphRow &row : out.rows) {
+                if (row.warp_fields[0] >= 0) {
+                    fail(where, "a note reads through one warp.");
+                }
+                row.warp = amount;
+                std::copy(std::begin(fields), std::end(fields), std::begin(row.warp_fields));
+            }
+            return out;
+        }
+        if (kind == "shape") {
+            out = expr(p_nodes, input(p_nodes, *p_n, "in", where), p_where, r_b, r_read);
+            if (per_octave(out) && !out.rows[0].has_shape) {
+                out.rows[0].has_shape = shape(*p_n, where, p_state, out.rows[0].shape);
+                return out;
+            }
+            Shape s;
+            shape(*p_n, where, true, s);
+            const int a = reg(p_nodes, input(p_nodes, *p_n, "in", where), p_where, r_b, r_read);
+            r_b.program.shapes.push_back(s);
+            return Value{ {}, error.empty() ? emit(r_b, SampleOp::SHAPE, a, -1, 0.0f, int(r_b.program.shapes.size()) - 1) : -1 };
+        }
+        if (kind == "multifractal") {
+            const float gain = float(number(*p_n, "gain", where));
+            out = expr(p_nodes, input(p_nodes, *p_n, "in", where), p_where, r_b, r_read, gain > 0.0f);
+            if (error.empty() && !per_octave(out)) {
+                fail(where, "a multifractal weighs one note's octaves by the previous one's: its input is a note through a warp and a shape.");
+            }
+            if (error.empty()) {
+                out.rows[0].gain = gain;
+            }
+            return out;
+        }
+        return out;
+    }
+
+    // A mix: its rows' notes at their volumes, the rows past the notes summed at the samples.
+    Value mix_value(const std::vector<ov::Value> &p_nodes, const ov::Value *p_n, const ov::str &p_where, const ov::str &where, Biome &r_b, Reading &r_read) {
+        Value out;
+        const ov::Value rows = array(*p_n, "rows", where);
+        std::vector<std::pair<int, float>> regs;
+        for (int64_t i = 0; i < int64_t(rows.size()) && error.empty(); i++) {
+            const ov::str row_where = where + ov::format(" row %d", i);
+            const ov::Value r = dict(rows[i], row_where);
+            if (!keys(r, row_where, { "in", "x" })) {
+                return out;
+            }
+            const float x = float(number(r, "x", row_where, 1.0));
+            const Value v = expr(p_nodes, input(p_nodes, r, "in", row_where), p_where, r_b, r_read);
+            if (v.reg >= 0) {
+                regs.emplace_back(v.reg, x);
+                continue;
+            }
+            for (GraphRow row : v.rows) {
+                row.x = row.x * x;
+                out.rows.push_back(row);
+            }
+        }
+        if (regs.empty() || !error.empty()) {
+            return out;
+        }
+        int acc = out.rows.empty() ? -1 : lift(out, r_b, r_read);
+        for (const auto &[r, x] : regs) { // at its volume whatever its value: a volume edit keeps the program's structure
+            const int t = emit(r_b, SampleOp::MUL, emit(r_b, SampleOp::CONST, -1, -1, x), r);
+            acc = acc < 0 ? t : emit(r_b, SampleOp::ADD, acc, t);
+        }
+        return Value{ {}, acc };
+    }
+
+    // expr's kinds: "note" (its rows), "warp" / "shape" / "multifractal" (the chain, or a shape at the samples), "mix"
+    // (rows, or a sum at the samples), and the samples' ops on registers: "constant" value_m, "field" (a climate
+    // field's value), "add" / "subtract" / "multiply" / "min" / "max" (a, b), "smin" / "smax" (a, b, k_m), "curve" (in,
+    // points), "up".
+    Value node_value(const std::vector<ov::Value> &p_nodes, const ov::Value *p_n, const ov::str &p_where, Biome &r_b, Reading &r_read, bool p_state) {
+        const ov::str kind = (*p_n)["kind"].as_str();
+        const ov::str where = p_where + ov::str(" node '") + (*p_n)["id"].as_str() + ov::str("'");
+        Value out;
+        if (graph_kind(kind) != nullptr && kind != "output" && !node_keys(*p_n, where, kind.c_str())) {
+            return out;
+        }
+        if (kind == "note") {
+            out.rows.emplace_back();
+            note(*p_n, where, out.rows.back().note);
+            return out;
+        }
+        if (kind == "warp" || kind == "shape" || kind == "multifractal") {
+            return chain_value(kind, p_nodes, p_n, p_where, where, r_b, r_read, p_state);
+        }
+        if (kind == "mix") {
+            return mix_value(p_nodes, p_n, p_where, where, r_b, r_read);
         }
         if (kind == "constant") {
-            return node_keys(*p_n, where, "constant") ? emit(SampleOp::CONST, -1, -1, float(number(*p_n, "value_m", where) / ground.voxel_size)) : -1;
+            return Value{ {}, emit(r_b, SampleOp::CONST, -1, -1, float(number(*p_n, "value_m", where) / ground.voxel_size)) };
+        }
+        if (kind == "up") {
+            return Value{ {}, emit(r_b, SampleOp::UP, -1, -1) };
         }
         if (kind == "field") {
-            return node_keys(*p_n, where, "field") ? emit(SampleOp::FIELD, -1, -1, 0.0f, source(text(*p_n, "field", where), where, false, int(table.fields.size()), "a field")) : -1;
+            return Value{ {}, emit(r_b, SampleOp::FIELD, -1, -1, 0.0f, source(text(*p_n, "field", where), where, false, int(table.fields.size()), "a field")) };
         }
         static const std::pair<const char *, SampleOp> BINARY[] = { { "add", SampleOp::ADD }, { "subtract", SampleOp::SUB }, { "multiply", SampleOp::MUL }, { "min", SampleOp::MIN },
             { "max", SampleOp::MAX }, { "smin", SampleOp::SMIN }, { "smax", SampleOp::SMAX } };
@@ -597,30 +690,38 @@ private:
                 continue;
             }
             const bool smooth = op == SampleOp::SMIN || op == SampleOp::SMAX;
-            if (!node_keys(*p_n, where, name)) {
-                return -1;
-            }
             const float k = smooth ? float(number(*p_n, "k_m", where) / ground.voxel_size) : 0.0f;
-            const int a = expr(p_nodes, input(p_nodes, *p_n, "a", where), p_where, r_b, r_g, r_read);
-            const int b = expr(p_nodes, input(p_nodes, *p_n, "b", where), p_where, r_b, r_g, r_read);
-            return error.empty() ? emit(op, a, b, k) : -1;
+            const int a = reg(p_nodes, input(p_nodes, *p_n, "a", where), p_where, r_b, r_read);
+            const int b = reg(p_nodes, input(p_nodes, *p_n, "b", where), p_where, r_b, r_read);
+            return Value{ {}, error.empty() ? emit(r_b, op, a, b, k) : -1 };
         }
         if (kind == "curve") {
-            if (!node_keys(*p_n, where, "curve")) {
-                return -1;
-            }
-            const int a = expr(p_nodes, input(p_nodes, *p_n, "in", where), p_where, r_b, r_g, r_read);
+            const int a = reg(p_nodes, input(p_nodes, *p_n, "in", where), p_where, r_b, r_read);
             Curve c;
             curve(*p_n, where, c);
-            pr.curves.push_back(c);
-            return error.empty() ? emit(SampleOp::CURVE, a, -1, 0.0f, int(pr.curves.size()) - 1) : -1;
+            r_b.program.curves.push_back(c);
+            return Value{ {}, error.empty() ? emit(r_b, SampleOp::CURVE, a, -1, 0.0f, int(r_b.program.curves.size()) - 1) : -1 };
         }
-        fail(where, "'" + kind + ov::str("' is not a node kind (note, warp, shape, multifractal, mix, constant, field, add, subtract, multiply, min, max, smin, smax, curve, output)."));
-        return -1;
+        fail(where, "'" + kind + ov::str("' is not a node kind (note, warp, shape, multifractal, mix, constant, field, add, subtract, multiply, min, max, smin, smax, curve, up, output)."));
+        return out;
     }
 
-    // A biome's "graph": its nodes by id, read back from the output's height (expr): the notes' spine into r_g, the rest
-    // into the biome's sample program (none when the height is the spine itself).
+    // A lift's rank as the ground (graph(): the largest): its coarsest octave, then its octave count. Its structure, not
+    // its values: an edit of a volume or an amplitude never makes another lift the ground.
+    std::pair<int, int> rank(const std::vector<GraphRow> &p_rows) const {
+        std::pair<int, int> r{ -1, 0 };
+        for (const GraphRow &row : p_rows) {
+            const std::vector<int> ks = note_octaves(row.note, ground);
+            r.first = ks.empty() ? r.first : ov::max(r.first, ks.front());
+            r.second += int(ks.size());
+        }
+        return r;
+    }
+
+    // A biome's "graph": its nodes by id, read back from the output's height (expr) into the biome's sample program
+    // and r_g's rows: the lifted notes of the largest rank are the ground (GROUND, rows of channel 0; the first of
+    // equals), the others the biome's sub-mixes 1, 2, ... (FIELD -c until the compiler gives each its field). A program
+    // that is the ground alone is none.
     void graph(const ov::Value &p_d, const ov::str &p_where, Biome &r_b, BiomeGraph &r_g) {
         if (!keys(p_d, p_where, { "nodes" })) {
             return;
@@ -655,7 +756,25 @@ private:
             return;
         }
         Reading read;
-        expr(nodes, input(nodes, *out, "height", p_where), p_where, r_b, r_g, read);
+        reg(nodes, input(nodes, *out, "height", p_where), p_where, r_b, read);
+        if (!error.empty()) {
+            return;
+        }
+        size_t top = 0;
+        for (size_t i = 1; i < read.lifts.size(); i++) {
+            top = rank(read.lifts[i].first) > rank(read.lifts[top].first) ? i : top;
+        }
+        int channel = 0;
+        for (size_t i = 0; i < read.lifts.size(); i++) {
+            SampleInstr &in = r_b.program.code[size_t(read.lifts[i].second)];
+            const int c = i == top ? 0 : ++channel;
+            in.op = c == 0 ? SampleOp::GROUND : SampleOp::FIELD;
+            in.index = -c;
+            for (GraphRow row : read.lifts[i].first) {
+                row.channel = c;
+                r_g.rows.push_back(row);
+            }
+        }
         if (r_b.program.code.size() == 1 && r_b.program.code[0].op == SampleOp::GROUND) {
             r_b.program = SampleProgram(); // the notes alone: no term at the samples
         }

@@ -141,6 +141,8 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_discovery_cull_mode"), &VoxelTerrain::get_discovery_cull_mode);
     ClassDB::bind_method(D_METHOD("set_discovery_cache", "enable"), &VoxelTerrain::set_discovery_cache);
     ClassDB::bind_method(D_METHOD("get_discovery_cache"), &VoxelTerrain::get_discovery_cache);
+    ClassDB::bind_method(D_METHOD("set_specialize_shaders", "enable"), &VoxelTerrain::set_specialize_shaders);
+    ClassDB::bind_method(D_METHOD("get_specialize_shaders"), &VoxelTerrain::get_specialize_shaders);
     ClassDB::bind_method(D_METHOD("set_destroy_verify", "enable"), &VoxelTerrain::set_destroy_verify);
     ClassDB::bind_method(D_METHOD("get_destroy_verify"), &VoxelTerrain::get_destroy_verify);
     ClassDB::bind_method(D_METHOD("set_discovery_verify", "enable"), &VoxelTerrain::set_discovery_verify);
@@ -190,6 +192,7 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "dual_contouring"), "set_dual_contouring", "get_dual_contouring");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "discovery_cull_mode", PROPERTY_HINT_ENUM, "None:0,Legacy:1"), "set_discovery_cull_mode", "get_discovery_cull_mode");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "discovery_cache"), "set_discovery_cache", "get_discovery_cache");
+    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "specialize_shaders"), "set_specialize_shaders", "get_specialize_shaders");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "discoverer_mode", PROPERTY_HINT_ENUM, "Auto:-1,CPU:0,GPU:1"), "set_discoverer_mode", "get_discoverer_mode");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "walk_gpu"), "set_walk_gpu", "get_walk_gpu");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "walk_verify"), "set_walk_verify", "get_walk_verify");
@@ -294,6 +297,15 @@ void VoxelTerrain::set_discovery_cache(bool p_enable) {
 
 bool VoxelTerrain::get_discovery_cache() const {
     return cfg().discovery_cache;
+}
+
+// Read on each start (restart_world too): the climate's shaders specialised to its values, or generic (SDFCascade::specialize).
+void VoxelTerrain::set_specialize_shaders(bool p_enable) {
+    cfg().specialize_shaders = p_enable;
+}
+
+bool VoxelTerrain::get_specialize_shaders() const {
+    return cfg().specialize_shaders;
 }
 
 void VoxelTerrain::set_discovery_verify(bool p_enable) {
