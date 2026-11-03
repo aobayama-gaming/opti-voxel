@@ -284,10 +284,10 @@ computes no terrain and has no node kind the engine hasn't.
   game player's spawn rule) after each move and each restart, the camera kept 0.3 m above the ground; *Noclip* flies it
   where the camera looks, through the ground. Right or middle drag orbits, the wheel zooms down to 2.5 m. *First person* puts the camera at
   the player's eyes (1.6 m, the capsule hidden): right drag looks round, left drag moves 5 cm a pixel. WASD (the view
-  focused: a click) moves along the ground, or where the camera looks in noclip, Space and Shift up and down; 8 m/s in
-  first person, the orbit's distance a second otherwise. A crosshair at the view's centre reads the distance from the
-  camera to the terrain under it (sphere tracing on `get_sdf_at`, steps of 0.7 of it, a crossing bisected; 10 times a
-  second, up to 60 km). It loads round the orbit's pivot
+  focused: a click) moves along the ground, or where the camera looks in noclip, Space and Shift up and down; 6 m/s in
+  first person (a game character's run), the orbit's distance a second otherwise. A crosshair at the view's centre
+  reads the distance from the camera to the terrain under it and the time to run it at 6 m/s (sphere tracing on
+  `get_sdf_at`, steps of 0.7 of it, a crossing bisected; 10 times a second, up to 60 km). It loads round the orbit's pivot
   (`set_lod_centre`), from the LOD its distance needs there (`lod_view_min`). It loads LODs 0-13 only
   (`lod_view_max`: 12.8 km chunks, ~54 km round the pivot; a reload 116 ms p50 at 13, 100 at 10). Its pixel error is the game's (4: at 12 each LOD seam showed as a ledge, for a restart only
   ~10% shorter), its world's clouds, instances and features are off (the clouds' shadows hid the relief over kilometres;

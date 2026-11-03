@@ -43,8 +43,9 @@ const VIEW_FAR := 60000.0
 const AIM_EVERY := 0.1
 const AIM_STEPS := 256
 const AIM_STEP := 0.7
-## WASD in first person (metres a second).
-const KEY_SPEED := 8.0
+## A game character's run (metres a second; Minecraft sprints at 5.6, most action games run at 5-7): WASD in first
+## person, and the aim's distance read as the time to run it.
+const KEY_SPEED := 6.0
 
 var _viewport := SubViewport.new()
 var _held := TextureRect.new()  # the last terrain's frame while the new one loads
@@ -255,7 +256,7 @@ func _process(p_delta: float) -> void:
 		_aim_timer = AIM_EVERY
 		var d := aim_distance()
 		# The crosshair, the distance under it beneath (a second line keeps the "+" on the view's centre).
-		_aim_label.text = "+\n%s" % ("—" if d < 0.0 else ("%.1f m" % d if d < 1000.0 else "%.2f km" % (d / 1000.0)))
+		_aim_label.text = "+\n%s" % ("—" if d < 0.0 else "%s · %s" % [_metres(d), _run_time(d / KEY_SPEED)])
 	if _terrain == null or _restart_usec == 0:
 		return
 	if _terrain.is_load_complete() or Time.get_ticks_usec() - _restart_usec > int(LOAD_WAIT * 1e6):
@@ -296,6 +297,20 @@ func _ground_axes() -> Array[Vector3]:
 	var z := Vector3.RIGHT.cross(_up)
 	z = z.normalized() if z.length() > 1e-3 else Vector3.BACK
 	return [_up.cross(z), z]
+
+
+static func _metres(p_m: float) -> String:
+	return "%.1f m" % p_m if p_m < 1000.0 else "%.2f km" % (p_m / 1000.0)
+
+
+# p_s seconds as a run's time: "12 s", "3 min 20 s", "1 h 05 min".
+static func _run_time(p_s: float) -> String:
+	var s := int(round(p_s))
+	if s < 60:
+		return "%d s run" % s
+	if s < 3600:
+		return "%d min %02d s run" % [s / 60, s % 60]
+	return "%d h %02d min run" % [s / 3600, (s % 3600) / 60]
 
 
 # The distance (metres) from the camera to the terrain at the view's centre, -1 past VIEW_FAR or without a terrain:
