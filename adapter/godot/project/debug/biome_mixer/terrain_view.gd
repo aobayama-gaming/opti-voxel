@@ -33,10 +33,11 @@ const PLAYER_RADIUS := 0.25
 ## The camera's closest orbit (metres from the player's feet) and its least height above the ground.
 const NEAREST := 2.5
 const CAMERA_CLEARANCE := 0.3
-## First person: the eyes' height above the feet (metres), a drag's move in metres per pixel, the far plane (metres).
+## First person: the eyes' height above the feet (metres), a drag's move in metres per pixel.
 const EYE_HEIGHT := 1.6
 const FPV_STEP := 0.05
-const FPV_FAR := 60000.0
+## The nearest far plane (metres): the LODs' reach round the player (LOD_VIEW_MAX, ~54 km), zoomed in or not.
+const VIEW_FAR := 60000.0
 ## WASD in first person (metres a second).
 const KEY_SPEED := 8.0
 
@@ -352,7 +353,7 @@ func _place_camera() -> void:
 		_terrain.set_lod_centre(_target)  # the LOD rings round the pivot, not the camera
 		_terrain.lod_view_min = _terrain.get_lod_at_distance(dist)  # nothing finer than the pivot needs from here
 	# The planes follow the orbit: a world's view is hundreds of km (the terrain loads to the far plane, lod_far_limit).
-	_camera.far = FPV_FAR if fpv else maxf(_dist * 4.0, 2000.0)
+	_camera.far = maxf(_dist * 4.0, VIEW_FAR)
 	_camera.near = clampf(dist * 0.0002, 0.05, 50.0)
 
 
