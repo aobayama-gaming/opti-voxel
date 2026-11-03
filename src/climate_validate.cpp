@@ -55,7 +55,7 @@ ov::str validate_bands(const std::vector<Cascade::Band> &p_bands, const Ground &
 
 ov::str validate_field(const Table &p_table, int p_i, const Ground &p_ground) {
     const Field &f = p_table.fields[size_t(p_i)];
-    if (!f.channel && (!ov::is_valid_ascii_identifier(f.name) || f.name == "ground")) {
+    if (!f.channel && !f.warp && (!ov::is_valid_ascii_identifier(f.name) || f.name == "ground")) {
         return ov::format("climate field %d: the name must be an identifier (letters, digits, _), and 'ground' is reserved.", p_i);
     }
     const ov::str where = "climate field '" + f.name + ov::str("': ");
@@ -88,13 +88,15 @@ ov::str validate_amp(const Table &p_table, const Ground &p_ground, const Amp &p_
     if (!std::isfinite(p_amp.amp) || p_amp.amp < 0.0f) {
         return ov::format("octave k = %d: the amplitude must be >= 0.", p_amp.k);
     }
-    if ((p_amp.gain != 0.0f && !(moderate(p_amp.gain) && p_amp.gain > 0.0f)) ||
-            (p_amp.warp != 0.0f && !(moderate(p_amp.warp) && std::fabs(p_amp.warp) <= Cascade::WARP_LIMIT))) {
-        return ov::format("octave k = %d: multifractal gain or warp out of range.", p_amp.k);
+    if (p_amp.gain != 0.0f && !(moderate(p_amp.gain) && p_amp.gain > 0.0f)) {
+        return ov::format("octave k = %d: multifractal gain out of range.", p_amp.k);
     }
-    for (const int f : p_amp.warp_fields) {
-        if ((p_amp.warp != 0.0f && f < 0) || f >= int(p_table.fields.size())) {
-            return ov::format("octave k = %d: a warp reads 3 fields that exist (warp_fields).", p_amp.k);
+    for (const WarpTerm &w : p_amp.warps) {
+        if (!(moderate(w.scale) && std::fabs(w.scale) <= Cascade::WARP_LIMIT)) {
+            return ov::format("octave k = %d: warp out of range.", p_amp.k);
+        }
+        if (w.field < 0 || w.field + 3 > int(p_table.fields.size())) {
+            return ov::format("octave k = %d: a warp reads 3 fields that exist.", p_amp.k);
         }
     }
     if (p_amp.has_shape) {

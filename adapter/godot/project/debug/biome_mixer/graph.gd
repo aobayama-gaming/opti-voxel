@@ -121,11 +121,6 @@ static func default_value(p_param: Dictionary, p_fields: Array) -> Variant:
 			return 1
 		"field":
 			return names[0] if not names.is_empty() else ""
-		"fields":
-			var three := []
-			for i in 3:
-				three.append(names[mini(i, names.size() - 1)] if not names.is_empty() else "")
-			return three
 		"shape":
 			return p_param.options[0]
 		"coeffs":
@@ -152,7 +147,8 @@ static func add(p_graph: Dictionary, p_kind: String, p_pos: Vector2, p_fields: A
 	return n.id
 
 
-# Nodes out of the graph. What read one reads what it read ("in"), else nothing (a mix row that played it goes).
+# Nodes out of the graph. What read one reads what it read ("in"), else nothing (a mix row that played it goes; a note
+# it warped reads no warp: a note's warp input is a warp node).
 static func delete(p_graph: Dictionary, p_ids: Array) -> void:
 	for id in p_ids:
 		var gone := node(p_graph, id)
@@ -163,7 +159,7 @@ static func delete(p_graph: Dictionary, p_ids: Array) -> void:
 			for port in range(input_count(n) - 1, -1, -1):
 				if input_of(n, port) != id:
 					continue
-				if through != "":
+				if through != "" and input_name(n, port) != "warp":
 					link(p_graph, through, String(n.id), port)
 				else:
 					unlink(p_graph, String(n.id), port)

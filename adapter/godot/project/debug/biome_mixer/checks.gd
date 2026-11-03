@@ -81,16 +81,17 @@ static func whole(p_world: Dictionary) -> Dictionary:
 
 
 # p_world with one biome more, the last (the default): a graph of every kind of node the engine has, wired as it reads
-# them (two notes, a warp, shapes, a multifractal, a mix, then every sample op, a curve, the output).
+# them (notes, one warped by a coarser one, shapes, a multifractal, a mix, then every sample op, a curve, the output).
 static func every_kind(p_world: Dictionary) -> Dictionary:
 	var w: Dictionary = p_world.duplicate(true)
 	var g := {"nodes": []}
 	var f: Array = w.fields
 	var add := func(p_kind: String, p_params: Dictionary) -> String: return Graph.add(g, p_kind, Vector2.ZERO, f, p_params)
-	var n1: String = add.call("note", {"wavelength_m": 409.6, "seed": 1, "amp_m": 20.0})
-	var n2: String = add.call("note", {"from_m": 102.4, "to_m": 1638.4, "seed": 2, "steepness": 0.05, "stretch_y": 2})
-	var wp: String = add.call("warp", {"in": n1, "amount_m": 30.0})
-	var s1: String = add.call("shape", {"in": wp, "shape": "ridged"})
+	var n0: String = add.call("note", {"wavelength_m": 1638.4, "seed": 5, "amp_m": 0.5})
+	var wp: String = add.call("warp", {"in": n0, "amount_m": 30.0})
+	var n1: String = add.call("note", {"wavelength_m": 409.6, "seed": 1, "amp_m": 20.0, "warp": wp})
+	var n2: String = add.call("note", {"wavelength_m": 102.4, "seed": 2, "amp_m": 5.0, "stretch_y": 2})
+	var s1: String = add.call("shape", {"in": n1, "shape": "ridged"})
 	var mf: String = add.call("multifractal", {"in": s1, "gain": 2.0})
 	var s2: String = add.call("shape", {"in": n2, "coeffs": [0.0, 0.0, 1.0, 0.0]})
 	var mix: String = add.call("mix", {"rows": [{"in": mf, "x": 1.0}, {"in": s2, "x": 0.5}]})

@@ -91,7 +91,7 @@ TEST_CASE("WorldFile: world.json finds its engine and climate next to it") {
     CHECK(w.instances.empty()); // every biome lists its own
     const ov::Value &biomes = w.climate_table["biomes"];
     CHECK(biomes[size_t(0)].has("instances"));
-    CHECK(w.climate_table["fields"].size() == 6);
+    CHECK(w.climate_table["fields"].size() == 3); // temperature, humidity, wind: the warps' notes are their own
     CHECK(w.climate_table["biomes"].size() == 8);
     SDFCascade sdf;
     ChunkParam param;

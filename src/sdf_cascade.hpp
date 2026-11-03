@@ -187,7 +187,8 @@ uint cascade_ground_material(Ch ch) {
     // The capacities the climate's generic text has (its spec's), for the next start's caps.
     Climate::Caps generic_caps() const {
         const int channels = int(std::count_if(table.fields.begin(), table.fields.end(), [](const Climate::Field &p_f) { return p_f.channel; }));
-        return Climate::Caps{ spec.max_level_notes(), spec.carry_groups(), channels };
+        const int warps = int(std::count_if(table.fields.begin(), table.fields.end(), [](const Climate::Field &p_f) { return p_f.warp; }));
+        return Climate::Caps{ spec.max_level_notes(), spec.carry_groups(), channels, warps };
     }
     int64_t get_datum_y() const { return base.datum_y(); }
     const BaseSurface &get_base() const override { return base; }

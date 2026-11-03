@@ -15,12 +15,6 @@ using ExactNoise::float_bits;
 
 namespace {
 
-// The template ground's coarsest octave at p_voxel metres (Climate::template_graph's range).
-int template_top(double p_voxel) {
-    const ov::Value graph = Climate::template_graph(p_voxel);
-    return ExactNoise::lattice_k(graph["nodes"][size_t(0)]["to_m"].as_double(), p_voxel);
-}
-
 // Lattice boxes around 0, the 2^32 wrap and +-2^60, both parities, sizes 1 to 32.
 std::vector<Box> test_boxes() {
     const int64_t bases[] = { 0, -1, 7, (int64_t(1) << 32) - 9, -(int64_t(1) << 32) + 3, (int64_t(1) << 60) - 77, -(int64_t(1) << 60) + 5 };
@@ -87,7 +81,7 @@ TEST_CASE("SDFCascade: evaluate equals Cascade::point and height_sdf, bit for bi
         sdf.configure(param, lods);
         const Spec &spec = sdf.get_spec();
         // The template's top: k = 16 at 0.5 m (26.2 km), whatever the LOD count past it.
-        const int k_top = std::min(lods + 4, template_top(param.voxel_size));
+        const int k_top = std::min(lods + 4, Climate::template_top(param.voxel_size));
         CHECK(k_top == 16);
         CHECK(spec.top_level() == k_top - 3);
         CHECK(spec.bands.size() == size_t(k_top - 2));
@@ -149,8 +143,8 @@ TEST_CASE("SDFCascade: the flat preset is the plane y = FLAT_GROUND_M at every L
 // The template ground stops at the first octave at the 3.3 km cap (26.2 km at 5 cm): past 15 LODs the ground is the
 // same octaves, so the same bits.
 TEST_CASE("SDFCascade: the template ground stops at its top, the same at any LOD count past it") {
-    CHECK(template_top(0.05) == 19);
-    CHECK(template_top(0.5) == 16);
+    CHECK(Climate::template_top(0.05) == 19);
+    CHECK(Climate::template_top(0.5) == 16);
     ChunkParam param;
     param.voxel_size = 0.05f;
     auto top = [&](const SDFCascade &p_sdf) {

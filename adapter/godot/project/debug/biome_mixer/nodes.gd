@@ -58,10 +58,7 @@ static func title(p_node: Dictionary) -> String:
 	var t := Kinds.title(p_node.kind)
 	match String(p_node.kind):
 		"note":
-			if p_node.has("wavelength_m"):
-				t += " %s" % fmt_m(float(p_node.wavelength_m))
-			elif p_node.has("from_m") and p_node.has("to_m"):
-				t += " %s .. %s" % [fmt_m(float(p_node.from_m)), fmt_m(float(p_node.to_m))]
+			t += " %s" % fmt_m(float(p_node.get("wavelength_m", 0.0)))
 		"shape":
 			t += " %s" % ("coeffs" if p_node.has("coeffs") else String(p_node.get("shape", "plain")))
 		"warp":
@@ -273,13 +270,6 @@ static func _param_row(p_id: String, p_node: Dictionary, p_d: Dictionary, p_ctx:
 			row.add_child(sp)
 		"field":
 			row.add_child(_options(fields, String(v), set1))
-		"fields":
-			for axis in 3:
-				var a := axis
-				row.add_child(_options(fields, String(v[a]) if v is Array and a < v.size() else "", func(f: String) -> void:
-					var three: Array = (p_node[name] as Array).duplicate()
-					three[a] = f
-					p_ctx.set_params(p_id, {name: three})))
 		"shape":
 			row.add_child(_options(Array(p_d.options), String(v), func(s: String) -> void: p_ctx.set_params(p_id, {name: s}, true)))
 		"coeffs":
@@ -314,7 +304,7 @@ static func _param_row(p_id: String, p_node: Dictionary, p_d: Dictionary, p_ctx:
 		var x := Button.new()
 		x.text = "-"
 		x.flat = true
-		x.tooltip_text = "Take %s out (the engine's default, or the node's other way: wavelength_m or from_m and to_m, steepness or amp_m)" % name
+		x.tooltip_text = "Take %s out (the engine's default)" % name
 		x.pressed.connect(func() -> void: p_ctx.set_params(p_id, {name: null}, true))
 		row.add_child(x)
 	return row

@@ -2,9 +2,7 @@
  "comment": "Caves as a graph, for the tests (test_climate_shape.cpp, CascadeSpike set 4v): caved's ground is smin(mix, up - C) over 2 m, C = min(N, T) the carve density, N its two notes' sum (a sub-mix at the samples) less 1 m, T = min(depth - 4 m, 60 m - depth) the band's tent, depth = mix - up. plain has no caves (the carve fades with its weight), its ground through a mix row like caved's (an edit of the volumes keeps the note constant). Not a world to look at: project/climate/world.json is.",
  "engine": {"voxel_m": 0.05, "lods": 25},
  "climate": {
-  "fields": [
-   {"name": "t", "bands": [{"from_m": 800, "to_m": 26000, "amp": 0.5, "persistence": 0.7}]}
-  ]
+  "fields": [{"name": "t", "bands": [{"from_m": 800, "to_m": 26000, "amp": 0.5, "persistence": 0.7}]}]
  },
  "biomes": [
   {
@@ -12,7 +10,24 @@
    "at": {"t": [0.5, 0.6]},
    "graph": {
     "nodes": [
-     {"id": "ground", "kind": "note", "from_m": 0.4, "to_m": 26214.4, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
+     {"id": "ground_19", "kind": "note", "wavelength_m": 26214.4, "seed": 59943, "amp_m": 3276.8},
+     {"id": "ground_18", "kind": "note", "wavelength_m": 13107.2, "seed": 59943, "amp_m": 1638.4},
+     {"id": "ground_17", "kind": "note", "wavelength_m": 6553.6, "seed": 59943, "amp_m": 819.2},
+     {"id": "ground_16", "kind": "note", "wavelength_m": 3276.8, "seed": 59943, "amp_m": 409.6},
+     {"id": "ground_15", "kind": "note", "wavelength_m": 1638.4, "seed": 59943, "amp_m": 204.8},
+     {"id": "ground_14", "kind": "note", "wavelength_m": 819.2, "seed": 59943, "amp_m": 102.4},
+     {"id": "ground_13", "kind": "note", "wavelength_m": 409.6, "seed": 59943, "amp_m": 51.2},
+     {"id": "ground_12", "kind": "note", "wavelength_m": 204.8, "seed": 59943, "amp_m": 25.6},
+     {"id": "ground_11", "kind": "note", "wavelength_m": 102.4, "seed": 59943, "amp_m": 12.8},
+     {"id": "ground_10", "kind": "note", "wavelength_m": 51.2, "seed": 59943, "amp_m": 6.4},
+     {"id": "ground_9", "kind": "note", "wavelength_m": 25.6, "seed": 59943, "amp_m": 3.2},
+     {"id": "ground_8", "kind": "note", "wavelength_m": 12.8, "seed": 59943, "amp_m": 1.6},
+     {"id": "ground_7", "kind": "note", "wavelength_m": 6.4, "seed": 59943, "amp_m": 0.8},
+     {"id": "ground_6", "kind": "note", "wavelength_m": 3.2, "seed": 59943, "amp_m": 0.4},
+     {"id": "ground_5", "kind": "note", "wavelength_m": 1.6, "seed": 59943, "amp_m": 0.2},
+     {"id": "ground_4", "kind": "note", "wavelength_m": 0.8, "seed": 59943, "amp_m": 0.1},
+     {"id": "ground_3", "kind": "note", "wavelength_m": 0.4, "seed": 59943, "amp_m": 0.05},
+     {"id": "ground", "kind": "mix", "rows": [{"in": "ground_19"}, {"in": "ground_18"}, {"in": "ground_17"}, {"in": "ground_16"}, {"in": "ground_15"}, {"in": "ground_14"}, {"in": "ground_13"}, {"in": "ground_12"}, {"in": "ground_11"}, {"in": "ground_10"}, {"in": "ground_9"}, {"in": "ground_8"}, {"in": "ground_7"}, {"in": "ground_6"}, {"in": "ground_5"}, {"in": "ground_4"}, {"in": "ground_3"}]},
      {"id": "mix", "kind": "mix", "rows": [{"in": "ground"}]},
      {"id": "out", "kind": "output", "height": "mix"}
     ]
@@ -23,7 +38,24 @@
    "name": "caved",
    "graph": {
     "nodes": [
-     {"id": "ground", "kind": "note", "from_m": 0.4, "to_m": 26214.4, "seed": 59943, "steepness": 0.125, "max_amp_m": 3276.8},
+     {"id": "ground_19", "kind": "note", "wavelength_m": 26214.4, "seed": 59943, "amp_m": 3276.8},
+     {"id": "ground_18", "kind": "note", "wavelength_m": 13107.2, "seed": 59943, "amp_m": 1638.4},
+     {"id": "ground_17", "kind": "note", "wavelength_m": 6553.6, "seed": 59943, "amp_m": 819.2},
+     {"id": "ground_16", "kind": "note", "wavelength_m": 3276.8, "seed": 59943, "amp_m": 409.6},
+     {"id": "ground_15", "kind": "note", "wavelength_m": 1638.4, "seed": 59943, "amp_m": 204.8},
+     {"id": "ground_14", "kind": "note", "wavelength_m": 819.2, "seed": 59943, "amp_m": 102.4},
+     {"id": "ground_13", "kind": "note", "wavelength_m": 409.6, "seed": 59943, "amp_m": 51.2},
+     {"id": "ground_12", "kind": "note", "wavelength_m": 204.8, "seed": 59943, "amp_m": 25.6},
+     {"id": "ground_11", "kind": "note", "wavelength_m": 102.4, "seed": 59943, "amp_m": 12.8},
+     {"id": "ground_10", "kind": "note", "wavelength_m": 51.2, "seed": 59943, "amp_m": 6.4},
+     {"id": "ground_9", "kind": "note", "wavelength_m": 25.6, "seed": 59943, "amp_m": 3.2},
+     {"id": "ground_8", "kind": "note", "wavelength_m": 12.8, "seed": 59943, "amp_m": 1.6},
+     {"id": "ground_7", "kind": "note", "wavelength_m": 6.4, "seed": 59943, "amp_m": 0.8},
+     {"id": "ground_6", "kind": "note", "wavelength_m": 3.2, "seed": 59943, "amp_m": 0.4},
+     {"id": "ground_5", "kind": "note", "wavelength_m": 1.6, "seed": 59943, "amp_m": 0.2},
+     {"id": "ground_4", "kind": "note", "wavelength_m": 0.8, "seed": 59943, "amp_m": 0.1},
+     {"id": "ground_3", "kind": "note", "wavelength_m": 0.4, "seed": 59943, "amp_m": 0.05},
+     {"id": "ground", "kind": "mix", "rows": [{"in": "ground_19"}, {"in": "ground_18"}, {"in": "ground_17"}, {"in": "ground_16"}, {"in": "ground_15"}, {"in": "ground_14"}, {"in": "ground_13"}, {"in": "ground_12"}, {"in": "ground_11"}, {"in": "ground_10"}, {"in": "ground_9"}, {"in": "ground_8"}, {"in": "ground_7"}, {"in": "ground_6"}, {"in": "ground_5"}, {"in": "ground_4"}, {"in": "ground_3"}]},
      {"id": "mix", "kind": "mix", "rows": [{"in": "ground"}]},
      {"id": "c1", "kind": "note", "wavelength_m": 12.8, "seed": 11, "amp_m": 2},
      {"id": "c2", "kind": "note", "wavelength_m": 25.6, "seed": 12, "amp_m": 3},

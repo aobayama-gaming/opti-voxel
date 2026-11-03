@@ -55,6 +55,15 @@ inline uint32_t float_bits(float p_f) {
     return u;
 }
 
+// FNV-1a (64 bits) of p_v's four bytes onto hash p_h, which starts at FNV64_BASIS: digests of bits.
+inline constexpr uint64_t FNV64_BASIS = 14695981039346656037ull;
+inline uint64_t fnv64(uint64_t p_h, uint32_t p_v) {
+    for (int i = 0; i < 4; i++) {
+        p_h = (p_h ^ ((p_v >> (8 * i)) & 0xFFu)) * 1099511628211ull;
+    }
+    return p_h;
+}
+
 inline float bits_float(uint32_t p_u) {
     float f;
     std::memcpy(&f, &p_u, sizeof(f));

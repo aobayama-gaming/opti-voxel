@@ -236,7 +236,11 @@ SampleCarry sample_carry(const Table &p_table) {
     if (!p_table.fields.empty() && !p_table.biomes.empty()) {
         s.pick = s.count++;
     }
+    // A warp field is no program's input: only notes read it.
     for (int f = 0; f < int(p_table.fields.size()); f++) {
+        if (p_table.fields[size_t(f)].warp) {
+            continue;
+        }
         if (p_table.generic || std::any_of(p_table.biomes.begin(), p_table.biomes.end(), [&](const Biome &p_b) { return p_b.program.reads_field(f); })) {
             s.field[f] = s.count++;
         }

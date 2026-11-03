@@ -119,6 +119,18 @@ Sampled sample(const Table &p_table, const SDFCascade &p_sdf, bool p_surface, in
     return s;
 }
 
+// FNV-1a over the bits of the slice's ground channels and biome weights: two tables that sample alike (a world file
+// rewritten another way) print the same digest.
+uint64_t ground_digest(const Sampled &p_s) {
+    uint64_t h = ExactNoise::FNV64_BASIS;
+    for (const std::vector<float> *v : { &p_s.h, &p_s.gx, &p_s.gz, &p_s.fdx, &p_s.fdz, &p_s.weights }) {
+        for (const float f : *v) {
+            h = ExactNoise::fnv64(h, ExactNoise::float_bits(f));
+        }
+    }
+    return h;
+}
+
 // Writes an RGB map; returns its file name.
 ov::str save(const ov::str &p_dir, const ov::str &p_name, int p_n, const ov::bytes &p_rgb) {
     const ov::bytes png = ov::encode_png(uint32_t(p_n), uint32_t(p_n), 3, p_rgb.data());
@@ -345,6 +357,9 @@ ov::str field_section(const Table &p_table, const Cascade::Spec &p_spec, const S
     const int64_t points = int64_t(p_n) * p_n;
     ov::str md = "| field | octaves (k) | min | mean | max |\n|---|---|---|---|---|\n";
     for (int f = 0; f < p_s.nf; f++) {
+        if (p_table.fields[size_t(f)].warp) {
+            continue; // a note's input, its octave's noise: no map of its own
+        }
         auto v = [&](int64_t p_i) { return double(p_s.fields[size_t(p_i) * p_s.nf + f]); };
         double lo = INFINITY, hi = -INFINITY, sum = 0.0;
         for (int64_t i = 0; i < points; i++) {
@@ -498,6 +513,7 @@ ov::Value ClimateReport::run(const ov::str &p_out_dir, const ov::str &p_world_pa
                      "%s km across). CPU: %s us per point (ground trace + fields + weights + pick, over the worker pool).\n\n",
             p_world_path, ov::num(ground.voxel_size, 6), lods, s.nf, s.nb, p_surface ? "on the ground surface" : "on the base's tangent plane", n, n, m, ov::num(spacing_m, 2), ov::num(n * spacing_m / 1000.0, 1),
             ov::num(us_per_point, 2));
+    md += ov::format("Ground digest: %016x (the bits of the ground channels and weights).\n\n", ground_digest(s));
     ov::Value images = ov::Value::array();
     md += biome_section(table, s, n, p_out_dir, images) + ov::str("\n");
     md += border_section(table, s, n, spacing_m, ground.voxel_size, c) + ov::str("\n");
@@ -550,9 +566,17 @@ ClimateReport::Preview ClimateReport::preview(const ov::Value &p_world, const ov
         out.altitude_m[i] = float(s.altitude[i] * voxel);
         out.relief_m = ov::max(out.relief_m, std::abs(double(out.altitude_m[i])));
     }
-    out.fields = s.fields;
-    for (const Field &f : table.fields) {
-        out.field_names.push_back(f.name);
+    std::vector<int> named;
+    for (int f = 0; f < s.nf; f++) {
+        if (!table.fields[size_t(f)].channel && !table.fields[size_t(f)].warp) {
+            named.push_back(f);
+            out.field_names.push_back(table.fields[size_t(f)].name);
+        }
+    }
+    for (size_t i = 0; i < s.altitude.size(); i++) {
+        for (const int f : named) {
+            out.fields.push_back(s.fields[i * size_t(s.nf) + size_t(f)]);
+        }
     }
     for (const Climate::Biome &b : table.biomes) {
         out.biome_names.push_back(b.name);

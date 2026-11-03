@@ -47,18 +47,17 @@ namespace Climate {
 //     world's "features".
 //   node:   { "id": "n1", "kind": ..., inputs by id, parameters; "pos": [x, y] (the mixer's, ignored) }; a key its
 //            kind doesn't list in graph_kinds (the catalogue the biome mixer builds its nodes from) is refused. The kinds:
-//     "note":  "wavelength_m": 400 | "from_m": 0.4, "to_m": 26214.4 (every octave in range the LOD count has: the
-//              table covers the whole spectrum at any count), "seed": 59943 (required), the amplitude
-//              "steepness": 0.125 (octave k's amplitude that times its wavelength) | "amp_m": 300 (the coarsest's),
-//              "persistence": 1 (default; times this per finer octave), "max_amp_m": 3276.8 (optional, every octave's
-//              cap), "stretch_y": 4 (optional; a power of two: its noise squeezed along the base's up, y on the flat
+//     "note":  one octave: "wavelength_m": 400 (its octave k, the nearest power of two of voxels), "seed": 59943, "amp_m":
+//              50, "stretch_y": 4 (optional; a power of two: its noise squeezed along the base's up, y on the flat
 //              world, its wavelength along it 4 times the tangent ones; octave k takes at most 2^(k - 3) of it,
-//              BaseSurface::stretched). Octave k's seed and lattice are make_octave(seed, k): one note whatever biome
-//              mixes it, the same noise at any LOD count. The ground is a 3D noise whose vertical slope is as large as
-//              its horizontal one: past dh/dy = 1 it folds into overhangs; stretched octaves keep it a height field
-//              where they dominate.
-//     "warp":  "in": notes (a note, a mix of them, their shapes), "fields": ["wx", "wy", "wz"], "amount_m": 80: the note read displaced by amount_m times
-//              the three fields' values (libnoise's turbulence).
+//              BaseSurface::stretched), "warp": a warp node (optional input: the note read displaced). Its seed and
+//              lattice are make_octave(seed, k): one note whatever biome mixes it. A note the LOD count doesn't have
+//              (k outside [3, LODs + 4]) plays nothing: a world reads at any LOD count. The ground is a 3D noise whose
+//              vertical slope is as large as its horizontal one: past dh/dy = 1 it folds into overhangs; stretched
+//              octaves keep it a height field where they dominate.
+//     "warp":  "in": notes (a note or a mix of them, each coarser than every note the warp moves), "amount_m": 80: a
+//              note reading it is read displaced by amount_m times (x, y, z), the input's notes read with their seed,
+//              seed + 1 and seed + 2 (libnoise's turbulence; amp_m 0.5 is half of amount_m).
 //     "shape": "in", "shape": "plain" | "billow" | "ridged" | "square", "scale": a, "offset": o (both optional): a n + o,
 //              2 |a n| - 1 + o, (o - |a n|)^2 (o default 1), (a n)^2 + o; or "coeffs": [c1, cn, cabs, csq] (Shape). A
 //              band inserts its shape without its mean; |n| is smoothed below the lattice's resolution (Cascade::smooth_abs).
@@ -80,8 +79,8 @@ namespace Climate {
 //     from the fields' octaves coarser than k only (Cascade::Modulation).
 const std::vector<GraphKind> &graph_kinds() {
     static const std::vector<GraphKind> KINDS = {
-        { "note", {}, { { "wavelength_m", "number", false, NAN, "" }, { "from_m", "number", false, NAN, "" }, { "to_m", "number", false, NAN, "" }, { "seed", "seed", true, NAN, "" }, { "steepness", "number", false, NAN, "" }, { "amp_m", "number", false, NAN, "" }, { "persistence", "number", false, 1.0, "" }, { "max_amp_m", "number", false, NAN, "" }, { "stretch_y", "pow2", false, 1.0, "" } } },
-        { "warp", { "in" }, { { "fields", "fields", true, NAN, "" }, { "amount_m", "number", true, NAN, "" } } },
+        { "note", { "warp" }, { { "wavelength_m", "number", true, NAN, "" }, { "seed", "seed", true, NAN, "" }, { "amp_m", "number", true, NAN, "" }, { "stretch_y", "pow2", false, 1.0, "" } } },
+        { "warp", { "in" }, { { "amount_m", "number", true, NAN, "" } } },
         { "shape", { "in" }, { { "shape", "shape", false, NAN, "plain|billow|ridged|square" }, { "scale", "number", false, 1.0, "" }, { "offset", "number", false, NAN, "" }, { "coeffs", "coeffs", false, NAN, "" } } },
         { "multifractal", { "in" }, { { "gain", "number", true, NAN, "" } } },
         { "mix", {}, { { "rows", "rows", true, NAN, "" } } },
@@ -145,11 +144,20 @@ public:
         for (int64_t i = 0; i < int64_t(fields.size()) && error.empty(); i++) {
             field(dict(fields[i], ov::format("field %d", i)), i);
         }
+        named = int(table.fields.size());
         const ov::Value biomes = array(p_data, "biomes", "climate");
         std::vector<BiomeGraph> graphs;
         for (int64_t i = 0; i < int64_t(biomes.size()) && error.empty(); i++) {
             graphs.emplace_back();
             biome(dict(biomes[i], ov::format("biome %d", i)), i, graphs.back());
+        }
+        // A generic table keeps the warp fields of its capacity (the rest without a band), so a warp deleted compiles
+        // nothing; never past the fields its sub-mixes' capacity leaves.
+        while (!ground.specialize && int(table.fields.size()) - named < ground.caps.warps && int(table.fields.size()) + ground.caps.channels < MAX_FIELDS) {
+            Field f;
+            f.name = ov::format("~warp%d", int64_t(table.fields.size()));
+            f.warp = true;
+            table.fields.push_back(f);
         }
         const ov::str err = error.empty() ? compile(graphs, ground, table) : ov::str();
         if (!err.empty()) {
@@ -165,6 +173,7 @@ public:
 private:
     const Ground &ground;
     Table &table;
+    int named = 0; // the fields the format names (the climate's); the warps' follow (warp_field)
 
     // The first error only: "climate: <where>: <msg>".
     void fail(const ov::str &p_where, const ov::str &p_msg) {
@@ -343,24 +352,20 @@ private:
         return error.empty() ? uint32_t(s) : 0u;
     }
 
-    // A note node: its octaves, seed, amplitude rule and stretch (NoteNode, in LOD0 voxels).
+    // A note node: its octave, seed, amplitude and stretch (NoteNode).
     void note(const ov::Value &p_d, const ov::str &p_where, NoteNode &r_n) {
-        if (!node_keys(p_d, p_where, "note") ||
-                !octave_range(p_d, p_where, r_n.lo, r_n.hi)) {
+        int hi = 0;
+        if (!node_keys(p_d, p_where, "note") || !octave_range(p_d, p_where, r_n.k, hi)) {
             return;
         }
-        r_n.range = !p_d.has("wavelength_m"); // from_m / to_m: the octaves the LOD count has, even one
+        if (r_n.k < ExactNoise::BAND_SHIFT) {
+            fail(p_where, ov::format("octave k = %d is outside the cascade's range: a note's wavelength is at least %s m (%d voxels).", r_n.k, ov::num(std::ldexp(ground.voxel_size, ExactNoise::BAND_SHIFT), 2), 1 << ExactNoise::BAND_SHIFT));
+            return;
+        }
         r_n.seed = seed(p_d, p_where);
-        if (p_d.has("steepness") == p_d.has("amp_m")) {
-            fail(p_where, "a note's amplitude is 'steepness' (times its wavelength) or 'amp_m', one of them.");
-            return;
-        }
-        r_n.steepness = number(p_d, "steepness", p_where, 0.0);
-        r_n.amp = number(p_d, "amp_m", p_where, 0.0) / ground.voxel_size;
-        r_n.persistence = number(p_d, "persistence", p_where, fallback("note", "persistence"));
-        r_n.max_amp = number(p_d, "max_amp_m", p_where, INFINITY) / ground.voxel_size;
-        if (error.empty() && !(r_n.steepness >= 0.0 && r_n.amp >= 0.0 && r_n.persistence > 0.0 && r_n.max_amp > 0.0)) {
-            fail(p_where, "a note's amplitude, persistence and max are > 0.");
+        r_n.amp_m = number(p_d, "amp_m", p_where);
+        if (error.empty() && !(r_n.amp_m >= 0.0)) {
+            fail(p_where, "a note's amplitude is >= 0.");
         }
         // "stretch_y": a power of two >= 1 (1: none), as log2.
         const double s = number(p_d, "stretch_y", p_where, fallback("note", "stretch_y"));
@@ -452,7 +457,7 @@ private:
                 continue;
             }
             const ov::str where = p_where + ov::str(" ") + entry.first;
-            const int f = source(entry.first, where, false, int(table.fields.size()), "a field");
+            const int f = source(entry.first, where, false, named, "a field");
             const ov::Value &v = entry.second;
             double centre = 0.0, span = 0.0;
             if (v.get_type() == ov::Value::ARRAY && v.size() == 2 && is_number(v[0]) && is_number(v[1])) {
@@ -565,34 +570,10 @@ private:
         return v;
     }
 
-    // A warp, a shape or a multifractal (p_kind): the note chain it extends per octave, or a shape at the samples.
+    // A shape or a multifractal (p_kind): the note chain it extends per octave, or a shape at the samples.
     Value chain_value(const ov::str &kind, const std::vector<ov::Value> &p_nodes, const ov::Value *p_n, const ov::str &p_where, const ov::str &where, Biome &r_b,
             Reading &r_read, bool p_state) {
         Value out;
-        if (kind == "warp") {
-            out = expr(p_nodes, input(p_nodes, *p_n, "in", where), p_where, r_b, r_read, p_state);
-            if (out.reg >= 0) {
-                fail(where, "a warp moves where notes are read: its input is notes (a note, a mix of them, their shapes), not a node past them.");
-                return out;
-            }
-            const float amount = float(number(*p_n, "amount_m", where) / ground.voxel_size);
-            const ov::Value wf = array(*p_n, "fields", where);
-            if (wf.size() != 3) {
-                fail(where, "a warp's 'fields' names 3 fields (x, y, z).");
-            }
-            int fields[3] = { -1, -1, -1 };
-            for (int64_t i = 0; i < int64_t(wf.size()) && i < 3 && error.empty(); i++) {
-                fields[i] = source(wf[i].is_string() ? wf[i].as_str() : ov::str(), where, false, int(table.fields.size()), "a field");
-            }
-            for (GraphRow &row : out.rows) {
-                if (row.warp_fields[0] >= 0) {
-                    fail(where, "a note reads through one warp.");
-                }
-                row.warp = amount;
-                std::copy(std::begin(fields), std::end(fields), std::begin(row.warp_fields));
-            }
-            return out;
-        }
         if (kind == "shape") {
             out = expr(p_nodes, input(p_nodes, *p_n, "in", where), p_where, r_b, r_read);
             if (per_octave(out) && !out.rows[0].has_shape) {
@@ -609,7 +590,7 @@ private:
             const float gain = float(number(*p_n, "gain", where));
             out = expr(p_nodes, input(p_nodes, *p_n, "in", where), p_where, r_b, r_read, gain > 0.0f);
             if (error.empty() && !per_octave(out)) {
-                fail(where, "a multifractal weighs one note's octaves by the previous one's: its input is a note through a warp and a shape.");
+                fail(where, "a multifractal weighs a note by the coarser multifractal notes: its input is a note through a shape.");
             }
             if (error.empty()) {
                 out.rows[0].gain = gain;
@@ -617,6 +598,56 @@ private:
             return out;
         }
         return out;
+    }
+
+    // Note row r_row read through warp node p_w: one term per note of its input (every one coarser than the note: what
+    // the planner checks), its octave's fields (warp_field) at amount_m times the note's amplitude and volume. The fields
+    // hold the noise alone, so a value edit never changes them: the table's structure follows the graph's.
+    void warp(const std::vector<ov::Value> &p_nodes, const ov::Value *p_w, const ov::str &p_where, const ov::str &p_note, Biome &r_b, Reading &r_read, GraphRow &r_row) {
+        if (!is_kind(p_w, "warp")) {
+            fail(p_note, "'warp' is a warp node.");
+            return;
+        }
+        const ov::str where = p_where + ov::str(" node '") + (*p_w)["id"].as_str() + ov::str("'");
+        if (!node_keys(*p_w, where, "warp")) {
+            return;
+        }
+        const Value in = expr(p_nodes, input(p_nodes, *p_w, "in", where), p_where, r_b, r_read);
+        if (error.empty() && in.reg >= 0) {
+            fail(where, "a warp's input is notes or a mix of them, not a node past them.");
+        }
+        const double amount = number(*p_w, "amount_m", where) / ground.voxel_size;
+        for (size_t i = 0; i < in.rows.size() && error.empty(); i++) {
+            const GraphRow &row = in.rows[i];
+            if (row.has_shape || row.gain != 0.0f || !row.warps.empty() || row.note.stretch != 0) {
+                fail(where, "a warp's input is notes or a mix of them (no shape, multifractal, warp or stretch).");
+            } else if (row.note.k <= r_row.note.k) {
+                fail(where, ov::format("a warp is coarser than the note it moves: its note of %s m isn't coarser than %s m.", ov::num(std::ldexp(ground.voxel_size, row.note.k), 2), ov::num(std::ldexp(ground.voxel_size, r_row.note.k), 2)));
+            } else if (note_plays(row.note, ground)) {
+                const float scale = float(amount * double(row.x) * row.note.amp_m);
+                if (scale != 0.0f) {
+                    r_row.warps.push_back(WarpTerm{ warp_field(row.note), scale });
+                }
+            }
+        }
+    }
+
+    // The first of the three fields (x, y, z) of warp note p_note's octave: its noise at amplitude 1, read with its
+    // seed, seed + 1 and seed + 2. A note of octave k reads them before level k's insertions, whole: they are coarser.
+    int warp_field(const NoteNode &p_note) {
+        const int known = table.field_index(ov::format("~warp%d_%dx", int64_t(p_note.k), int64_t(p_note.seed)));
+        if (known >= 0) {
+            return known;
+        }
+        const int field = int(table.fields.size());
+        for (int a = 0; a < 3; a++) {
+            Field f;
+            f.name = ov::format("~warp%d_%d%c", int64_t(p_note.k), int64_t(p_note.seed), "xyz"[a]);
+            f.warp = true;
+            f.bands.push_back(ExactNoise::make_octave(p_note.seed + uint32_t(a), uint32_t(p_note.k), p_note.k, 1.0f));
+            table.fields.push_back(f);
+        }
+        return field;
     }
 
     // A mix: its rows' notes at their volumes, the rows past the notes summed at the samples.
@@ -652,7 +683,7 @@ private:
         return Value{ {}, acc };
     }
 
-    // expr's kinds: "note" (its rows), "warp" / "shape" / "multifractal" (the chain, or a shape at the samples), "mix"
+    // expr's kinds: "note" (its row, read through its warp), "shape" / "multifractal" (the chain, or a shape at the samples), "mix"
     // (rows, or a sum at the samples), and the samples' ops on registers: "constant" value_m, "field" (a climate
     // field's value), "add" / "subtract" / "multiply" / "min" / "max" (a, b), "smin" / "smax" (a, b, k_m), "curve" (in,
     // points), "up".
@@ -666,9 +697,16 @@ private:
         if (kind == "note") {
             out.rows.emplace_back();
             note(*p_n, where, out.rows.back().note);
+            if (p_n->has("warp") && error.empty()) {
+                warp(p_nodes, input(p_nodes, *p_n, "warp", where), p_where, where, r_b, r_read, out.rows.back());
+            }
             return out;
         }
-        if (kind == "warp" || kind == "shape" || kind == "multifractal") {
+        if (kind == "warp") {
+            fail(where, "a warp is a note's input ('warp'): it moves where that note is read.");
+            return out;
+        }
+        if (kind == "shape" || kind == "multifractal") {
             return chain_value(kind, p_nodes, p_n, p_where, where, r_b, r_read, p_state);
         }
         if (kind == "mix") {
@@ -681,7 +719,7 @@ private:
             return Value{ {}, emit(r_b, SampleOp::UP, -1, -1) };
         }
         if (kind == "field") {
-            return Value{ {}, emit(r_b, SampleOp::FIELD, -1, -1, 0.0f, source(text(*p_n, "field", where), where, false, int(table.fields.size()), "a field")) };
+            return Value{ {}, emit(r_b, SampleOp::FIELD, -1, -1, 0.0f, source(text(*p_n, "field", where), where, false, named, "a field")) };
         }
         static const std::pair<const char *, SampleOp> BINARY[] = { { "add", SampleOp::ADD }, { "subtract", SampleOp::SUB }, { "multiply", SampleOp::MUL }, { "min", SampleOp::MIN },
             { "max", SampleOp::MAX }, { "smin", SampleOp::SMIN }, { "smax", SampleOp::SMAX } };
@@ -711,9 +749,10 @@ private:
     std::pair<int, int> rank(const std::vector<GraphRow> &p_rows) const {
         std::pair<int, int> r{ -1, 0 };
         for (const GraphRow &row : p_rows) {
-            const std::vector<int> ks = note_octaves(row.note, ground);
-            r.first = ks.empty() ? r.first : ov::max(r.first, ks.front());
-            r.second += int(ks.size());
+            if (note_plays(row.note, ground)) {
+                r.first = ov::max(r.first, row.note.k);
+                r.second++;
+            }
         }
         return r;
     }

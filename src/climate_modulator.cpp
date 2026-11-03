@@ -328,16 +328,31 @@ private:
             for (int t = 0; t < 3; t++) {
                 bb.k[t] = float(amp * double(bb.shape.c[1 + t]));
             }
-            if (a) {
-                bb.gain = a->gain;
-                bb.warp = a->warp;
-                std::copy(std::begin(a->warp_fields), std::end(a->warp_fields), std::begin(bb.warp_fields));
+            bb.gain = a ? a->gain : 0.0f;
+            // Its first warp term on its record, each further one on a record of its own (no amplitude or gain).
+            const auto set_warp = [](BiomeBand &r_bb, const WarpTerm &p_w) {
+                r_bb.warp = p_w.scale;
+                for (int ax = 0; ax < 3; ax++) {
+                    r_bb.warp_fields[ax] = p_w.field + ax;
+                }
+            };
+            const auto push = [&](const BiomeBand &p_bb) {
+                const uint32_t f = (p_bb.k[1] != 0.0f ? Cascade::MOD_ABS : 0u) | (p_bb.k[2] != 0.0f ? Cascade::MOD_SQ : 0u) |
+                        (p_bb.gain > 0.0f ? Cascade::MOD_STATE : 0u) | (p_bb.warp != 0.0f ? Cascade::MOD_WARP : 0u);
+                if (p_bb.k[0] != 0.0f || f != 0u) {
+                    e.features |= f;
+                    e.biomes.push_back(p_bb);
+                }
+            };
+            if (a && !a->warps.empty()) {
+                set_warp(bb, a->warps[0]);
             }
-            const uint32_t f = (bb.k[1] != 0.0f ? Cascade::MOD_ABS : 0u) | (bb.k[2] != 0.0f ? Cascade::MOD_SQ : 0u) | (bb.gain > 0.0f ? Cascade::MOD_STATE : 0u) |
-                    (bb.warp != 0.0f ? Cascade::MOD_WARP : 0u);
-            if (bb.k[0] != 0.0f || f != 0u) {
-                e.features |= f;
-                e.biomes.push_back(bb);
+            push(bb);
+            for (size_t w = 1; a && w < a->warps.size(); w++) {
+                BiomeBand extra;
+                extra.biome = int(b);
+                set_warp(extra, a->warps[w]);
+                push(extra);
             }
         }
         add_parts(e);

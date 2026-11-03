@@ -13,13 +13,12 @@ const RANGE := [0.0, 10.0, 0.01]
 const KINDS := {
 	"note": {
 		"title": "Note",
-		"hint": "A 3D noise, one octave (wavelength_m) or every octave from from_m to to_m that the LOD count has. Its amplitude: steepness times each octave's wavelength, or amp_m (the coarsest) times persistence per finer octave, capped at max_amp_m. stretch_y squeezes it along the vertical. Notes with the same seed and stretch are read once, whichever biomes play them.",
-		"ranges": {"wavelength_m": [1.0, 30000.0, 0.1], "from_m": [0.4, 30000.0, 0.1], "to_m": [0.4, 30000.0, 0.1], "steepness": [0.0, 0.5, 0.001],
-			"amp_m": [0.0, 5000.0, 0.1], "persistence": [0.0, 2.0, 0.01], "max_amp_m": [0.0, 10000.0, 1.0]},
+		"hint": "A 3D noise of one octave: wavelength_m (the nearest power of two of voxels, at least 8), amp_m. stretch_y squeezes it along the vertical. Its warp input (a Warp node) reads it displaced. A note the LOD count doesn't have plays nothing. Notes with the same seed and stretch are read once, whichever biomes play them.",
+		"ranges": {"wavelength_m": [0.4, 30000.0, 0.1], "amp_m": [0.0, 5000.0, 0.1]},
 	},
 	"warp": {
 		"title": "Warp",
-		"hint": "Reads its note displaced by amount_m metres times three climate fields (x, y, z). One read per note whatever the biomes: where biomes blend, the note is read at their weights' mix of displacements.",
+		"hint": "A note's warp input: the note is read displaced by amount_m times this node's input read with its notes' seed, seed + 1 and seed + 2 (x, y, z). Its input is notes or a mix of them, each coarser than every note it warps. Where biomes blend, the note is read at their weights' mix of displacements.",
 		"ranges": {"amount_m": [0.0, 2000.0, 0.1]},
 	},
 	"shape": {
@@ -34,7 +33,7 @@ const KINDS := {
 	},
 	"mix": {
 		"title": "Mix",
-		"hint": "The notes' sum: each row a note (through a warp, a shape and a multifractal, each optional) at volume x. A biome mixes its notes once. M mutes, S solos a row in the view only (the file keeps x).",
+		"hint": "The notes' sum: each row a note (warped, through a shape and a multifractal, each optional) at volume x. A biome mixes its notes once. M mutes, S solos a row in the view only (the file keeps x).",
 		"ranges": {"x": [0.0, 4.0, 0.01]},
 	},
 	"constant": {"title": "Constant", "hint": "A height in metres.", "ranges": {"value_m": [-2000.0, 2000.0, 0.1]}},
