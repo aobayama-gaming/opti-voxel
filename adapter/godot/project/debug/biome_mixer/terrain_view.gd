@@ -46,6 +46,24 @@ const AIM_STEP := 0.7
 ## A game character's run (metres a second; Minecraft sprints at 5.6, most action games run at 5-7): WASD in first
 ## person, and the aim's distance read as the time to run it.
 const KEY_SPEED := 6.0
+## The reach sphere: where a run of this long (seconds) gets from the player, KEY_SPEED x it (1.8 km). Faint, with its
+## silhouette and its line on the terrain (the scene's depth within REACH_LINE_M of the sphere's) brighter.
+const REACH_S := 300.0
+const REACH_LINE_M := 15.0
+const REACH_SHADER := """
+shader_type spatial;
+render_mode unshaded, blend_mix, cull_disabled, depth_draw_never, shadows_disabled, fog_disabled;
+uniform sampler2D depth_texture : hint_depth_texture, filter_nearest;
+uniform vec3 colour : source_color = vec3(0.35, 0.85, 1.0);
+uniform float line_m = 15.0;
+void fragment() {
+	float rim = pow(1.0 - abs(dot(NORMAL, VIEW)), 3.0);
+	vec4 scene = INV_PROJECTION_MATRIX * vec4(SCREEN_UV * 2.0 - 1.0, texture(depth_texture, SCREEN_UV).r, 1.0);
+	float line = 1.0 - clamp(abs(scene.z / scene.w - VERTEX.z) / line_m, 0.0, 1.0);
+	ALBEDO = colour;
+	ALPHA = 0.03 + 0.15 * rim + 0.7 * line;
+}
+"""
 
 var _viewport := SubViewport.new()
 var _held := TextureRect.new()  # the last terrain's frame while the new one loads
@@ -53,6 +71,7 @@ var _aim_label := Label.new()  # the crosshair and the distance to the terrain u
 var _aim_timer := 0.0
 var _camera := Camera3D.new()
 var _player := MeshInstance3D.new()
+var _reach := MeshInstance3D.new()  # REACH_S of running round the player
 var _terrain: Node3D  # VoxelTerrain
 var _restart := Timer.new()
 var _json := ""
@@ -107,6 +126,19 @@ func _init() -> void:
 	capsule.material = look
 	_player.mesh = capsule
 	_viewport.add_child(_player)
+	var sphere := SphereMesh.new()
+	sphere.radius = KEY_SPEED * REACH_S
+	sphere.height = sphere.radius * 2.0
+	sphere.radial_segments = 96
+	sphere.rings = 48
+	var veil := ShaderMaterial.new()
+	veil.shader = Shader.new()
+	veil.shader.code = REACH_SHADER
+	veil.set_shader_parameter("line_m", REACH_LINE_M)
+	sphere.material = veil
+	_reach.mesh = sphere
+	_reach.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_viewport.add_child(_reach)
 	_restart.one_shot = true
 	_restart.wait_time = RESTART_AFTER
 	_restart.timeout.connect(_restart_terrain)
@@ -358,6 +390,10 @@ func set_noclip(p_on: bool) -> void:
 	_place_camera()
 
 
+func set_reach(p_on: bool) -> void:
+	_reach.visible = p_on
+
+
 func set_fpv(p_on: bool) -> void:
 	fpv = p_on
 	_place_camera()
@@ -410,6 +446,7 @@ func _place_camera() -> void:
 				_camera.position += _up * (CAMERA_CLEARANCE - d)
 		_camera.look_at(eye, _up)
 	_player.visible = not fpv
+	_reach.position = _target + _up * (PLAYER_HEIGHT * 0.5)
 	_player.transform = Transform3D(Basis(Quaternion(Vector3.UP, _up)), _target + _up * (PLAYER_HEIGHT * 0.5))
 	var dist := EYE_HEIGHT if fpv else _dist
 	if _terrain != null:

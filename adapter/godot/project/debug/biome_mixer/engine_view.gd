@@ -80,6 +80,12 @@ func _ready() -> void:
 	fpv.tooltip_text = "The camera at the player's eyes (1.6 m); right drag looks round, left drag moves. Off: the camera orbits the player."
 	fpv.toggled.connect(_view3d.set_fpv)
 	bar.add_child(fpv)
+	var reach := CheckButton.new()
+	reach.text = "5 min run"
+	reach.button_pressed = true
+	reach.tooltip_text = "A faint sphere round the player: where a 5 minute run reaches (6 m/s, 1.8 km), its line on the terrain brighter."
+	reach.toggled.connect(_view3d.set_reach)
+	bar.add_child(reach)
 	var game := Button.new()
 	game.text = "Open in game"
 	game.tooltip_text = "Runs the game on this world (the engine's terrain in 3D, with its trees, rocks and features)."
