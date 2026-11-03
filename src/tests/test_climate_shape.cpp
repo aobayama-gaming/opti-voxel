@@ -586,7 +586,7 @@ TEST_CASE("Climate shape: every level shader variant defines the climate helpers
     const char *const NAMES[] = { "cl_flush", "cl_mul", "cl_sub", "cl_add", "cl_scale", "cl_edge", "cl_multifractal", "cl_smooth_abs", "cl_curve0", "cl_curve1",
         "cascade_warped", "climate_ground", "climate_biome", "cascade_mods", "cl_smin", "cl_sample0", "cl_curve0_0" };
     ov::Value world, graph;
-    CHECK(load_table("res://climate/world.json", world) == ov::str());
+    CHECK(load_table("res://climate/eight_biomes_test.json", world) == ov::str());
     CHECK(load_table("res://climate/graph_test.json", graph) == ov::str()); // sub-mix fields: modulated groups past the ground
     int64_t variants = 0, missing = 0, past_mods = 0;
     ov::Value caves;
@@ -731,7 +731,7 @@ TEST_CASE("Climate shape: ground terms without fields take the climate variant a
 // lifted (the bound itself; the cap is a cost choice). The curves read the weights carried to each chunk's own level 0,
 // so their steps come from the fields' L+2 / L+3 octaves.
 TEST_CASE("Climate shape: the field step between LOD L and L+1 stays within the skirt depth with ground terms") {
-    for (const auto &[path, lods] : { std::pair{ "res://climate/shaped_test.json", 15 }, std::pair{ "res://climate/example.json", 15 }, std::pair{ "res://climate/world.json", 15 }, std::pair{ "res://climate/programs_test.json", 15 } }) {
+    for (const auto &[path, lods] : { std::pair{ "res://climate/shaped_test.json", 15 }, std::pair{ "res://climate/example.json", 15 }, std::pair{ "res://climate/eight_biomes_test.json", 15 }, std::pair{ "res://climate/programs_test.json", 15 } }) {
         CAPTURE(path);
         ClimateSDF c(path, lods, 1e6f);
         CLIMATE_REQUIRE(c.sdf.get_climate() != nullptr);
@@ -891,7 +891,7 @@ static ov::Value bypassed(ov::Value p_table, std::initializer_list<const char *>
 // mixer's edits compile nothing; and the generic table's bits are the specialised one's, every edit.
 TEST_CASE("Climate shape: a table's text follows its structure, the generic one's through every edit, with the specialised bits") {
     int64_t compared = 0, mismatches = 0;
-    for (const char *path : { "res://climate/shaped_test.json", "res://climate/world.json", "res://climate/programs_test.json", "res://climate/notes_test.json",
+    for (const char *path : { "res://climate/shaped_test.json", "res://climate/eight_biomes_test.json", "res://climate/programs_test.json", "res://climate/notes_test.json",
                  "res://climate/example.json", "res://climate/plain.json", "res://climate/graph_test.json", "res://climate/caves_test.json" }) {
         ov::Value data;
         CLIMATE_REQUIRE(load_table(path, data) == ov::str());

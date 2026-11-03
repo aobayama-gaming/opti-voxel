@@ -36,6 +36,7 @@ const KINDS := {
 		"hint": "The notes' sum: each row a note (warped, through a shape and a multifractal, each optional) at volume x. A biome mixes its notes once. M mutes, S solos a row in the view only (the file keeps x).",
 		"ranges": {"x": [0.0, 4.0, 0.01]},
 	},
+	"up": {"title": "Up", "hint": "The sample's height above the base, in metres: a cave is a smooth min of the mix and up minus the cave's notes.", "ranges": {}},
 	"constant": {"title": "Constant", "hint": "A height in metres.", "ranges": {"value_m": [-2000.0, 2000.0, 0.1]}},
 	"field": {"title": "Field", "hint": "A climate field's value at the sample (temperature, humidity, ...).", "ranges": {}},
 	"add": {"title": "Add", "hint": "a + b, at the samples.", "ranges": {}},

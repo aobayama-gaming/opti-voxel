@@ -117,7 +117,7 @@ static func every_kind(p_world: Dictionary) -> Dictionary:
 # stays), a shape node out (what read it reads its note), a loop refused, a muted row heard at volume 0.
 static func edits(p_mixer: Object) -> Dictionary:
 	var w := World.read(EngineInfo.WORLD)
-	var i: int = w.biomes.map(func(b): return b.name).find("mountain")
+	var i: int = w.biomes.map(func(b): return b.name).find("warped")
 	var g: Dictionary = w.biomes[i].graph
 	var mix := ""
 	var shape := ""
@@ -140,7 +140,7 @@ static func edits(p_mixer: Object) -> Dictionary:
 	p_mixer.set_row_flag(mix, 0, "mute", true)
 	var heard: Dictionary = p_mixer._heard(World.preview_file(w, i))
 	var hn: Dictionary = Graph.node(heard.biomes[0].graph, mix)
-	r.muted = float(hn.rows[0].x) == 0.0 and float(Graph.rows(Graph.node(g, mix))[0].get("x", 1.0)) != 0.0
+	r.muted = float(hn.rows[0].get("x", 1.0)) == 0.0 and float(Graph.rows(Graph.node(g, mix))[0].get("x", 1.0)) != 0.0
 	p_mixer.row_flags.clear()
 	r.ok = r.row and r.node and r.loop_refused and r.drawn and r.muted
 	return r

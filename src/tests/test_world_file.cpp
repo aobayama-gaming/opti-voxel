@@ -92,7 +92,7 @@ TEST_CASE("WorldFile: world.json finds its engine and climate next to it") {
     const ov::Value &biomes = w.climate_table["biomes"];
     CHECK(biomes[size_t(0)].has("instances"));
     CHECK(w.climate_table["fields"].size() == 3); // temperature, humidity, wind: the warps' notes are their own
-    CHECK(w.climate_table["biomes"].size() == 8);
+    CHECK(w.climate_table["biomes"].size() == 2); // hills, warped
     SDFCascade sdf;
     ChunkParam param;
     param.voxel_size = float(w.voxel_m);
