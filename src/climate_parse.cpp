@@ -493,14 +493,16 @@ private:
         const ov::Value *n = p_n;
         if (is_kind(n, "multifractal") && node_keys(*n, p_where, "multifractal")) {
             r_row.gain = float(number(*n, "gain", p_where));
+            r_row.multifractal = true;
             n = input(p_nodes, *n, "in", p_where);
         }
         if (is_kind(n, "shape") && node_keys(*n, p_where, "shape")) {
-            r_row.has_shape = shape(*n, p_where, r_row.gain > 0.0f, r_row.shape);
+            r_row.has_shape = shape(*n, p_where, r_row.multifractal, r_row.shape);
             n = input(p_nodes, *n, "in", p_where);
         }
         if (is_kind(n, "warp") && node_keys(*n, p_where, "warp")) {
             r_row.warp = float(number(*n, "amount_m", p_where) / ground.voxel_size);
+            r_row.warped = true;
             const ov::Value wf = array(*n, "fields", p_where);
             if (wf.size() != 3) {
                 fail(p_where, "a warp's 'fields' names 3 fields (x, y, z).");

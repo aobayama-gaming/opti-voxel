@@ -37,7 +37,7 @@ bool name_taken_before(const std::vector<T> &p_list, size_t p_i) {
 }
 
 // A field's bands or the ground's notes: each octave in the cascade's range, once (p_notes: each note, several may share
-// an octave), its amplitude in the exact range.
+// an octave), its amplitude in the exact range (or 0: a generic table's silent note).
 ov::str validate_bands(const std::vector<Cascade::Band> &p_bands, const Ground &p_ground, const ov::str &p_where, bool p_notes = false) {
     for (const Cascade::Band &b : p_bands) {
         if (b.k < ExactNoise::BAND_SHIFT || b.k > p_ground.k_max) {
@@ -46,7 +46,7 @@ ov::str validate_bands(const std::vector<Cascade::Band> &p_bands, const Ground &
         if (find_band(p_bands, b, p_notes) != &b) {
             return p_where + ov::format("octave k = %d is listed twice.", b.k);
         }
-        if (!ExactNoise::in_exact_range(b.amp)) {
+        if (!ExactNoise::in_exact_range(b.amp) && !(p_notes && !p_ground.specialize && b.amp == 0.0f)) {
             return p_where + ov::format("octave k = %d: amplitude %s outside [2^-16, 2^40].", b.k, b.amp);
         }
     }

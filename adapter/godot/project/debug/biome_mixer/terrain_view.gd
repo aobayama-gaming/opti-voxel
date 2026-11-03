@@ -142,6 +142,9 @@ func _restart_terrain() -> void:
 		_terrain.discoverer_mode = 1
 		_terrain.walk_gpu = false
 		_terrain.direct_batches_per_frame = 8  # 4 (the game's): a reload 116 ms p50, 8: 100, 16: 108 (heavier frames)
+		# The generic shader (SDFCascade::specialize): an edit of a value, a shape's type or a 0 included, keeps the
+		# cascade's GPU text, so a restart compiles nothing (the specialised text froze the view 3.5 s on such edits).
+		_terrain.specialize_shaders = false
 		_terrain.set_world_json(_view_world(_json), _dir)
 		_terrain.origin_shifted.connect(func(p_shift: Vector3) -> void:
 			_target -= p_shift

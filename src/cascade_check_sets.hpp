@@ -34,9 +34,14 @@ enum class SpikeSet {
     L4E,
 };
 inline constexpr const char *SET_LABELS[] = { "4", "4c", "4f", "4p", "4s", "4d", "4w", "4g", "4n", "4e" };
+// A set's generic variant (CascadeSpike's option generic): its climate compiled generic (SDFCascade::specialize false).
+inline constexpr int GENERIC = 64;
+inline SpikeSet base_set(SpikeSet p_v) {
+    return SpikeSet(int(p_v) & ~GENERIC);
+}
 
 inline ov::str set_label(SpikeSet p_v) {
-    return SET_LABELS[int(p_v)];
+    return SET_LABELS[int(base_set(p_v))] + ov::str(int(p_v) & GENERIC ? " generic" : "");
 }
 
 // False (and an error) for an unknown label.
@@ -65,7 +70,7 @@ inline double median(std::vector<double> p_v) {
 
 // The world file of set p_v; p_world for the bare set.
 inline ov::str set_world(SpikeSet p_v, const ov::str &p_world) {
-    switch (p_v) {
+    switch (base_set(p_v)) {
         case SpikeSet::L4:
             return p_world;
         case SpikeSet::L4G:
@@ -97,7 +102,7 @@ inline int configure_variant(SDFCascade &p_sdf, SpikeSet p_v, const ov::str &p_w
     r_param.voxel_size = float(world.voxel_m);
     p_sdf.planet_radius_m = world.planet_radius_m;
     p_sdf.planet_ring_m = world.planet_ring_m;
-    if (p_v == SpikeSet::L4F && err.empty()) {
+    if (base_set(p_v) == SpikeSet::L4F && err.empty()) {
         // Every biome on the template's notes (constant: no modulation), its curve kept (the fields carried).
         ov::Value &biomes = world.climate_table["biomes"];
         for (size_t i = 0; i < biomes.size(); i++) {
@@ -115,6 +120,7 @@ inline int configure_variant(SDFCascade &p_sdf, SpikeSet p_v, const ov::str &p_w
         }
     }
     p_sdf.climate_data = world.climate_table;
+    p_sdf.specialize = (int(p_v) & GENERIC) == 0;
     p_sdf.configure(r_param, world.lods);
     return world.lods;
 }

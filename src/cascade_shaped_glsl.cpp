@@ -6,10 +6,6 @@ namespace CascadeShapedGLSL {
 
 using namespace Cascade;
 
-bool shaped(const Spec &p_spec) {
-    return p_spec.modulation && p_spec.modulation->shaped();
-}
-
 ov::str noise_code(const Spec &p_spec, int p_group, const ov::str &p_pos) {
     const ov::str args = ", int(band.info.z), band.info.y, band.offset_lo.xyz, band.offset_hi.xyz);\n";
     if (!p_spec.stretched(p_group)) {
@@ -64,7 +60,7 @@ WorldPos cascade_warped(WorldPos p, vec4 warp[3]) {
 }
 
 // Cascade::modulated_channels for group p_group's band: `Ch insert_band_shaped_<g>(Ch ch, WorldPos p, CascadeBand band,
-// BandMod md, int m)`, the plain term first (insert_band_mod's order), then the shaped ones and the state (group 0). Only
+// BandMod md, int m)`, the plain term first (modulated_channels' order), then the shaped ones and the state (group 0). Only
 // the code for the features some level of the group uses (Modulation::group_features): the rest never runs.
 ov::str shaped_band_function(const Spec &p_spec, int p_group) {
     using ExactNoise::glsl_float;
@@ -85,7 +81,7 @@ ov::str shaped_band_function(const Spec &p_spec, int p_group) {
     }
     code += "    precise float aws = md.amp[0].w * " + slope + ov::str(";\n    precise vec4 o;\n");
     code += "    o.w = g.w * md.amp[0].w;\n    o.x = g.x * aws + g.w * md.amp[0].x;\n    o.y = g.y * aws + g.w * md.amp[0].y;\n    o.z = g.z * aws + g.w * md.amp[0].z;\n";
-    // ch = ch + o, channel by channel (insert_band_mod's adds).
+    // ch = ch + o, channel by channel (two roundings, as insert_band's).
     auto adds = [&]() {
         static const char *COMP = "wxyz";
         ov::str a;

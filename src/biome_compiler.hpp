@@ -40,6 +40,8 @@ struct GraphRow {
     float gain = 0.0f;
     float warp = 0.0f; // LOD0 voxels per unit of the warp fields
     int warp_fields[3] = { -1, -1, -1 };
+    bool multifractal = false; // the nodes, whatever their values (Amp's)
+    bool warped = false;
 };
 
 // A biome's graph as the compiler reads it: its mix rows (the curve and the look are the Biome's own).

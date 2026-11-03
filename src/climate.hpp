@@ -112,6 +112,11 @@ struct Amp {
     float gain = 0.0f;
     float warp = 0.0f;
     int warp_fields[3] = { -1, -1, -1 }; // x, y, z (with a warp)
+    // The terms the text has: the biome mixes the note, through a multifractal, through a warp (a generic table's: the
+    // graph's nodes, whatever their values, Table::generic; a specialised one's: those of non-zero gain, warp).
+    bool mixed = false;
+    bool multifractal = false;
+    bool warped = false;
 };
 
 // A piecewise cubic through control points (libnoise's Curve: each segment the cubic through its two points and their
@@ -249,6 +254,14 @@ struct Biome {
     uint32_t debug_color = 0; // 0xRRGGBB, reports and debug views
 };
 
+// A note's identity (several notes may share an octave): its octave, its band's seed and its stretch.
+struct NoteId {
+    int k = 0;
+    uint32_t seed = 0;
+    int stretch = 0;
+    bool operator==(const NoteId &p_o) const { return k == p_o.k && seed == p_o.seed && stretch == p_o.stretch; }
+};
+
 struct Table {
     std::vector<Field> fields;
     std::vector<Biome> biomes;
@@ -256,10 +269,16 @@ struct Table {
     // plays plain at one amplitude is a constant band at it, which no biome lists; the others are modulated, every biome
     // listing them (amplitude 0 where its graph doesn't mix it).
     std::vector<Cascade::Band> notes;
+    // Generic (Ground::specialize false): structured by the graphs' nodes, not by which values are 0 (docs/climate.md).
+    // Every note stays (a silent one at amplitude 0), every biome lists every note (constant: the specialised table's
+    // constant bands, masked at run time). The same bits as the specialised table's.
+    bool generic = false;
+    std::vector<NoteId> constant;
 
     // The field named p_name, -1 if none.
     int field_index(const ov::str &p_name) const;
-    // Whether a biome weights a band by the multifractal state: the combined spec carries one more field group for it.
+    // Whether a biome weights a band by the multifractal state (generic: may, a multifractal node): the combined spec
+    // carries one more field group for it.
     bool has_state() const;
     // Whether a biome has a sample program: the ground at a sample is then more than the cascade's (ground_value).
     bool has_programs() const;
@@ -278,6 +297,8 @@ struct Ground {
     // A note's own amplitude at most this (LOD0 voxels): a planet's relief over SDFCascade::PLANET_HEADROOM, so a biome's
     // volume up to it still fits under amp_cap; infinite on the flat world.
     double note_cap = INFINITY;
+    // False: a generic table (Table::generic).
+    bool specialize = true;
 };
 
 // Empty if p_table is well formed, else the first error: field and biome counts, unique names, bands (k in
@@ -341,13 +362,6 @@ float biome_amp(const Biome &p_biome, const Cascade::Band &p_band);
 float max_amp(const Table &p_table, const Cascade::Band &p_band);
 // The ground's largest |H| (LOD0 voxels): each note's max_amp summed (validate's curves, the compiler's program bounds).
 double ground_reach(const Table &p_table);
-// A note's identity (several notes may share an octave): its octave, its band's seed and its stretch.
-struct NoteId {
-    int k = 0;
-    uint32_t seed = 0;
-    int stretch = 0;
-    bool operator==(const NoteId &p_o) const { return k == p_o.k && seed == p_o.seed && stretch == p_o.stretch; }
-};
 inline NoteId note_id(const Cascade::Band &p_band) {
     return NoteId{ p_band.k, p_band.seed, p_band.stretch };
 }
@@ -410,7 +424,7 @@ Float4 ground_value(const Table &p_table, const float p_slots[Cascade::SLOTS]);
 // The same with the table's sample_carry given (per sample: computed once at configure).
 Float4 ground_value(const Table &p_table, const SampleCarry &p_carry, const float p_slots[Cascade::SLOTS]);
 // The same in GLSL: `vec4 climate_ground(Ch ch)` returning (value, d/dx, d/dy, d/dz) like the cascade's c0, after the
-// shared helpers (splices_helpers is true with ground terms), ch in p_combined's GPU layout.
+// shared helpers (spliced with ground terms), ch in p_combined's GPU layout.
 ov::str ground_glsl(const Table &p_table, const Cascade::Spec &p_combined, Cascade::ShaderParams &r_params);
 
 // The biome with the largest weight p_w at lattice point p_p of Λ_m; among equal weights (same bits), the
@@ -433,15 +447,11 @@ Material::Params biome_material(const Biome &p_biome);
 // assigning `float <p_var>`.
 ov::str pick_glsl(const Table &p_table, const Cascade::Spec &p_combined);
 ov::str pick_statements_glsl(const Table &p_table, const ov::str &p_var);
-// The pieces both generated functions share (climate_glsl.cpp): the dual-number helpers (cl_flush, cl_mul, cl_sub,
-// cl_edge), and apply_terms then weights as statements defining f<i> (the fields) and w<b> (the weights) from the channels
-// of `Ch pre` (p_spec's GPU layout).
-ov::str glsl_helpers();
+// The pieces both generated functions share (climate_glsl.cpp): apply_terms then weights as statements defining f<i> (the
+// fields) and w<b> (the weights) from the channels of `Ch pre` (p_spec's GPU layout).
 ov::str glsl_weights(const Table &p_table, const Cascade::Spec &p_spec, Cascade::ShaderParams &r_params);
-// Whether the level shader splices the helpers once, up front (shared_helpers_glsl), for every generated function: with a
-// shaped modulation or ground terms. Else each generator brings glsl_helpers as before them (the plain text).
-bool splices_helpers(const Table &p_table, const Cascade::Spec &p_combined);
-// glsl_helpers plus cl_add and cl_scale (Cascade::dadd, dscale).
+// The dual-number helpers (cl_flush, cl_mul, cl_sub, cl_fill, cl_axis, cl_rcp, cl_add, cl_scale: Climate's and Cascade's
+// dflush, dmul, dsub, dadd, dscale).
 ov::str shared_helpers_glsl();
 
 } // namespace Climate

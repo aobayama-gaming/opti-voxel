@@ -67,12 +67,13 @@ TEST_CASE("Climate shape: a table without shapes keeps the bits it had before th
     CHECK(h == 13659167188471627091ull); // re-pinned when the ground's octave k got the seed make_octave(seed, k)
     // The shader texts (the modulation's arrays sized by the spec's group count, the ground over its base surface). Both
     // re-pinned when the climate's numbers moved to the shader params (Cascade::ShaderParams, a uniform block: each value put
-    // back as its literal gave the old texts' hashes), and when the skirt depths joined them (they follow the amplitudes).
-    CHECK(chunk_text == 8829140549294215735ull);
+    // back as its literal gave the old texts' hashes), when the skirt depths joined them (they follow the amplitudes), and when
+    // the plain amplitudes' text folded into the shaped one (cascade_mods, insert_band_shaped: the bits kept).
+    CHECK(chunk_text == 11406653831236280515ull);
     // The point shader re-pinned when point items became any lattice point with its unit register (point_frame, 16 B),
     // and (all three) when the derive moved before the level's insertions (one climate per point).
     // The bits and the point shader re-pinned when the biomes became a centre and span per field (Climate::weights).
-    CHECK(point_text == 8001590302712550601ull);
+    CHECK(point_text == 16662862312908914841ull);
 }
 
 // The shapes' centring constants are the noise's own means: E[sabs(n)] and E[n^2] of perlin3, over random points of
@@ -126,7 +127,7 @@ TEST_CASE("Climate shape: a shaped table parses into its groups, box runs equal 
     CHECK(spec.fields.size() == t.fields.size() + 1); // the state group, band-less
     CHECK(spec.fields.back().empty());
     CLIMATE_REQUIRE(spec.modulation != nullptr);
-    CHECK(spec.modulation->shaped());
+    CHECK(spec.modulation->group_features(0) != 0u);
     CHECK(spec.modulation->state_group() == 5); // the ground, 4 fields, then the state
     int64_t bad = 0;
     for (const int lod : { 0, 3, 8 }) {
@@ -265,7 +266,7 @@ TEST_CASE("Climate shape: the example world parses at any LOD count, shaped, and
         CHECK(c.sdf.has_ground_materials());
         const Cascade::Spec &spec = c.sdf.get_spec();
         CLIMATE_REQUIRE(spec.modulation != nullptr);
-        CHECK(spec.modulation->shaped());
+        CHECK(spec.modulation->group_features(0) != 0u);
         int64_t bad = 0;
         for (const int lod : { 0, 5, 11 }) {
             bad += ClimateTest::box_point_mismatches(spec, Vector3i64(int64_t(18022 * 20) >> lod, (c.sdf.get_datum_y() >> lod) - 1, int64_t(65536 * 20) >> lod), 3, lod, true);
@@ -382,7 +383,7 @@ TEST_CASE("Climate shape: sample programs reach every SDF path, within their bou
 }
 
 // Every level shader variant (chunks / points, with / without the fields) defines each climate helper it calls: a shaped
-// table with and without curves (the shared helpers are spliced once, up front; splices_helpers), and several notes per
+// table with and without curves (the shared helpers are spliced once, up front; get_climate_helpers_glsl), and several notes per
 // octave.
 TEST_CASE("Climate shape: every level shader variant defines the climate helpers it calls") {
     const ov::Value with_terms = shaped_table();
@@ -623,33 +624,91 @@ static ov::Value retuned(ov::Value p_table) {
     return p_table;
 }
 
-// Only engine.json makes new GLSL: a table whose values moved and structure didn't compiles to the same level shaders
-// (both views, chunks and points), its numbers in the shader params instead (Cascade::ShaderParams).
-TEST_CASE("Climate shape: an edit of a table's values keeps its shader text, its params move") {
-    for (const char *path : { "res://climate/programs_test.json", "res://climate/shaped_test.json", "res://climate/world.json" }) {
-        ov::Value data;
-        CLIMATE_REQUIRE(load_table(path, data) == ov::str());
-        ClimateSDF a(data, 25);
-        ClimateSDF b(retuned(data), 25);
-        CLIMATE_REQUIRE(a.sdf.get_climate() != nullptr);
-        CLIMATE_REQUIRE(b.sdf.get_climate() != nullptr);
-        int64_t moved = 0;
-        size_t most = 0;
-        for (const bool points : { false, true }) {
-            for (const CascadeGLSL::View view : { CascadeGLSL::View::FIELDS, CascadeGLSL::View::SAMPLES }) {
-                Cascade::ShaderParams pa, pb;
-                const ov::str ta = CascadeGLSL::level_shader(&a.sdf, false, points, false, !points, view, true, &pa);
-                const ov::str tb = CascadeGLSL::level_shader(&b.sdf, false, points, false, !points, view, true, &pb);
-                CHECK(ta == tb);
-                CHECK(pa.values.size() == pb.values.size());
-                CHECK(pa.vec4s() * 16 <= 16384); // CascadePasses' uniform block (MAX_PARAM_BYTES)
-                most = std::max(most, pa.values.size());
-                for (size_t i = 0; i < pa.values.size() && i < pb.values.size(); i++) {
-                    moved += float_bits(pa.values[i]) != float_bits(pb.values[i]);
+// p_table with the edits whose values the specialised compile folds (p_kind): 0 every shape another type, 1 the values
+// at 0 (warp amounts, gains, each biome's first mix row), 2 neutral (every row at volume 1, shapes plain, no warp or
+// gain: notes every biome plays alike turn constant). The structure kept.
+static ov::Value folded(ov::Value p_table, int p_kind) {
+    static const char *const SHAPES[] = { "ridged", "plain", "billow", "square" };
+    for (size_t b = 0; b < p_table["biomes"].size(); b++) {
+        ov::Value &nodes = ClimateTest::graph_nodes(p_table, b);
+        for (size_t n = 0; n < nodes.size(); n++) {
+            ov::Value &node = nodes.at(n);
+            const ov::str kind = node["kind"].as_str();
+            if (kind == "shape" && p_kind != 1) {
+                node.erase("coeffs");
+                node.erase("offset");
+                node.erase("scale");
+                node["shape"] = p_kind == 0 ? SHAPES[(b + n) % 4] : "plain";
+            } else if (kind == "warp" && p_kind != 0) {
+                node["amount_m"] = 0.0;
+            } else if (kind == "multifractal" && p_kind != 0) {
+                node["gain"] = 0.0;
+            } else if (kind == "mix" && p_kind != 0) {
+                for (size_t i = 0; i < node["rows"].size(); i++) {
+                    node["rows"].at(i)["x"] = p_kind == 2 ? 1.0 : (i == 0 ? 0.0 : node["rows"][i]["x"].as_double());
                 }
             }
         }
-        MESSAGE(std::string(path), ": ", moved, " params moved, at most ", int64_t(most), " in a shader");
-        CHECK(moved > 0);
+    }
+    return p_table;
+}
+
+// A table's text follows its structure alone (Cascade::ShaderParams hold its numbers): the specialised one's through an
+// edit of its values (retuned), the generic one's (Table::generic, SDFCascade::specialize false) through every edit,
+// those the specialised compile folds included (a shape's type, a value at 0, notes turning constant), so the biome
+// mixer's edits compile nothing; and the generic table's bits are the specialised one's, every edit.
+TEST_CASE("Climate shape: a table's text follows its structure, the generic one's through every edit, with the specialised bits") {
+    int64_t compared = 0, mismatches = 0;
+    for (const char *path : { "res://climate/shaped_test.json", "res://climate/world.json", "res://climate/programs_test.json", "res://climate/notes_test.json",
+                 "res://climate/example.json", "res://climate/plain.json" }) {
+        ov::Value data;
+        CLIMATE_REQUIRE(load_table(path, data) == ov::str());
+        ov::str first[2]; // the table's own texts: generic, specialised
+        int64_t moved[2] = {}, params = 0;
+        auto text = [&](const ClimateSDF &p_c) {
+            ov::str t;
+            for (const bool points : { false, true }) {
+                for (const CascadeGLSL::View view : { CascadeGLSL::View::FIELDS, CascadeGLSL::View::SAMPLES }) {
+                    Cascade::ShaderParams p;
+                    t += CascadeGLSL::level_shader(&p_c.sdf, false, points, false, !points, view, true, &p);
+                    CHECK(p.vec4s() * 16 <= 16384); // CascadePasses' uniform block (MAX_PARAM_BYTES)
+                    params = std::max(params, int64_t(p.values.size()));
+                }
+            }
+            return t;
+        };
+        for (int e = 0; e < 5; e++) {
+            const ov::Value table = e == 0 ? data : (e == 1 ? retuned(data) : folded(data, e - 2));
+            ClimateSDF generic(table, 25, false), specialised(table, 25);
+            CLIMATE_REQUIRE(generic.sdf.get_climate() != nullptr);
+            CLIMATE_REQUIRE(specialised.sdf.get_climate() != nullptr);
+            const ov::str texts[2] = { text(generic), text(specialised) };
+            for (int g = 0; g < 2; g++) {
+                if (e == 0) {
+                    first[g] = texts[g];
+                }
+                moved[g] += texts[g] != first[g];
+            }
+            CHECK((e != 1 || texts[1] == first[1])); // retuned: the specialised structure kept
+            for (const int lod : { 0, 2, 6, 11 }) {
+                for (int i = 0; i < 40; i++) {
+                    const Vector3i64 p(int64_t(i) * 7919 - 50000, (generic.sdf.get_datum_y() >> lod) + 20 - i, int64_t(i) * -104729 + (int64_t(1) << 33));
+                    const WorldPos pos = ClimateTest::lattice_pos(p, lod);
+                    compared++;
+                    mismatches += float_bits(generic.sdf.evaluate(pos, lod)) != float_bits(specialised.sdf.evaluate(pos, lod));
+                }
+            }
+        }
+        MESSAGE(std::string(path), ": of 4 edits the generic text moved on ", moved[0], ", the specialised on ", moved[1], "; at most ", params, " params");
+        CHECK(moved[0] == 0);
+    }
+    MESSAGE("generic vs specialised: ", compared, " samples, ", mismatches, " differ");
+    CHECK(mismatches == 0);
+    // No climate: the template ground, specialised either way (nothing edits it; generic, it paid cascade_mods: +11%).
+    const ClimateSDF bare_generic(ov::Value(), 25, false), bare(ov::Value(), 25);
+    for (const bool points : { false, true }) {
+        Cascade::ShaderParams pg, ps;
+        CHECK(CascadeGLSL::level_shader(&bare_generic.sdf, false, points, false, !points, CascadeGLSL::View::FIELDS, true, &pg) ==
+                CascadeGLSL::level_shader(&bare.sdf, false, points, false, !points, CascadeGLSL::View::FIELDS, true, &ps));
     }
 }

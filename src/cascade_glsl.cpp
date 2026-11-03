@@ -218,10 +218,6 @@ WorldPos level_point(uvec3 m_lo, ivec3 m_hi, uvec3 i, int m) {
 }
 )glsl";
 
-ov::str flt(float p_f) {
-    return ExactNoise::glsl_float(p_f);
-}
-
 // `int <p_name>(int lod)`: p_value(lod) for lod 0 .. MAX_LEVEL, a C++ rule as a GLSL table (no formula retyped).
 template <typename Value>
 ov::str level_switch(const char *p_name, Value p_value) {
@@ -405,13 +401,12 @@ ov::str storage_functions(const Spec &p_spec, int p_stride, int p_whole_fields, 
 }
 
 using CascadeShapedGLSL::noise_code;
-using CascadeShapedGLSL::shaped;
 using CascadeShapedGLSL::shaped_band_function;
 using CascadeShapedGLSL::shaped_helpers;
 
 // Cascade's insert_point for group g's band: insert_band_<g> at its constant amplitude (o = channel * factor[order],
-// ch = ch + o: two roundings, precise), insert_band_mod_<g> at a modulated one (Cascade::modulated_channels, the same
-// order); and Cascade::flush_value.
+// ch = ch + o: two roundings, precise), insert_band_shaped_<g> at a modulated one (Cascade::modulated_channels, the
+// same order); and Cascade::flush_value.
 ov::str band_functions(const Spec &p_spec) {
     const int nch = p_spec.gpu_channels();
     ov::str code = p_spec.stretched() ? CascadeShapedGLSL::stretch_helper(p_spec) : ov::str();
@@ -426,20 +421,7 @@ ov::str band_functions(const Spec &p_spec) {
                     base + c);
         }
         code += "    return ch;\n}\n\n";
-        if (shaped(p_spec) && p_spec.modulation->group_features(g) != 0u) {
-            code += shaped_band_function(p_spec, g);
-        } else if (p_spec.modulation) {
-            code += ov::format("Ch insert_band_mod_%d(Ch ch, WorldPos p, CascadeBand band, vec4 amp) {\n", g);
-            code += noise_code(p_spec, g, "p");
-            code += ov::format("    precise float aws = amp.w * %s;\n", flt(ExactNoise::exact_pow2(-p_spec.insert_shift)));
-            code += ov::format("    { precise float o = g.w * amp.w; precise float s = ch.c[%d] + o; ch.c[%d] = s; }\n", base, base);
-            static const char *AXES = "xyz";
-            for (int a = 0; a < 3; a++) {
-                code += ov::format("    { precise float o = g.%c * aws + g.w * amp.%c; precise float s = ch.c[%d] + o; ch.c[%d] = s; }\n", AXES[a], AXES[a], base + 1 + a,
-                        base + 1 + a);
-            }
-            code += "    return ch;\n}\n\n";
-        }
+        code += p_spec.modulation ? shaped_band_function(p_spec, g) : ov::str();
     }
     code += "Ch flush(Ch ch) {\n";
     for (int c = 0; c < nch; c++) {
@@ -471,15 +453,10 @@ struct ExtraNotes {
     int group_base(int p_g) const { return p_g == 0 ? 0 : total + p_g * CascadeGLSL::BAND_ENTRIES; }
 };
 
-// Group g's band insertion: the constant one, or the modulated one from mod / amp[p_mod] where the modulated mask has g.
+// Group g's band insertion: the constant one, or the modulated one from mod[p_mod] where the modulated mask has g.
 ov::str band_call(const Spec &p_spec, int p_g, const ov::str &p_mod) {
-    if (shaped(p_spec)) {
-        const bool own = p_spec.modulation->group_features(p_g) != 0u;
-        const ov::str call = own ? ov::format("insert_band_shaped_%d(ch, p, band, mod[%s], m)", p_g, p_mod) : ov::format("insert_band_mod_%d(ch, p, band, mod[%s].amp[0])", p_g, p_mod);
-        return ov::format("ch = ((modulated >> %du) & 1u) != 0u ? %s : insert_band_%d(ch, p, band);\n", p_g, call, p_g);
-    }
     if (p_spec.modulation) {
-        return ov::format("ch = ((modulated >> %du) & 1u) != 0u ? insert_band_mod_%d(ch, p, band, amp[%s]) : insert_band_%d(ch, p, band);\n", p_g, p_g, p_mod, p_g);
+        return ov::format("ch = ((modulated >> %du) & 1u) != 0u ? insert_band_shaped_%d(ch, p, band, mod[%s], m) : insert_band_%d(ch, p, band);\n", p_g, p_g, p_mod, p_g);
     }
     return ov::format("ch = insert_band_%d(ch, p, band);\n", p_g);
 }
@@ -497,8 +474,8 @@ ov::str extra_notes_code(const Spec &p_spec) {
             code += ov::format("        case %d: first = %d; count = %d; break;\n", m, extra.first[m], extra.count[m]);
         }
     }
-    code += "        default: break;\n        }\n        for (int e = 0; e < count; e++) {\n            CascadeBand band = bands[first + e];\n            ";
-    return code + band_call(p_spec, 0, ov::format("%d + e", p_spec.note_mod(1))) + "        }\n    }\n";
+    code += "        default: break;\n        }\n        for (int e = 0; e < count; e++) {\n            CascadeBand band = bands[first + e];\n            if (band.info.x != 0u) {\n                ";
+    return code + band_call(p_spec, 0, ov::format("%d + e", p_spec.note_mod(1))) + "            }\n        }\n    }\n";
 }
 
 // The level's insertions (the template's /*INSERT_BANDS*/): the modulated amplitudes from the channels before any
@@ -508,10 +485,8 @@ ov::str insert_code(const Spec &p_spec, bool p_derive) {
     const ExtraNotes extra(p_spec);
     ov::str code;
     const char *at = p_derive ? ", p" : "";
-    if (shaped(p_spec)) {
+    if (p_spec.modulation) {
         code += ov::format("    BandMod mod[%d];\n    uint modulated = cascade_mods(m, ch, mod%s);\n", p_spec.mod_count(), at);
-    } else if (p_spec.modulation) {
-        code += ov::format("    vec4 amp[%d];\n    uint modulated = cascade_amplitudes(m, ch, amp%s);\n", p_spec.mod_count(), at);
     }
     for (int g = 0; g < p_spec.group_count(); g++) {
         if (p_spec.group_bands(g).empty()) {
@@ -595,7 +570,7 @@ ov::bytes band_table(const Spec &p_spec) {
             ov::put_s32(slot + 32, hi32(b.offset.x));
             ov::put_s32(slot + 36, hi32(b.offset.y));
             ov::put_s32(slot + 40, hi32(b.offset.z));
-            ov::put_u32(slot + 48, 1);
+            ov::put_u32(slot + 48, b.amp != 0.0f ? 1u : 0u); // a silent note inserts nothing (LevelBands::each)
             ov::put_u32(slot + 52, b.seed);
             ov::put_u32(slot + 56, uint32_t(b.k));
             ov::put_u32(slot + 60, uint32_t(b.stretch));
@@ -667,9 +642,9 @@ ov::str view_code(const ov::str &p_code, const CascadeSource *p_sdf, const Spec 
         flag_values += ov::format("    g_carry_n = pc.j == %d ? uint(cascade_carry_used(lod)) : 0u;\n", carried ? 0 : 1);
     }
     const ov::str modulation = climate ? p_spec.modulation->glsl(p_spec, carried, derive, r_params) : ov::str();
-    // The climate's shared helpers (with a shaped modulation or ground terms) and the shaped inserts' (BandMod), before
-    // every generated function that uses them.
-    const ov::str helpers = (climate ? p_sdf->get_climate_helpers_glsl() : ov::str()) + (shaped(p_spec) ? shaped_helpers() : ov::str());
+    // The climate's shared helpers (with a modulation or ground terms) and the shaped inserts' (BandMod), before every
+    // generated function that uses them.
+    const ov::str helpers = climate ? p_sdf->get_climate_helpers_glsl() + shaped_helpers() : ov::str();
     const ov::str storage = storage_functions(p_spec, int(vec4s_per_point(whole, p_range)), int(whole.fields.size()), carried);
     ov::str code = ov::replace_all(p_code, "/*CASCADE*/", (flags.empty() ? ov::str() : flags + "\n") + helpers + hermite_functions(p_spec, carried) + storage + band_functions(p_spec) + modulation + p_tail);
     code = ov::replace_all(code, "/*INSERT_BANDS*/", insert_code(p_spec, derive));

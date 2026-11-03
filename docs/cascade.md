@@ -28,8 +28,12 @@ CPU reference (`src/cascade.hpp`) and GPU passes (`src/cascade_glsl.*`), bit-ide
   `CascadeGLSL::PARAM_BINDING` (the value's bits; constant indices, as cheap as literals, the skirt table read at the
   LOD's; not a storage buffer, which WebGPU caps per stage; at most 16 KB, world.json's largest 1,019 values), never a
   literal. So the
-  text depends on the world's structure only (its notes' octaves, which nodes, which coefficients are zero: the CPU
-  skips the same zero terms); an edit of a value compiles nothing (the Godot device keeps the SPIR-V of every text by
+  text depends on the world's structure only. Specialised (`SDFCascade::specialize`, the game's), the structure is
+  which coefficients are non-zero: the text has the terms the CPU computes, no test. Generic (the biome mixer's,
+  `Climate::Table::generic`), it is which nodes the graphs have: the text has every term a node may make non-zero and
+  tests its value where the CPU does, so a value reaching 0, a shape's type or notes turning constant keep the text.
+  The same code generates both: the specialised text is the generic one with those tests folded, and the bits are the
+  same (`docs/climate.md`). An edit of a value compiles nothing (the Godot device keeps the SPIR-V of every text by
   text, `RDDevice`). Engine constants (the kernel's fade, the noise's means) stay literals. `CascadePasses` owns the passes per device (`ov::gpu::Device`); the direct mesher runs
   them in place of its sdf pass (and in the discovery audit), the legacy one in sub-batches of 128.
 - **Carry groups** (`Cascade::carry_slot`, `Modulation::derive`): 4 slots each after the field groups that a run's

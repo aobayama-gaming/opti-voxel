@@ -95,6 +95,24 @@ macro layer in double on the CPU, `BaseSurface`'s region machinery).
   costs no extra noise read (the warp fields' own octaves are inserted on their coarse lattices and interpolated
   down). Slope damping and the swiss turbulence (warps read from the ground's slope) were built and dropped: their
   own gradient needs the ground's second derivatives, which the cascade doesn't carry.
+- **Generic or specialised** (`Ground::specialize`, set by `SDFCascade::specialize`, `World::Settings::
+  specialize_shaders`, the `VoxelTerrain` property `specialize_shaders`; the game specialises, the mixer's 3D view
+  doesn't): one compiler and one modulator, and a term's text is the same code either way. *Specialised*, the table's
+  structure is its values': a note silent everywhere is dropped, a note every biome plays alike is a constant band,
+  and a term whose coefficient is 0 (an amplitude on |n| or n^2, a multifractal gain, a state coefficient, a warp) is
+  not in the text. *Generic* (`Table::generic`), the structure is the graphs' nodes: every note a graph mixes stays (a
+  silent one at amplitude 0: `LevelBands` and the band table skip it), every biome lists every note (a constant one in
+  `Table::constant`, its level's modulated bit 0 at run time), a term is in the text where a node may make it non-zero
+  (`Amp::mixed`, `has_shape`, `multifractal`, `warped`) and the text tests its value where `biome_mod` does
+  (`if (k != 0.0)`, `gain > 0.0 ? ...`), the BandMod features and the levels' mask read from the shader params. So an
+  edit of any value keeps the text (a shape's type, a 0, notes turning constant): a world's restart compiles nothing.
+  The specialised text is the generic one with those tests folded (the compile knows their outcome), so the bits are
+  the same: the extra carry parts hold 0 (`Cascade::flush`), the extra state group is never read, a constant level
+  takes the constant inserts, a silent band inserts nothing (the unit test "a table's text follows its structure, the generic one's
+  through every edit, with the specialised bits"; on the GPU `cascade_test.sh --generic=1`). The template ground (no
+  climate) is specialised either way: nothing edits it. Cost (`cascade_test.sh` timing, µs per chunk, 2026-11-03):
+  generic is +7..9% on 4w, +12..21% on 4s, +9..13% on 4c over specialised, the same on the bare ground; a mixer edit
+  restarts in ~15 ms (a warp to 0 froze 3.4 s specialised).
 - **One climate per point, none per sample** (the carry): a run's last level, its samples, evaluates no climate. The
   level above derives it from the climate its own bands read (`Cascade::Modulation::derive`; on the GPU at the end of
   `cascade_mods`) into the carry groups (`Cascade::carry_slot`): the last level's `BandMod` parts and the samples'
@@ -135,7 +153,7 @@ macro layer in double on the CPU, `BaseSurface`'s region machinery).
   `tools/landforms/`; dunes and mountain carry their height curve), `example.json` (continent and terrain-type fields
   choosing mountains, hills, badlands and plains, two curves), `shaped_test.json` (every operation, CascadeSpike `4s`),
   `plain.json` (amplitudes only; pins every slot, the SDF, the skirts and both level shaders' text: a table without
-  shapes generates the old text bit for bit), `fieldless_test.json` (one biome, no field: CascadeSpike `4d`). The test tables are world files with an inline engine and climate.
+  shapes keeps the bits it had before them; its text is the shaped one since the plain amplitudes' own was folded in), `fieldless_test.json` (one biome, no field: CascadeSpike `4d`). The test tables are world files with an inline engine and climate.
 - **Checks**: `tools/unit_test.sh "Climate*"`; `tools/climate_report.sh` (pure CPU: biome maps, the pick drift, where
   biomes meet with a `--spawn`, relief per biome, gradient error, field maps) before any GPU run;
   `cascade_test.sh --sets=4,4c,4f,4p,4s,4d,4w` (G1 on the carried channels, G3, points, G10 the

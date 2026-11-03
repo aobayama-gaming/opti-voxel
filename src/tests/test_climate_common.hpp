@@ -99,8 +99,9 @@ struct ClimateSDF {
         CHECK(load_table(p_path, sdf.climate_data) == ov::str());
         configure(p_lods, p_skirt_cells);
     }
-    ClimateSDF(const ov::Value &p_data, int p_lods) {
+    ClimateSDF(const ov::Value &p_data, int p_lods, bool p_specialize = true) {
         sdf.climate_data = p_data;
+        sdf.specialize = p_specialize;
         configure(p_lods, -1.0f);
     }
 

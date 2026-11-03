@@ -74,6 +74,9 @@ ov::str gather(const std::vector<BiomeGraph> &p_graphs, const Ground &p_ground, 
                 a.shape = row.shape;
                 a.gain = row.gain;
                 a.warp = row.warp;
+                a.mixed = true;
+                a.multifractal = row.multifractal && (!p_ground.specialize || row.gain > 0.0f);
+                a.warped = row.warped && (!p_ground.specialize || row.warp != 0.0f);
                 std::copy(std::begin(row.warp_fields), std::end(row.warp_fields), std::begin(a.warp_fields));
                 it->entry[b] = int(r_amps[b].size());
                 r_amps[b].push_back(a);
@@ -85,8 +88,9 @@ ov::str gather(const std::vector<BiomeGraph> &p_graphs, const Ground &p_ground, 
 
 // Each note's fold (constant: every biome plays it plain at one amplitude) and largest amplitude; an octave is modulated
 // or constant as a whole (the cascade's levels are: Cascade::MAX_LEVEL_NOTES), at most MAX_LEVEL_NOTES notes and one
-// multifractal note (the state group holds one octave's) on it. Empty, or the first error.
-ov::str fold(const std::vector<std::vector<Amp>> &p_amps, std::vector<Note> &r_notes) {
+// multifractal note (the state group holds one octave's) on it (p_generic: the silent notes count, they stay). Empty, or
+// the first error.
+ov::str fold(const std::vector<std::vector<Amp>> &p_amps, bool p_generic, std::vector<Note> &r_notes) {
     for (Note &note : r_notes) {
         const Amp *first = note.entry[0] >= 0 ? &p_amps[0][size_t(note.entry[0])] : nullptr;
         note.constant = first && plain(*first);
@@ -100,11 +104,12 @@ ov::str fold(const std::vector<std::vector<Amp>> &p_amps, std::vector<Note> &r_n
         int count = 0, multifractal = 0;
         bool modulated = false;
         for (const Note &o : r_notes) {
-            if (o.band.k == note.band.k && o.top > 0.0f) {
+            if (o.band.k == note.band.k && (o.top > 0.0f || p_generic)) {
                 count++;
-                modulated = modulated || !o.constant;
+                modulated = modulated || (!o.constant && o.top > 0.0f);
                 for (size_t b = 0; b < o.entry.size(); b++) {
-                    if (o.entry[b] >= 0 && p_amps[b][size_t(o.entry[b])].gain > 0.0f) {
+                    const Amp *a = o.entry[b] >= 0 ? &p_amps[b][size_t(o.entry[b])] : nullptr;
+                    if (a && a->multifractal) {
                         multifractal++;
                         break;
                     }
@@ -243,21 +248,26 @@ ov::str compile(const std::vector<BiomeGraph> &p_graphs, const Ground &p_ground,
     std::vector<Note> notes;
     std::vector<std::vector<Amp>> amps(n);
     ov::str err = gather(p_graphs, p_ground, r_table, notes, amps);
-    err = err.empty() ? fold(amps, notes) : err;
+    err = err.empty() ? fold(amps, !p_ground.specialize, notes) : err;
     if (!err.empty()) {
         return err;
     }
     r_table.notes.clear();
+    r_table.constant.clear();
+    r_table.generic = !p_ground.specialize;
     for (Biome &bi : r_table.biomes) {
         bi.amps.clear();
     }
     for (Note &note : notes) {
-        if (!(note.top > 0.0f)) {
+        if (!(note.top > 0.0f) && !r_table.generic) {
             continue; // silent everywhere
         }
         note.band.amp = note.top;
         r_table.notes.push_back(note.band);
-        for (size_t b = 0; b < n && !note.constant; b++) {
+        if (note.constant && r_table.generic) {
+            r_table.constant.push_back(note_id(note.band));
+        }
+        for (size_t b = 0; b < n && (!note.constant || r_table.generic); b++) {
             Amp a;
             a.k = note.band.k;
             a.seed = note.band.seed;

@@ -460,6 +460,13 @@ TEST_CASE("Climate: the compiler shares notes between biomes, constant where eve
     const ov::str mf_a = R"({"name": "a", "at": {"t": [0, 1]}, "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 204.8, "seed": 8, "steepness": 0.125},
             {"id": "m", "kind": "multifractal", "in": "n", "gain": 1}, {"id": "o", "kind": "output", "height": "m"}]}})";
     CHECK(ov::contains(parse_json(fields + mf_a + ", " + mf + "]}", g.ground, two_states), "one multifractal"));
+    // One of them at gain 0: specialised, a plain note; generic, still a multifractal node (its text holds any gain).
+    ov::str mf_a0 = mf_a;
+    mf_a0.replace(mf_a0.find("\"gain\": 1"), 9, "\"gain\": 0");
+    Ground generic = g.ground;
+    generic.specialize = false;
+    CHECK(parse_json(fields + mf_a0 + ", " + mf + "]}", g.ground, two_states) == ov::str());
+    CHECK(ov::contains(parse_json(fields + mf_a0 + ", " + mf + "]}", generic, two_states), "one multifractal"));
 }
 
 TEST_CASE("Climate: weights are a partition of unity, in [0, 1], without denormals, gradients by the chain rule") {
@@ -919,7 +926,7 @@ TEST_CASE("Climate: a modulation without fields takes the modulated GPU variant"
     for (const bool points : { false, true }) {
         const Cascade::FieldRange range = CascadeGLSL::field_range(&sdf, points);
         CHECK_FALSE(range.empty());
-        CHECK(ov::contains(CascadeGLSL::level_shader(&sdf, false, points, false, !points, CascadeGLSL::View::FIELDS), "cascade_amplitudes("));
+        CHECK(ov::contains(CascadeGLSL::level_shader(&sdf, false, points, false, !points, CascadeGLSL::View::FIELDS), "cascade_mods("));
     }
 }
 

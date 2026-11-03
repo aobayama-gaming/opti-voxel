@@ -51,7 +51,7 @@ public:
         return ov::str();
     }
     // The dual-number helpers the climate's generated functions share, spliced once before them all (Climate's
-    // splices_helpers: a shaped modulation or ground terms); empty when each brings its own.
+    // shared_helpers_glsl, with a modulation or ground terms); empty without (no climate GLSL calls them).
     virtual ov::str get_climate_helpers_glsl() const { return ov::str(); }
 
     // The ground's base surface when it is curved (BaseSurface::curved): get_glsl_code's base_at then reads the batch's regions

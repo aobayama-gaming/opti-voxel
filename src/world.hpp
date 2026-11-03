@@ -71,6 +71,7 @@ public:
         int debug_view = 0;
         int discovery_cull_mode = ChunkDiscoverer::CULL_LEGACY;
         bool discovery_cache = true;
+        bool specialize_shaders = true; // SDFCascade::specialize
         bool discovery_verify = false;
         bool destroy_verify = false;
         int discoverer_mode = -1; // -1 auto: GPU (CPU when no local device can be made), 0 CPU, 1 GPU

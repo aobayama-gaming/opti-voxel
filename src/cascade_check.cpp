@@ -493,7 +493,7 @@ ov::Value check_table(ov::gpu::Device *p_device, int p_lods, const ChunkParam &p
 // table was refused fails.
 ov::Value check_biomes(ov::gpu::Device *p_device, SpikeSet p_set, const ov::str &p_world, const ChunkParam &p_param) {
     ov::Value d = ov::Value::object();
-    if (p_set == SpikeSet::L4) {
+    if (base_set(p_set) == SpikeSet::L4) {
         return d;
     }
     ChunkParam param = p_param;
@@ -746,11 +746,12 @@ ov::Value CascadeCheck::run(ov::gpu::Device &p_device, const ov::Value &p_option
     param.voxel_size = float(world.voxel_m);
     std::vector<SpikeSet> sets;
     const ov::str labels = p_options.get("sets", "4,4c").as_str();
+    const int generic = p_options.get("generic", false).as_bool() ? GENERIC : 0;
     for (size_t from = 0; from <= labels.size();) {
         const size_t comma = std::min(labels.find(',', from), labels.size());
         SpikeSet set;
         if (parse_variant(labels.substr(from, comma - from), set)) {
-            sets.push_back(set);
+            sets.push_back(SpikeSet(int(set) | generic));
         }
         from = comma + 1;
     }
@@ -799,7 +800,7 @@ ov::Value CascadeCheck::run(ov::gpu::Device &p_device, const ov::Value &p_option
     if (p_options.get("biomes", true).as_bool()) {
         // The example climate always, and every other set asked whose climate has biomes to pick.
         ov::Value biomes = ov::Value::object();
-        std::vector<SpikeSet> climates = { SpikeSet::L4C };
+        std::vector<SpikeSet> climates = { SpikeSet(int(SpikeSet::L4C) | generic) };
         for (const SpikeSet set : sets) {
             if (std::find(climates.begin(), climates.end(), set) == climates.end()) {
                 climates.push_back(set);

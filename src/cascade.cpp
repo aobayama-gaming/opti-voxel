@@ -138,7 +138,7 @@ WorldPos warped(const WorldPos &p_pos, const ExactNoise::Float4 p_warp[3]) {
 }
 
 // A modulated band's 4 channels (BandMod p_mod, Modulation), p_slope = 2^-shift. The plain term in the order of the
-// GPU's insert_band_mod: value n.w A, slope n.s (A p_slope) + n.w dA; the shaped terms (insert_band_shaped) added to it
+// GPU's insert_band_shaped: value n.w A, slope n.s (A p_slope) + n.w dA; then its shaped terms, added to it
 // as flushed dual products, and r_state (MOD_STATE) the state's new channels.
 void modulated_channels(const Spec &p_spec, const Band &p_band, const BandMod &p_mod, float p_slope, const Vector3i64 &p_p, float r_o[4],
         ExactNoise::Float4 *r_state) {
@@ -242,15 +242,19 @@ struct LevelBands {
     int group_of(int p_slot) const { return p_slot < MAX_GROUPS ? p_slot : 0; }
     int mod_of(int p_slot) const { return mod[p_slot]; }
     // Calls p_f(slot) for every band of the level: the ground's first, its other notes, then the fields' (each group's
-    // adds in order; groups' slots are disjoint).
+    // adds in order; groups' slots are disjoint). A silent note (amplitude 0, a generic table's) inserts nothing: the
+    // bits of the table without it.
     template <typename F>
     void each(F p_f) const {
-        for (int g = 0; g < groups; g++) {
-            if (band[g] != nullptr) {
-                p_f(g);
+        auto visit = [&](int p_slot) {
+            if (band[p_slot] != nullptr && band[p_slot]->amp != 0.0f) {
+                p_f(p_slot);
             }
+        };
+        for (int g = 0; g < groups; g++) {
+            visit(g);
             for (int e = 0; g == 0 && e < extra; e++) {
-                p_f(MAX_GROUPS + e);
+                visit(MAX_GROUPS + e);
             }
         }
     }

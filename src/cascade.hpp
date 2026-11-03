@@ -352,16 +352,13 @@ struct Modulation {
     }
     // The field group the ground's MOD_STATE band overwrites, or -1 (a band-less group: nothing else writes it).
     virtual int state_group() const { return -1; }
-    // Whether any band uses a BandMod feature: else the GLSL is the plain amplitudes' (the same text as before them).
-    virtual bool shaped() const { return false; }
     // The features group p_group's bands use at some level (the union): its GLSL insert has the code for them only.
     virtual uint32_t group_features(int p_group) const {
         (void)p_group;
         return 0u;
     }
-    // The same in GLSL, bit for bit. Not shaped: `uint cascade_amplitudes(int m, Ch pre, out vec4 amp[MAX_GROUPS])`
-    // returning modulated(m); shaped: `uint cascade_mods(int m, Ch pre, out BandMod mod[MAX_GROUPS])`, the same mask
-    // (CascadeGLSL's insert code). pre in p_spec's GPU layout (Spec::gpu_base, gpu_carry); p_carried: modulate's, for the
+    // The same in GLSL, bit for bit: `uint cascade_mods(int m, Ch pre, out BandMod mod[MAX_GROUPS])` returning
+    // modulated(m) (CascadeGLSL's insert code). pre in p_spec's GPU layout (Spec::gpu_base, gpu_carry); p_carried: modulate's, for the
     // samples' view (p_spec without the fields). p_derive (the fields' view, p_spec with the carry): `inout Ch pre` and a
     // last `WorldPos p`, and where g_carry_n says, derive too, from the same weights, into pre's carry groups. Its numbers
     // go to r_params.

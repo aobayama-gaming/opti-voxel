@@ -41,6 +41,9 @@ public:
     // the biomes' graphs. Without one, or one it refuses (an ERR, and no climate), the template biome's ground
     // (Climate::template_biome).
     ov::Value climate_data = ov::Value::object();
+    // Set before configure(): the climate compiled specialised to its values (Climate::Ground::specialize, a little
+    // faster), or generic (false, the biome mixer's: an edit of a value keeps the GPU text, so compiles nothing).
+    bool specialize = true;
 
     // Set before configure(). DEFAULT: the climate's notes. FLAT (the shapes gallery): no note and the ground at
     // FLAT_GROUND_M, a plane y = datum (the same passes, a zero height).
@@ -174,7 +177,7 @@ uint cascade_ground_material(Ch ch) {
     // planet's relief (the flat world: the exact range's top).
     Climate::Ground climate_ground() const {
         const double relief = base.curved() ? PLANET_RELIEF * base.get_radius() : double(ExactNoise::exact_pow2(40));
-        return Climate::Ground{ double(voxel_size), k_max, float(relief), base.curved() ? relief / PLANET_HEADROOM : INFINITY };
+        return Climate::Ground{ double(voxel_size), k_max, float(relief), base.curved() ? relief / PLANET_HEADROOM : INFINITY, specialize };
     }
     float skirt_depth_m(int p_lod) const override { return skirt_depth_table[p_lod]; }
     const Cascade::Spec &get_spec() const { return spec; }
@@ -231,7 +234,7 @@ uint cascade_ground_material(Ch ch) {
     ov::str get_ground_glsl(const Cascade::Spec &p_view, Cascade::ShaderParams &r_params) const override {
         return has_ground_terms() ? Climate::ground_glsl(table, p_view, r_params) : ov::str();
     }
-    ov::str get_climate_helpers_glsl() const override { return Climate::splices_helpers(table, spec) ? Climate::shared_helpers_glsl() : ov::str(); }
+    ov::str get_climate_helpers_glsl() const override { return spec.modulation || table.has_programs() ? Climate::shared_helpers_glsl() : ov::str(); }
 
     // CascadeTerrain::height_sdf of the channels of Λ_lod over the base at LOD0 voxel p_voxel: the unit gradient
     // and the distance in voxels of LOD p_lod (GLSL cascade_terrain_unit, bit for bit).
@@ -485,7 +488,10 @@ private:
             ov::Value t = ov::Value::object();
             t["biomes"] = ov::Value::array();
             t["biomes"].push_back(Climate::template_biome(double(voxel_size)));
-            const ov::str err = Climate::parse(t, climate_ground(), table);
+            // Specialised whatever specialize says: nothing edits the template.
+            Climate::Ground ground = climate_ground();
+            ground.specialize = true;
+            const ov::str err = Climate::parse(t, ground, table);
             OV_ERR_FAIL_COND_MSG(!err.empty(), "SDFCascade: the template ground: " + err);
         }
         if (preset == Preset::FLAT) {

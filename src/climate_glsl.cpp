@@ -80,16 +80,8 @@ ov::str glsl_kernel(const ov::str &p_var, const std::vector<Axis> &p_at, Cascade
 
 } // namespace
 
-ov::str glsl_helpers() {
-    return ov::replace_all(ov::str(GLSL_CLIMATE_HELPERS), "FLUSH", Cascade::glsl_flush());
-}
-
-bool splices_helpers(const Table &p_table, const Cascade::Spec &p_combined) {
-    return (p_combined.modulation && p_combined.modulation->shaped()) || p_table.has_programs();
-}
-
 ov::str shared_helpers_glsl() {
-    return glsl_helpers() + R"glsl(
+    return ov::replace_all(ov::str(GLSL_CLIMATE_HELPERS), "FLUSH", Cascade::glsl_flush()) + R"glsl(
 vec4 cl_add(vec4 a, vec4 b) {
     precise vec4 r = a + b;
     return cl_flush(r);
