@@ -552,7 +552,9 @@ ClimateReport::Preview ClimateReport::preview(const ov::Value &p_world, const ov
     const Table &table = *sdf.get_climate();
     const double voxel = sdf.climate_ground().voxel_size;
     const int n = ov::max(p_size, 2);
-    const int m = ov::min(slice_lattice(p_extent_km, n, voxel), sdf.get_spec().top_level());
+    // Not above the top lattice; a ground of no notes (every mix row at 0) has none (its top -1): the extent's lattice.
+    const int top = sdf.get_spec().top_level();
+    const int m = top < 0 ? slice_lattice(p_extent_km, n, voxel) : ov::min(slice_lattice(p_extent_km, n, voxel), top);
     const Slice slice = sample_slice(sdf, p_surface, m, m, n, p_center_x, p_center_z, false, p_priority);
     const Sampled &s = slice.s;
     out.us_per_point = slice.us_per_point;

@@ -206,6 +206,17 @@ TEST_CASE("ClimateReport: preview gives a world's maps from its text, the same t
     CHECK(std::all_of(plane.altitude_m.begin(), plane.altitude_m.end(), [](float p_a) { return p_a == 0.0f; }));
     CHECK(ov::contains(ClimateReport::preview(ClimateTest::json(R"({"engine": {"voxel_m": 0.05}})"), "", 20.0, 16, true, 0.0, 0.0).error, "no fields"));
     CHECK(ov::contains(ClimateReport::preview(ClimateTest::json(R"({"trees": 1})"), "", 20.0, 16, true, 0.0, 0.0).error, "unknown key"));
+    // Every mix row at 0: a ground of no notes (its top lattice -1) is drawn over the whole extent, never queried under
+    // Λ_0 (the mixer's map flooded "lattice level out of range" and never drew the next edit).
+    const ClimateReport::Preview silent = ClimateReport::preview(ClimateTest::json(R"({"engine": {"voxel_m": 0.05, "lods": 15},
+        "climate": {"fields": [{"name": "t", "seed": 1, "bands": [{"wavelength_m": 13107.2, "amp": 1}]}]},
+        "biomes": [{"name": "a", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 1638.4, "seed": 1, "amp_m": 10},
+            {"id": "mix", "kind": "mix", "rows": [{"in": "n", "x": 0}]}, {"id": "out", "kind": "output", "height": "mix"}]}}]})"),
+            "", 20.0, 16, true, 0.0, 0.0);
+    CHECK(silent.error == ov::str());
+    CHECK(silent.lattice >= 0);
+    CHECK(silent.spacing_m * 16.0 > 10000.0);
+    CHECK(silent.relief_m == 0.0);
 }
 
 TEST_CASE("Climate: malformed tables are refused with the reason") {
