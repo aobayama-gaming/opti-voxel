@@ -38,11 +38,18 @@ const EYE_HEIGHT := 1.6
 const FPV_STEP := 0.05
 ## The nearest far plane (metres): the LODs' reach round the player (LOD_VIEW_MAX, ~54 km), zoomed in or not.
 const VIEW_FAR := 60000.0
+## The aim's distance: cast this often (seconds), at most this many steps, each this share of the SDF (under 1: the
+## SDF is a height difference, not a true distance, and overshoots on slopes).
+const AIM_EVERY := 0.1
+const AIM_STEPS := 256
+const AIM_STEP := 0.7
 ## WASD in first person (metres a second).
 const KEY_SPEED := 8.0
 
 var _viewport := SubViewport.new()
 var _held := TextureRect.new()  # the last terrain's frame while the new one loads
+var _aim_label := Label.new()  # the crosshair and the distance to the terrain under it
+var _aim_timer := 0.0
 var _camera := Camera3D.new()
 var _player := MeshInstance3D.new()
 var _terrain: Node3D  # VoxelTerrain
@@ -81,6 +88,13 @@ func _init() -> void:
 	_held.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_held.visible = false
 	add_child(_held)
+	_aim_label.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_aim_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_aim_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_aim_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_aim_label.add_theme_color_override("font_outline_color", Color.BLACK)
+	_aim_label.add_theme_constant_override("outline_size", 4)
+	add_child(_aim_label)
 	_add_game_look()
 	_viewport.add_child(_camera)
 	var capsule := CapsuleMesh.new()
@@ -236,6 +250,12 @@ func _notification(p_what: int) -> void:
 
 func _process(p_delta: float) -> void:
 	_keys_move(p_delta)
+	_aim_timer -= p_delta
+	if _aim_timer <= 0.0:
+		_aim_timer = AIM_EVERY
+		var d := aim_distance()
+		# The crosshair, the distance under it beneath (a second line keeps the "+" on the view's centre).
+		_aim_label.text = "+\n%s" % ("—" if d < 0.0 else ("%.1f m" % d if d < 1000.0 else "%.2f km" % (d / 1000.0)))
 	if _terrain == null or _restart_usec == 0:
 		return
 	if _terrain.is_load_complete() or Time.get_ticks_usec() - _restart_usec > int(LOAD_WAIT * 1e6):
@@ -276,6 +296,34 @@ func _ground_axes() -> Array[Vector3]:
 	var z := Vector3.RIGHT.cross(_up)
 	z = z.normalized() if z.length() > 1e-3 else Vector3.BACK
 	return [_up.cross(z), z]
+
+
+# The distance (metres) from the camera to the terrain at the view's centre, -1 past VIEW_FAR or without a terrain:
+# sphere tracing on the CPU's SDF (get_sdf_at, steps of AIM_STEP of it), a crossing refined by bisection.
+func aim_distance() -> float:
+	if _terrain == null or not _terrain.is_inside_tree():
+		return -1.0
+	var from := _camera.global_position
+	var dir := -_camera.global_transform.basis.z
+	var t := 0.0
+	var last := 0.0
+	for i in AIM_STEPS:
+		var d: float = _terrain.get_sdf_at(from + dir * t)
+		if d <= 0.0:
+			var lo := last
+			var hi := t
+			for j in 16:  # inside: the crossing between the last point outside and this one
+				var mid := (lo + hi) * 0.5
+				if _terrain.get_sdf_at(from + dir * mid) > 0.0:
+					lo = mid
+				else:
+					hi = mid
+			return hi
+		last = t
+		t += maxf(d * AIM_STEP, 0.02)
+		if t > VIEW_FAR:
+			return -1.0
+	return -1.0
 
 
 # The player's feet on the ground under them (along the terrain's up, by its SDF), unless noclip.
