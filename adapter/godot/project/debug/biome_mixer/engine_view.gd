@@ -75,6 +75,11 @@ func _ready() -> void:
 	noclip.tooltip_text = "The player (the capsule, 1.7 m) flies through the ground where the camera looks; off, a left drag walks it on the ground."
 	noclip.toggled.connect(_view3d.set_noclip)
 	bar.add_child(noclip)
+	var fpv := CheckButton.new()
+	fpv.text = "First person"
+	fpv.tooltip_text = "The camera at the player's eyes (1.6 m); right drag looks round, left drag moves. Off: the camera orbits the player."
+	fpv.toggled.connect(_view3d.set_fpv)
+	bar.add_child(fpv)
 	var game := Button.new()
 	game.text = "Open in game"
 	game.tooltip_text = "Runs the game on this world (the engine's terrain in 3D, with its trees, rocks and features)."

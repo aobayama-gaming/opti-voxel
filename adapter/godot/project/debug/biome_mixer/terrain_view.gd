@@ -33,6 +33,12 @@ const PLAYER_RADIUS := 0.25
 ## The camera's closest orbit (metres from the player's feet) and its least height above the ground.
 const NEAREST := 2.5
 const CAMERA_CLEARANCE := 0.3
+## First person: the eyes' height above the feet (metres), a drag's move in metres per pixel, the far plane (metres).
+const EYE_HEIGHT := 1.6
+const FPV_STEP := 0.05
+const FPV_FAR := 60000.0
+## WASD in first person (metres a second).
+const KEY_SPEED := 8.0
 
 var _viewport := SubViewport.new()
 var _held := TextureRect.new()  # the last terrain's frame while the new one loads
@@ -56,6 +62,7 @@ var status := ""  # the last restart's line
 var loaded_ms := -1  # the last restart until its chunks in view were loaded, -1 while loading
 var profile := {}  # --drag: "restart_ms" and "loaded_ms" appended to, when set
 var noclip := false  # the player flies through the ground, else walks on it
+var fpv := false  # the camera at the player's eyes, else orbiting them
 
 
 func _init() -> void:
@@ -63,6 +70,7 @@ func _init() -> void:
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	size_flags_vertical = Control.SIZE_EXPAND_FILL
 	mouse_filter = Control.MOUSE_FILTER_STOP
+	focus_mode = Control.FOCUS_CLICK  # WASD while focused
 	_viewport.own_world_3d = true
 	_viewport.render_target_update_mode = SubViewport.UPDATE_WHEN_VISIBLE
 	add_child(_viewport)
@@ -225,7 +233,8 @@ func _notification(p_what: int) -> void:
 		_stop_terrain()  # nothing runs behind the 2D view
 
 
-func _process(_delta: float) -> void:
+func _process(p_delta: float) -> void:
+	_keys_move(p_delta)
 	if _terrain == null or _restart_usec == 0:
 		return
 	if _terrain.is_load_complete() or Time.get_ticks_usec() - _restart_usec > int(LOAD_WAIT * 1e6):
@@ -285,23 +294,66 @@ func set_noclip(p_on: bool) -> void:
 	_place_camera()
 
 
-func _place_camera() -> void:
+func set_fpv(p_on: bool) -> void:
+	fpv = p_on
+	_place_camera()
+
+
+# From the player towards the orbiting camera (yaw round _up, pitch above the ground); first person looks against it.
+func _view_dir() -> Vector3:
 	var axes := _ground_axes()
-	var dir := (axes[0] * sin(_yaw) + axes[1] * cos(_yaw)) * cos(_pitch) + _up * sin(_pitch)
+	return (axes[0] * sin(_yaw) + axes[1] * cos(_yaw)) * cos(_pitch) + _up * sin(_pitch)
+
+
+# The player's right and forward: along the ground walking, forward where the camera looks in noclip.
+func _move_axes() -> Array[Vector3]:
+	var axes := _ground_axes()
+	var right := axes[0] * cos(_yaw) - axes[1] * sin(_yaw)
+	var fwd := -_view_dir() if noclip else -(axes[0] * sin(_yaw) + axes[1] * cos(_yaw))
+	return [right, fwd]
+
+
+# WASD while the view has focus (a click gives it): along the ground walking; in noclip forward where the camera looks,
+# Space up and Shift down. KEY_SPEED metres a second in first person, the orbit's distance a second otherwise.
+func _keys_move(p_delta: float) -> void:
+	if not has_focus():
+		return
+	var mv := _move_axes()
+	var v := Vector3.ZERO
+	v += mv[1] * (float(Input.is_key_pressed(KEY_W)) - float(Input.is_key_pressed(KEY_S)))
+	v += mv[0] * (float(Input.is_key_pressed(KEY_D)) - float(Input.is_key_pressed(KEY_A)))
+	if noclip:
+		v += _up * (float(Input.is_key_pressed(KEY_SPACE)) - float(Input.is_key_pressed(KEY_SHIFT)))
+	if v == Vector3.ZERO:
+		return
+	_target += v.normalized() * (KEY_SPEED if fpv else maxf(_dist, 10.0)) * p_delta
+	_to_ground()
+	_place_camera()
+
+
+func _place_camera() -> void:
+	var dir := _view_dir()
 	var eye := _target + _up * (PLAYER_HEIGHT * 0.5)  # the orbit round the capsule's middle
-	_camera.position = eye + dir * _dist
-	if not noclip and _terrain != null and _terrain.is_inside_tree():
-		var d: float = _terrain.get_sdf_at(_camera.position)
-		if d < CAMERA_CLEARANCE:  # never under the ground the player walks
-			_camera.position += _up * (CAMERA_CLEARANCE - d)
-	_camera.look_at(eye, _up)
-	_player.transform = Transform3D(Basis(Quaternion(Vector3.UP, _up)), eye)
+	if fpv:
+		eye = _target + _up * EYE_HEIGHT
+		_camera.position = eye
+		_camera.look_at(eye - dir, _up)
+	else:
+		_camera.position = eye + dir * _dist
+		if not noclip and _terrain != null and _terrain.is_inside_tree():
+			var d: float = _terrain.get_sdf_at(_camera.position)
+			if d < CAMERA_CLEARANCE:  # never under the ground the player walks
+				_camera.position += _up * (CAMERA_CLEARANCE - d)
+		_camera.look_at(eye, _up)
+	_player.visible = not fpv
+	_player.transform = Transform3D(Basis(Quaternion(Vector3.UP, _up)), _target + _up * (PLAYER_HEIGHT * 0.5))
+	var dist := EYE_HEIGHT if fpv else _dist
 	if _terrain != null:
 		_terrain.set_lod_centre(_target)  # the LOD rings round the pivot, not the camera
-		_terrain.lod_view_min = _terrain.get_lod_at_distance(_dist)  # nothing finer than the pivot needs from here
+		_terrain.lod_view_min = _terrain.get_lod_at_distance(dist)  # nothing finer than the pivot needs from here
 	# The planes follow the orbit: a world's view is hundreds of km (the terrain loads to the far plane, lod_far_limit).
-	_camera.far = maxf(_dist * 4.0, 2000.0)
-	_camera.near = clampf(_dist * 0.0002, 0.05, 50.0)
+	_camera.far = FPV_FAR if fpv else maxf(_dist * 4.0, 2000.0)
+	_camera.near = clampf(dist * 0.0002, 0.05, 50.0)
 
 
 func _gui_input(p_event: InputEvent) -> void:
@@ -309,14 +361,11 @@ func _gui_input(p_event: InputEvent) -> void:
 		var m := p_event as InputEventMouseMotion
 		if m.button_mask & (MOUSE_BUTTON_MASK_RIGHT | MOUSE_BUTTON_MASK_MIDDLE):
 			_yaw -= m.relative.x * 0.008
-			_pitch = clampf(_pitch + m.relative.y * 0.008, -1.55 if noclip else 0.05, 1.55)
+			_pitch = clampf(_pitch + m.relative.y * 0.008, -1.55 if noclip or fpv else 0.05, 1.55)
 		elif m.button_mask & MOUSE_BUTTON_MASK_LEFT:
-			var axes := _ground_axes()
-			var right := axes[0] * cos(_yaw) - axes[1] * sin(_yaw)
-			var fwd := -(axes[0] * sin(_yaw) + axes[1] * cos(_yaw))
-			if noclip:  # forward where the camera looks, up and down included
-				fwd = (_target + _up * (PLAYER_HEIGHT * 0.5) - _camera.position).normalized()
-			_target += (-right * m.relative.x + fwd * m.relative.y) * maxf(_dist, 10.0) * 0.0015
+			var mv := _move_axes()
+			var step := FPV_STEP if fpv else maxf(_dist, 10.0) * 0.0015
+			_target += (-mv[0] * m.relative.x + mv[1] * m.relative.y) * step
 			_to_ground()
 		else:
 			return
