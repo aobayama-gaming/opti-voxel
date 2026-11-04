@@ -168,18 +168,19 @@ TEST_CASE("SDFCascade: the template ground stops at its top, the same at any LOD
     }
 }
 
-TEST_CASE("Terrain: the band table holds every note in node order") {
+TEST_CASE("Terrain: the band table holds every note in note order") {
     ChunkParam param;
     SDFCascade sdf;
     sdf.configure(param, 25);
     const Terrain::LevelProgram &prog = sdf.program();
     const PackedByteArray table = godot_bytes(Terrain::band_table(prog));
     CHECK(table.size() == ClimateTest::note_count(prog) * int64_t(CascadeGLSL::BAND_BYTES));
+    const std::vector<int> order = Terrain::note_order(prog);
+    CHECK(int64_t(order.size()) == ClimateTest::note_count(prog));
     int64_t base = 0;
-    for (const Terrain::Node &n : prog.nodes) {
-        if (n.op != Terrain::Op::NOTE) {
-            continue;
-        }
+    for (const int i : order) {
+        const Terrain::Node &n = prog.nodes[size_t(i)];
+        CHECK(n.op == Terrain::Op::NOTE);
         CHECK(table.decode_u32(base + 48) == 1u);
         CHECK(table.decode_u32(base + 52) == n.band.seed);
         CHECK(table.decode_u32(base + 56) == uint32_t(n.band.k));

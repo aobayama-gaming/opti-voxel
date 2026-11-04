@@ -8,6 +8,7 @@
 #include "debug_log.hpp"
 #include "gpu_frame.hpp"
 #include "level_glsl.hpp"
+#include "parallel_for.hpp"
 #include "sdf_cascade.hpp"
 
 #include "ov/clock.hpp"
@@ -33,6 +34,9 @@ constexpr uint32_t MAX_BATCH = 128;
 constexpr int CHUNKS_PER_PLACE = 14;
 constexpr int CHILDREN = 8;
 constexpr uint32_t TIMING_CHUNKS = 128;
+// The most bytes of last-level channels a slice of a batch reads back (SetChecker::run): the generic text's Ch holds
+// MAX_CHANNELS channels, and a whole batch of them took gigabytes on the host beside the CPU levels.
+constexpr uint64_t SLICE_BYTES = uint64_t(256) << 20;
 
 struct TestChunk {
     ChunkId id;
@@ -153,8 +157,15 @@ public:
         }
         checks.chunks_per_lod.resize(lods);
         checks.differing_per_lod.resize(lods);
+        const uint64_t n = uint64_t(level_bound(cs, 0));
+        const size_t slice = size_t(ov::max(uint64_t(1), SLICE_BYTES / (n * n * n * nv * 16)));
         for (int lod = 0; lod < lods; lod++) {
-            run_batch(lod);
+            std::vector<Pair> pairs;
+            const std::vector<TestChunk> batch = batch_chunks(lod, lods, param, pairs);
+            for (size_t at = 0; at < batch.size(); at += slice) {
+                const size_t end = ov::min(at + slice, batch.size());
+                run_batch(std::vector<TestChunk>(batch.begin() + std::ptrdiff_t(at), batch.begin() + std::ptrdiff_t(end)));
+            }
         }
     }
 
@@ -177,14 +188,35 @@ private:
     CascadePasses passes;
     CascadePasses debug_passes;
 
-    // The batch being checked: its chunks, their Λ_L boxes and every CPU level (top first).
+    // The slice of a batch being checked: its chunks, their Λ_L boxes and every CPU level (top first), each holding only
+    // the nodes the checks read (keep_compared).
     std::vector<TestChunk> chunks;
     std::vector<Box> boxes;
     std::vector<std::vector<Terrain::Values>> cpu;
 
-    void run_batch(int p_lod) {
-        std::vector<Pair> pairs;
-        chunks = batch_chunks(p_lod, lods, param, pairs);
+    // Frees p_level's slots no check reads: a CPU level holds every node it computes (hundreds on a climate), the checks
+    // only its GPU channels (channel_node).
+    void keep_compared(Terrain::Values &r_level, int p_lod) const {
+        // ch: CHANNELS vectors per slot (Terrain::Values::at)
+        std::vector<bool> keep(r_level.ch.size() / CHANNELS, false);
+        for (size_t k = 0;; k++) {
+            const int node = channel_node(p_lod, r_level.m, k);
+            if (node < 0) {
+                break;
+            }
+            if (r_level.has(node)) {
+                keep[size_t(r_level.slot[size_t(node)])] = true;
+            }
+        }
+        for (size_t i = 0; i < r_level.ch.size(); i++) {
+            if (!keep[i / CHANNELS]) {
+                std::vector<float>().swap(r_level.ch[i]);
+            }
+        }
+    }
+
+    void run_batch(std::vector<TestChunk> p_chunks) {
+        chunks = std::move(p_chunks);
         const uint32_t count = uint32_t(chunks.size());
         cpu.assign(count, std::vector<Terrain::Values>());
         boxes.assign(count, Box());
@@ -192,9 +224,15 @@ private:
         ids.resize(count * GPUFrame::CHUNK_INPUT_BYTES);
         int min_lod = 64;
         int max_lod = 0;
+        // The CPU levels, a chunk per task (a climate's run takes 0.1 to 0.3 s a chunk).
+        parallel_for(count, "CascadeCheck::cpu", [&](uint32_t p_c) {
+            boxes[p_c] = chunk_box(chunks[p_c].id, param);
+            Terrain::run(sdf.program(), boxes[p_c], chunks[p_c].lod, &cpu[p_c]);
+            for (Terrain::Values &level : cpu[p_c]) {
+                keep_compared(level, chunks[p_c].lod);
+            }
+        });
         for (uint32_t c = 0; c < count; c++) {
-            boxes[c] = chunk_box(chunks[c].id, param);
-            Terrain::run(sdf.program(), boxes[c], chunks[c].lod, &cpu[c]);
             GPUFrame::encode_chunk_input(ids, c, chunks[c].id, param);
             min_lod = ov::min(min_lod, chunks[c].lod);
             max_lod = ov::max(max_lod, chunks[c].lod);
@@ -223,7 +261,7 @@ private:
             // The debug variant's samples must be the same bits as the meshers' variant's.
             if (read_bytes(device, debug_samples, 0, count * cells * 16) != final_samples) {
                 checks.samples_differing++;
-                checks.example("set " + set_label(set) + ov::format(" LOD %d batch: the debug variant's samples differ from the meshers' variant's", p_lod));
+                checks.example("set " + set_label(set) + ov::format(" LOD %d batch: the debug variant's samples differ from the meshers' variant's", min_lod));
             }
             compare_level(0, final_channels, final_samples);
             if (!above.empty()) {

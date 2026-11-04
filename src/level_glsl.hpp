@@ -42,7 +42,10 @@ struct GpuLayout {
 // p_prog's layout; r_error: why the generic text can't hold it (empty if it can, or for a specialised program).
 GpuLayout gpu_layout(const LevelProgram &p_prog, ov::str &r_error);
 
-// std430 CascadeBand per NOTE node, in node order (CascadeGLSL::BAND_BYTES each: factor unused, offset low words, high
+// The NOTE nodes in band table order: level by level from the top, each level's looped notes first (the specialised
+// text's note loop reads them as one range), then its other notes, then any note no level computes.
+std::vector<int> note_order(const LevelProgram &p_prog);
+// std430 CascadeBand per NOTE node, in note_order (CascadeGLSL::BAND_BYTES each: factor unused, offset low words, high
 // words, info (1, seed, k, stretch)), at least one entry: the level shader's `bands` (binding 5).
 ov::bytes band_table(const LevelProgram &p_prog);
 

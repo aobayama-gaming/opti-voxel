@@ -104,6 +104,11 @@ Engine, GPU and float traps that already cost a debugging session each.
   serializes on NVIDIA; it cost 15% of the SDF pass, selects on the hash bits are free. Integer
   multiplies (PCG3D) run at half the float rate; `precise` costs nothing measurable. To find where a
   shader's time goes, swap variants of the stitched GLSL and compare `gpu_pass_sdf` per batch.
+- GPU compile cost: NVIDIA's driver inlines every call, so a generated text that calls a heavy function (perlin3 with
+  its int64 lattice) once per note has 80 copies of it on an 80-note climate. glslang compiles it in a second, but
+  `libnvidia-gpucomp` takes minutes and gigabytes per pipeline (the cascade check sat in it for 15 min, then the
+  OOM killer). Generate one call inside a loop over a table (the cascade's note loop), and when a run "hangs" with no
+  output, sample the main thread (`eu-stack -m -p <pid>`) before suspecting your code.
 - `FrameSpike` uses a local RenderingDevice: it needs a window (not `--headless`) and an unlocked session.
 - A local RenderingDevice's timestamps (`get_captured_timestamp_*`) are readable right after `sync()` and
   only until its next frame begins: `buffer_get_data` flushes one, so read them first (`CascadePointsGPU`). On a local device

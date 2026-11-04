@@ -30,7 +30,10 @@ v2, `docs/cascade-v2.md`) and the GPU passes (`src/cascade_glsl.*`, `src/level_g
   constants and smooth k, and the skirt depth per LOD) is a slot of a per-variant uniform block of vec4s at
   `CascadeGLSL::PARAM_BINDING` (the value's bits, constant indices, as cheap as literals; not a storage buffer, which
   WebGPU caps per stage; at most `MAX_PARAM_BYTES`), never a literal. Specialised (`SDFCascade::specialize`, the
-  game's), the text is each level's code straight, with the program's value-dependent folds. Generic (the biome
+  game's), the text is each level's code straight, with the program's value-dependent folds, except its notes: a
+  level's notes are one loop over their range of the band table (`Terrain::note_order`) at the level's start, so the
+  text holds one `perlin3` whatever the note count (one inlined call per note took the NVIDIA compiler minutes and
+  9 GB on the example table's 80 notes; a doctest pins one `tp_note` call per text). Generic (the biome
   mixer's, `Terrain::Mode::GENERIC`), it is a fixed interpreter over the program's records: its text depends on the op
   set and the caps only (`MAX_CHANNELS`, `MAX_REGISTERS`), so an edit of a value compiles nothing, and the same
   generic program gives the same bits on the CPU. The two modes differ by blend factoring (a few float steps of the

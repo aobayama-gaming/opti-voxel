@@ -55,12 +55,28 @@ std::vector<int64_t> curve_records(const LevelProgram &p_prog, ShaderParams &r_p
     return at;
 }
 
-// Each NOTE's entry in band_table.
+// Whether NOTE p_n of level p_s's code is computed in the level's note loop (the specialised text): its level is p_s
+// and its inputs (a warp's, strictly coarser) are ready when the level starts, none computed by the level's own code.
+bool looped(const LevelProgram &p_prog, int p_s, int p_n) {
+    const Node &node = p_prog.nodes[size_t(p_n)];
+    if (node.op != Op::NOTE || node.level != p_s) {
+        return false;
+    }
+    const std::vector<int> &code = p_prog.levels[size_t(p_s)].code;
+    for (const int in : node.in) {
+        if (std::find(code.begin(), code.end(), in) != code.end()) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Each NOTE's entry in band_table (note_order's index).
 std::vector<int> band_index(const LevelProgram &p_prog) {
     std::vector<int> index(p_prog.nodes.size(), -1);
-    int n = 0;
-    for (size_t i = 0; i < p_prog.nodes.size(); i++) {
-        index[i] = p_prog.nodes[i].op == Op::NOTE ? n++ : -1;
+    const std::vector<int> order = note_order(p_prog);
+    for (size_t i = 0; i < order.size(); i++) {
+        index[size_t(order[i])] = int(i);
     }
     return index;
 }
@@ -93,9 +109,53 @@ ov::str statement(const LevelProgram &p_prog, const GpuLayout &p_layout, int p_n
     return "            " + dst + " = " + form(glsl, in, k, ov::itos(node.level), band, curve) + ";\n";
 }
 
+// The specialised text's note loop: level s's looped notes (one range of the band table, note_order) in one loop at the
+// level's start, so the text holds one perlin3 whatever the note count (one inlined call per note took the NVIDIA
+// compiler minutes and gigabytes for 80 notes); each note's statement then copies its nv slot. r_slot: per node, its
+// slot in nv (-1: computed by its own statement).
+ov::str note_loop(const LevelProgram &p_prog, const std::vector<int> &p_band, const GpuLayout &p_layout, ShaderParams &r_params, std::vector<int> &r_slot) {
+    r_slot.assign(p_prog.nodes.size(), -1);
+    std::vector<float> first(size_t(Cascade::MAX_LEVEL + 1), 0.0f), count(size_t(Cascade::MAX_LEVEL + 1), 0.0f);
+    int most = 0;
+    ov::str warps;
+    for (int s = p_prog.top; s >= 0; s--) {
+        int n = 0;
+        ov::str gather;
+        for (const int c : p_prog.levels[size_t(s)].code) {
+            if (!looped(p_prog, s, c)) {
+                continue;
+            }
+            first[size_t(s)] = n == 0 ? float(p_band[size_t(c)]) : first[size_t(s)];
+            const Node &node = p_prog.nodes[size_t(c)];
+            for (size_t i = 0; i < node.in.size(); i++) {
+                gather += ov::format("            nw[%d] = %s;\n", int64_t(3 * n + int(i)), reg(p_layout.reg[size_t(node.in[i])]));
+            }
+            r_slot[size_t(c)] = n++;
+        }
+        count[size_t(s)] = float(n);
+        most = ov::max(most, n);
+        warps += gather.empty() ? ov::str() : ov::format("        case %d:\n", int64_t(s)) + gather + "            break;\n";
+    }
+    if (most == 0) {
+        return ov::str();
+    }
+    ov::str t = "        int nf = int(" + r_params.table(first, "min(s, " + ov::itos(Cascade::MAX_LEVEL) + ")") + ");\n";
+    t += "        int nn = int(" + r_params.table(count, "min(s, " + ov::itos(Cascade::MAX_LEVEL) + ")") + ");\n";
+    ov::str w = "vec4(0.0), vec4(0.0), vec4(0.0)";
+    if (!warps.empty()) {
+        t += ov::format("        vec4 nw[%d];\n        for (int e = 0; e < %d; e++) {\n            nw[e] = vec4(0.0);\n        }\n", int64_t(3 * most), int64_t(3 * most));
+        t += "        switch (s) {\n" + warps + "        default:\n            break;\n        }\n";
+        w = "nw[3 * e], nw[3 * e + 1], nw[3 * e + 2]";
+    }
+    t += ov::format("        vec4 nv[%d];\n        for (int e = 0; e < nn; e++) {\n", int64_t(most));
+    return t + "            nv[e] = tp_note(p, m, s, bands[nf + e], " + w + ");\n        }\n";
+}
+
 ov::str specialised(const LevelProgram &p_prog, const GpuLayout &p_layout, ShaderParams &r_params) {
     const std::vector<int> band = band_index(p_prog);
     const std::vector<int64_t> curves = curve_records(p_prog, r_params);
+    std::vector<int> slot;
+    const ov::str notes = note_loop(p_prog, band, p_layout, r_params, slot);
     ov::str loads, code, stores;
     for (int s = p_prog.top; s >= 0; s--) {
         const std::vector<int> &in = s < p_prog.top ? p_layout.chan[size_t(s + 1)] : std::vector<int>();
@@ -109,7 +169,8 @@ ov::str specialised(const LevelProgram &p_prog, const GpuLayout &p_layout, Shade
         if (!p_prog.levels[size_t(s)].code.empty()) {
             code += ov::format("        case %d:\n", s);
             for (const int n : p_prog.levels[size_t(s)].code) {
-                code += statement(p_prog, p_layout, n, band, curves, r_params);
+                code += slot[size_t(n)] >= 0 ? ov::format("            %s = nv[%d];\n", reg(p_layout.reg[size_t(n)]), int64_t(slot[size_t(n)]))
+                                             : statement(p_prog, p_layout, n, band, curves, r_params);
             }
             code += "            break;\n";
         }
@@ -128,7 +189,7 @@ ov::str specialised(const LevelProgram &p_prog, const GpuLayout &p_layout, Shade
                            "    int lv = min(m, %d);\n",
             int64_t(p_layout.regs), int64_t(p_prog.top));
     t += "    switch (lv) {\n" + loads + empty + "    }\n";
-    t += "    for (int s = lv; s >= (last ? 0 : lv); s--) {\n        switch (s) {\n" + code + "        default:\n            break;\n        }\n    }\n";
+    t += "    for (int s = lv; s >= (last ? 0 : lv); s--) {\n" + notes + "        switch (s) {\n" + code + "        default:\n            break;\n        }\n    }\n";
     t += "    Ch o = ch_zero();\n    if (last) {\n" + ch_put("0", reg(p_layout.reg[size_t(p_prog.output)])) +
             ov::format("        o.c[4] = %s.w;\n", reg(p_layout.reg[size_t(p_prog.pick)])) + "        return o;\n    }\n";
     return t + "    switch (lv) {\n" + stores + empty + "    }\n    return o;\n}\n";
@@ -338,15 +399,37 @@ GpuLayout gpu_layout(const LevelProgram &p_prog, ov::str &r_error) {
     return l;
 }
 
+std::vector<int> note_order(const LevelProgram &p_prog) {
+    std::vector<int> order;
+    std::vector<bool> seen(p_prog.nodes.size(), false);
+    const auto take = [&](int p_n) {
+        if (!seen[size_t(p_n)] && p_prog.nodes[size_t(p_n)].op == Op::NOTE) {
+            seen[size_t(p_n)] = true;
+            order.push_back(p_n);
+        }
+    };
+    for (int s = p_prog.top; s >= 0; s--) {
+        for (const bool loop : { true, false }) {
+            for (const int c : p_prog.levels[size_t(s)].code) {
+                if (looped(p_prog, s, c) == loop) {
+                    take(c);
+                }
+            }
+        }
+    }
+    for (size_t i = 0; i < p_prog.nodes.size(); i++) {
+        take(int(i));
+    }
+    return order;
+}
+
 ov::bytes band_table(const LevelProgram &p_prog) {
     using namespace WorldCoord;
     constexpr size_t BYTES = CascadeGLSL::BAND_BYTES;
     ov::bytes bytes(BYTES, 0);
     size_t at = 0;
-    for (const Node &n : p_prog.nodes) {
-        if (n.op != Op::NOTE) {
-            continue;
-        }
+    for (const int i : note_order(p_prog)) {
+        const Node &n = p_prog.nodes[size_t(i)];
         bytes.resize(ov::max(bytes.size(), (at + 1) * BYTES), 0);
         uint8_t *slot = bytes.data() + at * BYTES;
         const Cascade::Band &b = n.band;

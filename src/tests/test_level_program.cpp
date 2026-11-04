@@ -1,6 +1,7 @@
 #include "test_climate_common.hpp"
 
 #include "graph_compile.hpp"
+#include "level_glsl.hpp"
 #include "level_program.hpp"
 
 #include <cmath>
@@ -496,4 +497,28 @@ TEST_CASE("Terrain: a product's step with an unbounded factor stays unbounded") 
     CHECK_OR_RETURN(compile_table(one_biome(nodes), prog) == ov::str());
     CHECK_OR_RETURN(prog.step.size() > 3);
     CHECK(prog.step[3] == INFINITY); // n1's level: its change times an unbounded up
+}
+
+// One inlined tp_note per note took the NVIDIA compiler minutes and gigabytes on the example table's 80 notes: the
+// specialised text reads every level's notes in one loop, its looped notes one range of the band table.
+TEST_CASE("Terrain: the specialised text calls tp_note once, whatever the note count") {
+    for (const Pin &pin : PINS) {
+        LevelProgram prog;
+        CHECK_OR_RETURN(compile_table(test_table(pin.path), prog) == ov::str());
+        ov::str err;
+        const GpuLayout layout = gpu_layout(prog, err);
+        Cascade::ShaderParams params;
+        const ov::str text = level_glsl(prog, layout, params);
+        size_t calls = 0;
+        for (size_t at = text.find("tp_note("); at != ov::str::npos; at = text.find("tp_note(", at + 1)) {
+            calls++;
+        }
+        INFO(pin.path);
+        CHECK(calls == 1);
+        int64_t notes = 0;
+        for (const Node &n : prog.nodes) {
+            notes += n.op == Op::NOTE;
+        }
+        CHECK(int64_t(note_order(prog).size()) == notes);
+    }
 }
