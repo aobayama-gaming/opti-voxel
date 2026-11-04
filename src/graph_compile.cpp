@@ -260,19 +260,15 @@ private:
     // A warp's three displacements (LOD0 voxels): amount_m times its input read with seeds + 0, 1, 2, or times its x, y,
     // z ports. The gate: each strictly coarser than the note it moves (level p_level).
     bool warp(const ov::Value &p_w, uint32_t p_seed, int p_level, const ov::str &p_note, std::vector<int> &r_disp) {
-        ov::Value plain = p_w;
-        bool ports = false;
-        for (const char *axis : { "x", "y", "z" }) {
-            ports = plain.erase(axis) || ports;
-        }
-        if (!keys(plain)) {
+        static const char *const PORTS[3] = { "x", "y", "z" };
+        if (!keys(p_w)) {
             return false;
         }
-        if (ports == p_w.has("in")) {
-            return fail(at(p_w), "a warp reads 'in' (three times, its notes' seeds + 0, 1, 2) or the ports 'x', 'y', 'z'.");
+        const bool ports = p_w.has("x") || p_w.has("y") || p_w.has("z");
+        if (ports == p_w.has("in") || (ports && !(p_w.has("x") && p_w.has("y") && p_w.has("z")))) {
+            return fail(at(p_w), "a warp reads 'in' (three times, its notes' seeds + 0, 1, 2) or the three ports 'x', 'y', 'z'.");
         }
         const float amount = float(number(p_w, "amount_m"));
-        static const char *const PORTS[3] = { "x", "y", "z" };
         for (uint32_t a = 0; a < 3 && error.empty(); a++) {
             const int in = ports ? read(input(p_w, PORTS[a]), p_seed) : read(input(p_w, "in"), p_seed + a);
             if (in < 0) {
@@ -280,9 +276,9 @@ private:
             }
             const int level = g.node(in).level;
             if (level != NO_LEVEL && level <= p_level) {
-                return fail(p_note, ov::format("its warp '%s' isn't coarser than the note: it reads a note of %s, the note is %s (a warp's input is strictly coarser than the "
+                return fail(p_note, ov::format("its warp '%s' isn't coarser than the note%s: it reads a note of %s, the note is %s (a warp's input is strictly coarser than the "
                                                "notes it moves: it must exist before they are inserted).",
-                                            p_w["id"].as_str(), level_m(level, ground), level_m(p_level, ground)));
+                                            p_w["id"].as_str(), ports ? ov::format(" (port '%s')", PORTS[a]) : ov::str(), level_m(level, ground), level_m(p_level, ground)));
             }
             r_disp.push_back(g.lin({ { in, amount } }));
         }

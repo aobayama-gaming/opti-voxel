@@ -150,11 +150,15 @@ computes no terrain and has no node kind the engine hasn't.
   autosaves (user://), saves to `climate/worlds/*.world.json`, and *Export* (World menu) writes it over world.json once
   `ClimateReportNode.check` (`ClimateReport::check`) accepts its biomes over its fields: the file is the world minus the
   mixer's keys (its climate file untouched). Numbers keep 7 significant digits; a value fits on one line up to 120
-  characters.
+  characters. A world read (the autosave, a saved world) is migrated to what cascade v2 reads (`World.migrate`, a
+  printed note each): a field's `"source": "ground"` term goes, from the mixer's fields and an inline climate (a
+  climate file the world names is left as it is). An autosave of an older `mixer_version` (3: multifractals without a
+  parent) isn't read: the mixer starts on world.json.
 - **The graph is the biome's `graph`** (`graph.gd`), node for node: a link is an input key naming another node's id
   (input port i is the kind's input i, a mix's port i its row i's `in`, one port more a new row), each node one output.
   Linking, unlinking, a row's x, a node's x or Delete (what read it reads its `in`, else nothing) edit the nodes in place;
-  a link that would close a loop is refused. `pos` is the mixer's (the parser allows and ignores it); a graph read
+  the mixer checks no rule of its own: any output links to any input, and the engine says what it refuses (a loop, a
+  warp not coarser than its note), naming the node, in the status line. `pos` is the mixer's (the parser allows and ignores it); a graph read
   without positions is laid out in columns by its distance from the output, spaced by its built nodes' sizes.
 - **The kinds are the engine's** (`engine_info.gd`, `ClimateReportNode.graph_kinds`: `Climate::graph_kinds`, the
   catalogue the parser itself checks each node's keys against): every kind it reads (note, warp, shape, multifractal,
@@ -162,7 +166,8 @@ computes no terrain and has no node kind the engine hasn't.
   their type and default. `nodes.gd` builds each node from it: a port per input, a row per parameter the node has (a
   slider and number box, a seed, a power of two, a field, a shape, coefficients, a curve), a `-` taking an
   optional one out and `+ parameter` adding one. A note's warp is its input port (deleting the warp node leaves the
-  note unwarped). `kinds.gd` only holds titles, tooltips and sliders' ranges. A shape
+  note unwarped); a warp's ports are `in` (read three times, seeds + 0, 1, 2) or `x`, `y`, `z` (a node each); a
+  multifractal's `parent` takes any node. `kinds.gd` only holds titles, tooltips and sliders' ranges. A shape
   node plots the engine's phi (`ClimateReportNode.shape`: `Climate::parse_shape`, `shape_phi`) or its refusal; the
   Height curve's editor draws the engine's curve (`ClimateReportNode.curve`). The output edits the biome's `surface`
   colours. *New graph* is the engine's template biome (`ClimateReportNode.template_biome`: the template world file's) or an output alone; a biome
@@ -231,6 +236,7 @@ computes no terrain and has no node kind the engine hasn't.
 - **`--check`** (`checks.gd`): every engine kind has the mixer's UI; world.json read as the mixer's world and written
   back is the same file (positions aside); every world.json biome and a graph of every engine kind drawn by the engine
   and every node's GraphNode built (the launcher fails on any script error); edits on the mountain (a row out, a shape
-  out, a loop refused, a muted row heard at 0) still drawn; the whole world drawn (every biome named, one chart sample
+  out, a loop linked then refused by the engine, a muted row heard at 0) still drawn; the every-kind graph includes a
+  warp on `x`, `y`, `z` ports and a multifractal of a ridged parent; the whole world drawn (every biome named, one chart sample
   per point); the export written, read back the same, written again the same text, and a span of 0 refused (nothing
   written).

@@ -136,6 +136,35 @@ TEST_CASE("Terrain: the gate refuses a warp that isn't strictly coarser than its
     CHECK(compile_table(one_biome(loop), prog).find("the graph loops") != ov::str::npos);
 }
 
+TEST_CASE("Terrain: a warp's x, y, z ports: one node per axis, each gated") {
+    LevelProgram prog;
+    const auto warped = [](const ov::str &p_notes, const ov::str &p_warp) {
+        return one_biome("[" + p_notes + R"(, {"id": "wp", "kind": "warp", "amount_m": 2)" + p_warp + "}, " + note("n", 3.2, 1, 1.0, R"(, "warp": "wp")") +
+                R"(, {"id": "o", "kind": "output", "height": "n"}])");
+    };
+    // 'in' read with seeds + 0, 1, 2 is the ports on the three notes of those seeds: the same bits.
+    const ov::str three = note("a", 25.6, 7, 1.0) + ", " + note("b", 25.6, 8, 1.0) + ", " + note("c", 25.6, 9, 1.0);
+    LevelProgram ports;
+    CHECK_OR_RETURN(compile_table(warped(note("a", 25.6, 7, 1.0), R"(, "in": "a")"), prog) == ov::str());
+    CHECK_OR_RETURN(compile_table(warped(three, R"(, "x": "a", "y": "b", "z": "c")"), ports) == ov::str());
+    int64_t bad = 0;
+    for (int i = 0; i < 64; i++) {
+        const Vector3i64 p(i * 53 - 1700, (i * 7) % 300, i * 31);
+        bad += ExactNoise::same_bits(point(prog, p, 0).ground, point(ports, p, 0).ground) ? 0 : 1;
+    }
+    CHECK(bad == 0);
+    // Any node per axis (a ridged one, a constant: no level), but each strictly coarser than the note.
+    CHECK(compile_table(warped(three + R"(, {"id": "r", "kind": "shape", "in": "b", "shape": "ridged"}, {"id": "k", "kind": "constant", "value_m": 1})",
+                                R"(, "x": "a", "y": "r", "z": "k")"),
+                  prog) == ov::str());
+    const ov::str fine = compile_table(warped(three + ", " + note("f", 3.2, 4, 1.0), R"(, "x": "a", "y": "f", "z": "c")"), prog);
+    CHECK(fine.find("node 'n'") != ov::str::npos);
+    CHECK(fine.find("its warp 'wp' isn't coarser than the note (port 'y')") != ov::str::npos);
+    // 'in' or all three ports, not both, not some.
+    CHECK(compile_table(warped(three, R"(, "in": "a", "x": "a", "y": "b", "z": "c")"), prog).find("the three ports") != ov::str::npos);
+    CHECK(compile_table(warped(three, R"(, "x": "a", "y": "b")"), prog).find("the three ports") != ov::str::npos);
+}
+
 TEST_CASE("Terrain: a field's ground term is refused") {
     const ov::Value data = json(R"({"fields": [{"name": "t", "bands": [{"wavelength_m": 26214.4, "amp": 1}], "terms": [{"source": "ground", "x": -0.00003}]}],
         "biomes": [{"name": "a", "at": {"t": [0, 1]}}, {"name": "d"}]})");

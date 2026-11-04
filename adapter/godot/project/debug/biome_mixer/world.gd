@@ -30,6 +30,7 @@ static func read(p_path: String) -> Dictionary:
 		return {}
 	if not w.has("fields"):
 		w.fields = EngineInfo.section(w, "climate", p_path).get("fields", [])
+	migrate(w, p_path)
 	var n: int = w.biomes.size()
 	for i in n:
 		var b: Dictionary = w.biomes[i]
@@ -40,6 +41,24 @@ static func read(p_path: String) -> Dictionary:
 	w.current = clampi(int(w.get("current", 0)), 0, n - 1)
 	w.mode = String(w.get("mode", "biome"))
 	return w
+
+
+# What cascade v2 refuses in an older world and has a mechanical conversion for, converted in place (a printed note
+# each): a field's "source": "ground" term goes (the ground depends on the weights, which depend on the fields:
+# docs/cascade-v2.md). The mixer's fields and an inline climate's; a climate file the world names is left as it is.
+static func migrate(p_world: Dictionary, p_path: String) -> void:
+	var lists := [p_world.fields]
+	if p_world.get("climate") is Dictionary:
+		lists.append(p_world.climate.get("fields", []))
+	for fields in lists:
+		for f in fields:
+			var terms: Array = f.get("terms", [])
+			for i in range(terms.size() - 1, -1, -1):
+				if String(terms[i].get("source", "")) == "ground":
+					print("biome mixer: %s: field '%s' loses its ground term (per_m %s): cascade v2 has none." % [p_path, f.get("name", "?"), terms[i].get("per_m", "?")])
+					terms.remove_at(i)
+			if f.has("terms") and terms.is_empty():
+				f.erase("terms")
 
 
 # A biome's "at" as {field: [centre, span]} ({min, max}: their middle and half their gap).

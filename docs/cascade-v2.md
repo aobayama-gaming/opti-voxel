@@ -1,8 +1,8 @@
 # Cascade v2: one graph, coarse to fine
 
-Status: **implemented** (stages A to E, below): `SDFCascade` runs `LevelProgram` (`level_program.*`), compiled by
-`graph_compile.*`, its GLSL forms in `level_glsl.*`; the old machinery is deleted. Stages F (the biome mixer) and G
-(guards, fold tuning, the bench table) are open. This note says what the terrain evaluation became, what it deleted
+Status: **implemented** (stages A to F, below): `SDFCascade` runs `LevelProgram` (`level_program.*`), compiled by
+`graph_compile.*`, its GLSL forms in `level_glsl.*`; the old machinery is deleted; the biome mixer edits v2 graphs.
+Stage G (guards, fold tuning, the bench table) is open. This note says what the terrain evaluation became, what it deleted
 and in which order; it is the contract the v2 PRs were reviewed against. `docs/cascade.md` and `docs/climate.md`
 describe the code as it is. v2 deliberately broke the bits of every existing world once: the old terrain is not an
 oracle, and nothing below exists to reproduce it. (The *Why* and *What goes* sections name v1's code, now gone.)
@@ -266,7 +266,7 @@ Measured, not assumed: PR G carries a `tools/bench_ab.sh` table against dev (the
 | **C** (done) | `LevelProgram`, the op table's CPU form, the compiler; doctests above |
 | **D** (done) | the GLSL forms (specialised, generic); `SDFCascade` on v2; CascadeCheck on v2 |
 | **E** (done) | deletion of *What goes*; tests ported, test tables re-checked and pinned, the template biome as world files (the flat preset kept, above) |
-| F | biome mixer: node kinds from the engine's catalogue (no hard-coded rules in `graph.gd` / `nodes.gd` / `checks.gd`), warp ports, any multifractal parent, autosave migrated |
+| **F** (done) | biome mixer: node kinds from the engine's catalogue (it already built its nodes from `graph_kinds`; its own loop refusal deleted, the engine's error names the node; the tooltips' v1 rules rewritten), the warp's `x` / `y` / `z` ports in `graph_kinds` (all three or `in`, each gated), any multifractal parent, worlds migrated on read (a field's ground term dropped) |
 | G | guards and fold tuning; the bench table; `docs/perf.md` |
 
 Each PR updates the docs it makes wrong: `cascade.md`, `climate.md`, `terrain.md`, `testing.md`, `gotchas.md`,

@@ -57,7 +57,8 @@ namespace Climate {
 //              octaves keep it a height field where they dominate.
 //     "warp":  "in": any node strictly coarser than every note the warp moves (the gate, docs/cascade-v2.md), "amount_m":
 //              80: a note reading it is read displaced by amount_m times (x, y, z), the input read three times with its
-//              notes' seeds + 0, + 1 and + 2 (libnoise's turbulence; amp_m 0.5 is half of amount_m).
+//              notes' seeds + 0, + 1 and + 2 (libnoise's turbulence; amp_m 0.5 is half of amount_m). Or, instead of
+//              "in", the ports "x", "y", "z": a node per axis, each read once and each strictly coarser.
 //     "shape": "in", "shape": "plain" | "billow" | "ridged" | "square", "scale": a, "offset": o (both optional): a n + o,
 //              2 |a n| - 1 + o, (o - |a n|)^2 (o default 1), (a n)^2 + o; or "coeffs": [c1, cn, cabs, csq] (Shape). On a
 //              note it shapes the noise without its mean (a coarser LOD dropping the note makes no step), its constant
@@ -79,7 +80,7 @@ namespace Climate {
 const std::vector<GraphKind> &graph_kinds() {
     static const std::vector<GraphKind> KINDS = {
         { "note", { "warp" }, { { "wavelength_m", "number", true, NAN, "" }, { "seed", "seed", true, NAN, "" }, { "amp_m", "number", true, NAN, "" }, { "stretch_y", "pow2", false, 1.0, "" } } },
-        { "warp", { "in" }, { { "amount_m", "number", true, NAN, "" } } },
+        { "warp", { "in", "x", "y", "z" }, { { "amount_m", "number", true, NAN, "" } } },
         { "shape", { "in" }, { { "shape", "shape", false, NAN, "plain|billow|ridged|square" }, { "scale", "number", false, 1.0, "" }, { "offset", "number", false, NAN, "" }, { "coeffs", "coeffs", false, NAN, "" } } },
         { "multifractal", { "in", "parent" }, { { "low_m", "number", true, NAN, "" }, { "high_m", "number", true, NAN, "" } } },
         { "mix", {}, { { "rows", "rows", true, NAN, "" } } },

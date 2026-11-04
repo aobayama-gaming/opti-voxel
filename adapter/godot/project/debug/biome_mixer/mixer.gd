@@ -326,10 +326,8 @@ func add_node(p_kind: String, p_pos: Vector2) -> String:
 	return id
 
 
+# Any link is made: the engine says what it refuses (a loop, a warp not coarser than its note), naming the node.
 func _on_connection_request(p_from: StringName, _p_from_port: int, p_to: StringName, p_to_port: int) -> void:
-	if Graph.reads(model.graph, String(p_from), String(p_to)):
-		status.text = "That link would make a loop."
-		return
 	Graph.link(model.graph, String(p_from), String(p_to), p_to_port)
 	rebuild_ui()
 	recompile()
