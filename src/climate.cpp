@@ -12,9 +12,6 @@ using Cascade::dmul;
 using Cascade::dsub;
 using Cascade::flush_value;
 
-namespace {
-
-// The default's (1 - p_x)^2 for p_x < 1, else 0 (p_x: the kernels' sum).
 Float4 fill(const Float4 &p_x) {
     if (!(p_x.w < 1.0f)) {
         return Float4{ 0.0f, 0.0f, 0.0f, 0.0f };
@@ -23,7 +20,6 @@ Float4 fill(const Float4 &p_x) {
     return dmul(t, t);
 }
 
-// One axis's factor: the smoothstep of clamp((1 - u^2) KERNEL_FADE, 0, 1), u = (x - centre) / span.
 Float4 axis_factor(const Axis &p_axis, const Float4 &p_x) {
     const Float4 u = dflush(Float4{ p_x.x * p_axis.inv_span, p_x.y * p_axis.inv_span, p_x.z * p_axis.inv_span, (p_x.w - p_axis.centre) * p_axis.inv_span });
     const Float4 uu = dmul(u, u);
@@ -39,6 +35,22 @@ Float4 axis_factor(const Axis &p_axis, const Float4 &p_x) {
     const Float4 t{ s.x * -2.0f, s.y * -2.0f, s.z * -2.0f, 3.0f - s.w * 2.0f };
     return dmul(dmul(s, s), t);
 }
+
+Float4 blend_weight(const Float4 &p_k, const Float4 &p_rcp) {
+    Float4 w = dmul(p_k, p_rcp);
+    w.w = ov::min(w.w, 1.0f); // rounding's last bit, never over 1
+    return w;
+}
+
+Float4 blend_rcp(const Float4 &p_s) {
+    // det_rsqrt(s)^2 and one Newton step (1 / 1 comes out exactly 1: a biome alone at its centre is whole).
+    const float r = ExactNoise::det_rsqrt(p_s.w);
+    const float inv0 = r * r;
+    const float inv = inv0 * (2.0f - p_s.w * inv0);
+    return dflush(Float4{ -(p_s.x * inv) * inv, -(p_s.y * inv) * inv, -(p_s.z * inv) * inv, inv });
+}
+
+namespace {
 
 // Biome p_biome's kernel at the field channels p_fields: its axes' factors multiplied in order.
 Float4 kernel(const Biome &p_biome, const Float4 p_fields[MAX_FIELDS]) {
@@ -185,15 +197,9 @@ void weights(const Table &p_table, const Float4 p_fields[MAX_FIELDS], Float4 r_w
     }
     if (n > 0) {
         r_w[n - 1] = fill(sum);
-        const Float4 s = dadd(sum, r_w[n - 1]);
-        // 1 / s: det_rsqrt(s)^2 and one Newton step (1 / 1 comes out exactly 1: a biome alone at its centre is whole).
-        const float r = ExactNoise::det_rsqrt(s.w);
-        const float inv0 = r * r;
-        const float inv = inv0 * (2.0f - s.w * inv0);
-        const Float4 rcp = dflush(Float4{ -(s.x * inv) * inv, -(s.y * inv) * inv, -(s.z * inv) * inv, inv });
+        const Float4 rcp = blend_rcp(dadd(sum, r_w[n - 1]));
         for (size_t b = 0; b < n; b++) {
-            r_w[b] = dmul(r_w[b], rcp);
-            r_w[b].w = ov::min(r_w[b].w, 1.0f); // rounding's last bit, never over 1
+            r_w[b] = blend_weight(r_w[b], rcp);
         }
     }
 }
@@ -204,9 +210,13 @@ void state(const Table &p_table, const float p_slots[Cascade::SLOTS], State &r_s
 }
 
 int pick(const Table &p_table, const Float4 p_w[MAX_BIOMES], const Vector3i64 &p_p, int p_m) {
+    return pick_of(int(p_table.biomes.size()), p_w, p_p, p_m);
+}
+
+int pick_of(int p_count, const Float4 *p_w, const Vector3i64 &p_p, int p_m) {
     int best[MAX_BIOMES];
     int count = 0;
-    for (int b = 0; b < int(p_table.biomes.size()); b++) {
+    for (int b = 0; b < p_count; b++) {
         if (count > 0 && ExactNoise::float_bits(p_w[b].w) == ExactNoise::float_bits(p_w[best[0]].w)) {
             best[count++] = b;
         } else if (count == 0 || p_w[b].w > p_w[best[0]].w) {

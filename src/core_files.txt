@@ -39,6 +39,11 @@ src/cascade_glsl.hpp
 src/cascade_glsl.cpp
 src/cascade_shaped_glsl.hpp
 src/cascade_shaped_glsl.cpp
+src/level_program.hpp
+src/level_program.cpp
+src/graph_compile.hpp
+src/graph_compile.cpp
+src/graph_bounds.cpp
 src/archetype_ir.hpp
 src/archetype_ir.cpp
 src/archetype_glsl.hpp

@@ -42,6 +42,17 @@ struct BiomeGraph {
     std::vector<GraphRow> rows;
 };
 
+// The format's readers for the cascade v2 compiler (graph_compile.cpp), climate_parse.cpp's own. parse_layout: a table's
+// fields and biomes (places, looks, contents) as parse() reads and validates them, each biome's graph left as its JSON
+// nodes (r_graphs[b], an empty list without a graph); a field's "ground" term is refused. The others read one graph node
+// (p_where names it in the errors): its keys (its kind's, graph_kinds), a note's octave, seed, amplitude and stretch, a
+// number parameter (its kind's default if absent), a curve's points. Each returns empty or the error.
+ov::str parse_layout(const ov::Value &p_data, const Ground &p_ground, Table &r_table, std::vector<ov::Value> &r_graphs);
+ov::str parse_node_keys(const ov::Value &p_node, const ov::str &p_where);
+ov::str parse_note(const ov::Value &p_node, const Ground &p_ground, const ov::str &p_where, NoteNode &r_note);
+ov::str parse_number(const ov::Value &p_node, const char *p_key, const ov::str &p_where, double &r_value);
+ov::str parse_curve(const ov::Value &p_node, const Ground &p_ground, const ov::str &p_where, Curve &r_curve);
+
 // Whether p_ground has p_note's octave ([BAND_SHIFT, k_max]: a note the LOD count doesn't have plays nothing, so a
 // world reads at any LOD count).
 bool note_plays(const NoteNode &p_note, const Ground &p_ground);

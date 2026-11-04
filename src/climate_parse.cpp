@@ -122,7 +122,11 @@ namespace {
 
 // Parameter p_name's default in kind p_kind (graph_kinds).
 double fallback(const char *p_kind, const char *p_name) {
-    for (const GraphParam &p : graph_kind(p_kind)->params) {
+    const GraphKind *kind = graph_kind(p_kind);
+    if (kind == nullptr) {
+        return NAN;
+    }
+    for (const GraphParam &p : kind->params) {
         if (ov::str(p_name) == p.name) {
             return p.fallback;
         }
@@ -152,6 +156,9 @@ public:
             graphs.emplace_back();
             biome(dict(biomes[i], ov::format("biome %d", i)), i, graphs.back());
         }
+        if (raw != nullptr) {
+            return; // parse_layout: the graphs are the caller's
+        }
         // A generic table keeps the warp fields of its capacity (the rest without a band), so a warp deleted compiles
         // nothing; never past the fields its sub-mixes' capacity leaves.
         while (!ground.specialize && int(table.fields.size()) - named < ground.caps.warps && int(table.fields.size()) + ground.caps.channels < MAX_FIELDS) {
@@ -170,10 +177,26 @@ public:
     void run_list(const ov::Value &p_list, const ov::str &p_where, std::vector<InstanceShare> &r_out) { instances(p_list, p_where, r_out); }
     void run_list(const ov::Value &p_list, const ov::str &p_where, std::vector<FeatureShare> &r_out) { features(p_list, p_where, r_out); }
     void shape_of(const ov::Value &p_node, bool p_constant, Shape &r_shape) { shape(p_node, "shape", p_constant, r_shape); }
+    // parse_layout's: each biome's graph nodes go to r_graphs instead of the relaxer; the node readers.
+    void set_raw(std::vector<ov::Value> &r_graphs) { raw = &r_graphs; }
+    void note_of(const ov::Value &p_node, const ov::str &p_where, NoteNode &r_n) { note(p_node, p_where, r_n); }
+    void curve_of(const ov::Value &p_node, const ov::str &p_where, Curve &r_c) { curve(p_node, p_where, r_c); }
+    void keys_of(const ov::Value &p_node, const ov::str &p_where) {
+        const GraphKind *k = graph_kind(p_node["kind"].as_str());
+        if (k == nullptr) {
+            fail(p_where, "'" + p_node["kind"].as_str() + ov::str("' is not a node kind."));
+            return;
+        }
+        node_keys(p_node, p_where, k->kind);
+    }
+    double number_of(const ov::Value &p_node, const char *p_key, const ov::str &p_where) {
+        return number(p_node, p_key, p_where, fallback(p_node["kind"].as_str().c_str(), p_key));
+    }
 
 private:
     const Ground &ground;
     Table &table;
+    std::vector<ov::Value> *raw = nullptr;
     int named = 0; // the fields the format names (the climate's); the warps' follow (warp_field)
 
     // The first error only: "climate: <where>: <msg>".
@@ -936,7 +959,14 @@ private:
         if (p_d.has("at")) {
             axes(dict(p_d["at"], where + ov::str(" at")), where + ov::str(" at"), b.at);
         }
-        if (p_d.has("graph") && error.empty()) {
+        if (raw != nullptr) {
+            const ov::Value g = p_d.has("graph") ? dict(p_d["graph"], where + ov::str(" graph")) : ov::Value();
+            if (p_d.has("graph") && keys(g, where + ov::str(" graph"), { "nodes" })) {
+                raw->push_back(array(g, "nodes", where + ov::str(" graph")));
+            } else {
+                raw->push_back(ov::Value::array());
+            }
+        } else if (p_d.has("graph") && error.empty()) {
             graph(dict(p_d["graph"], where + ov::str(" graph")), where + ov::str(" graph"), b, r_g);
         }
         if (p_d.has("surface")) {
@@ -1069,6 +1099,57 @@ ov::str parse_instances(const ov::Value &p_list, const ov::str &p_where, std::ve
 
 ov::str parse_features(const ov::Value &p_list, const ov::str &p_where, std::vector<FeatureShare> &r_out) {
     return parse_list(p_list, p_where, "features", r_out);
+}
+
+ov::str parse_layout(const ov::Value &p_data, const Ground &p_ground, Table &r_table, std::vector<ov::Value> &r_graphs) {
+    r_table = Table();
+    r_graphs.clear();
+    Parser parser(p_ground, r_table);
+    parser.set_raw(r_graphs);
+    parser.run(p_data);
+    ov::str err = parser.error.empty() ? validate(r_table, p_ground) : parser.error;
+    for (size_t f = 0; f < r_table.fields.size() && err.empty(); f++) {
+        for (const Term &t : r_table.fields[f].terms) {
+            if (t.source == GROUND) {
+                err = "climate: field '" + r_table.fields[f].name + ov::str("': a 'ground' term is gone (the ground depends on the weights, which depend on the fields): a field's terms read earlier fields only.");
+            }
+        }
+    }
+    if (!err.empty()) {
+        r_table = Table();
+        r_graphs.clear();
+    }
+    return err;
+}
+
+ov::str parse_node_keys(const ov::Value &p_node, const ov::str &p_where) {
+    const Ground ground;
+    Table table;
+    Parser parser(ground, table);
+    parser.keys_of(p_node, p_where);
+    return parser.error;
+}
+
+ov::str parse_note(const ov::Value &p_node, const Ground &p_ground, const ov::str &p_where, NoteNode &r_note) {
+    Table table;
+    Parser parser(p_ground, table);
+    parser.note_of(p_node, p_where, r_note);
+    return parser.error;
+}
+
+ov::str parse_number(const ov::Value &p_node, const char *p_key, const ov::str &p_where, double &r_value) {
+    const Ground ground;
+    Table table;
+    Parser parser(ground, table);
+    r_value = parser.number_of(p_node, p_key, p_where);
+    return parser.error;
+}
+
+ov::str parse_curve(const ov::Value &p_node, const Ground &p_ground, const ov::str &p_where, Curve &r_curve) {
+    Table table;
+    Parser parser(p_ground, table);
+    parser.curve_of(p_node, p_where, r_curve);
+    return parser.error;
 }
 
 ov::str parse(const ov::Value &p_data, const Ground &p_ground, Table &r_table) {

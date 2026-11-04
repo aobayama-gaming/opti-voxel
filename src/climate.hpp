@@ -155,6 +155,13 @@ Float4 eval_curve(const Curve &p_c, const Float4 &p_x);
 ov::str height_curve(const std::vector<double> &p_h_m, const std::vector<double> &p_r_m, double p_voxel, Curve &r_c);
 // max |curve'| (skirts).
 float curve_slope_bound(const Curve &p_curve);
+// eval_curve in GLSL over a curve's record in the params' heap (n, y_last, x[n], then inv, p, q, r, s per segment):
+// `vec4 cl_curve_at(int cb, vec4 x)`, after the shared helpers.
+ov::str curve_at_glsl();
+// Quilez's polynomial smooth min of p_a and p_b over p_k voxels (p_inv = 0.5 / p_k), flushed like the climate's duals;
+// its GLSL `vec4 cl_smin(vec4 a, vec4 b, float k, float inv)`, after the shared helpers.
+Float4 smooth_min(const Float4 &p_a, const Float4 &p_b, float p_k, float p_inv);
+ov::str smooth_min_glsl();
 // The steepest offset a biome curve may have (validate): R' within [-3, 5], so the ground's gradient grows at most 5x
 // where the biome is whole. libnoise's cubic overshoots its points' secants: shaped_test's hills, secants under 1,
 // reach 3.
@@ -428,6 +435,13 @@ void fields_at(const Table &p_table, const Cascade::Spec &p_combined, const Vect
 
 // Biome weights (value and gradient) of the field channels p_fields, r_w[b] for biome b.
 void weights(const Table &p_table, const Float4 p_fields[MAX_FIELDS], Float4 r_w[MAX_BIOMES]);
+// weights' steps (the cascade v2 op table's too, level_program.cpp): one axis's factor, the smoothstep of
+// clamp((1 - u^2) KERNEL_FADE, 0, 1), u = (x - centre) / span; the default's (1 - x)^2 for x < 1, else 0 (x the kernels'
+// sum); 1 / s of the total s (det_rsqrt(s)^2 and one Newton step); a kernel over the total, capped at 1.
+Float4 axis_factor(const Axis &p_axis, const Float4 &p_x);
+Float4 fill(const Float4 &p_x);
+Float4 blend_rcp(const Float4 &p_s);
+Float4 blend_weight(const Float4 &p_k, const Float4 &p_rcp);
 
 // The climate at a point, evaluated once per point of each level above a run's last (Modulator: a band's amplitude from
 // the channels before the level's insertions; the level above the last derives the last level's amplitudes and its
@@ -472,6 +486,8 @@ ov::str ground_glsl(const Table &p_table, const Cascade::Spec &p_combined, Casca
 // (hash % count)-th in list order, hash = ExactNoise::hash_cell(the point's LOD0 voxel, PICK_SEED): the same from every
 // LOD that has the point. The derive picks on the level above a run's last (SampleCarry::pick).
 int pick(const Table &p_table, const Float4 p_w[MAX_BIOMES], const Vector3i64 &p_p, int p_m);
+// The same among the p_count weights p_w (at most MAX_BIOMES).
+int pick_of(int p_count, const Float4 *p_w, const Vector3i64 &p_p, int p_m);
 // The carried pick of a point's Cascade slots p_slots (combined_spec's layout, the last level of a run: Cascade::point_slots
 // with p_all_fields, or Level::slots_at of a run's last level carrying the sample terms).
 int pick_slots(const Table &p_table, const float p_slots[Cascade::SLOTS]);

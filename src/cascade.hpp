@@ -157,6 +157,52 @@ void for_each_point(const Box &p_box, F p_f) {
     }
 }
 
+// floor(p_v / 2), for negative indices too (inner loop: a shift, not WorldCoord::floor_div).
+inline int64_t half_floor(int64_t p_v) {
+    return p_v >= 0 ? (p_v >> 1) : ~((~p_v) >> 1);
+}
+
+// One axis pass of H from the points of p_in onto those of p_out (p_in with axis p_axis replaced by child indices):
+// p_f(child index, parent a's index, parent b's index, copy) for every child point in x-major order, both indices
+// x-major in p_in. A copy (an even child index) reads parent a only.
+template <typename F>
+void axis_pass(const Box &p_in, const Box &p_out, int p_axis, F p_f) {
+    const int64_t in_stride[3] = { p_in.size(1) * p_in.size(2), p_in.size(2), 1 };
+    for_each_point(p_out, [&](const Vector3i64 &p_p, int64_t p_o) {
+        const int64_t idx[3] = { p_p.x, p_p.y, p_p.z };
+        const int64_t c = idx[p_axis];
+        int64_t ia = 0;
+        for (int a = 0; a < 3; a++) {
+            ia += ((a == p_axis ? half_floor(c) : idx[a]) - p_in.lo[a]) * in_stride[a];
+        }
+        p_f(p_o, ia, ia + in_stride[p_axis], (c & 1) == 0);
+    });
+}
+
+// The axis rule of H at one child point for one group of CHANNELS channels at slot p_base: p_get(slot, b) reads the
+// parent a (b false) or b (b true), p_put(slot, v) writes the child. A copy reads parent a only.
+template <typename Get, typename Put>
+void axis_rule(int p_base, int p_axis, bool p_copy, Get p_get, Put p_put) {
+    auto pair = [&](int p_v, int p_s) {
+        float v, s;
+        if (p_copy) {
+            hermite_copy(p_get(p_v, false), p_get(p_s, false), v, s);
+        } else {
+            hermite_mid(p_get(p_v, false), p_get(p_v, true), p_get(p_s, false), p_get(p_s, true), v, s);
+        }
+        p_put(p_v, v);
+        p_put(p_s, s);
+    };
+    // The transverse slopes are interpolated linearly.
+    const int axis_slope = p_base + DX + p_axis;
+    pair(p_base + VALUE, axis_slope);
+    for (int s = p_base + DX; s <= p_base + DZ; s++) {
+        if (s != axis_slope) {
+            p_put(s, p_copy ? p_get(s, false) : (p_get(s, false) + p_get(s, true)) * 0.5f);
+        }
+    }
+}
+
 // The parent points H reads to produce p_child: floor(lo / 2) .. ceil(hi / 2).
 Box parent_box(const Box &p_child);
 
@@ -457,6 +503,12 @@ struct Stats {
     int64_t total() const;
 };
 void count_points(const Spec &p_spec, const Box &p_box, int p_lod, Stats &r_stats);
+
+// A note's noise at lattice point p_p of its insertion lattice Λ_p_m (perlin3, its gradient per cell of 2^k voxels),
+// stretched along p_base's up if the band is (BaseSurface::stretched), read displaced by p_warp (null: none; else the
+// displacement per axis, LOD0 voxels, gradients per lattice spacing of Λ_m, clamped to WARP_LIMIT), the displacement's
+// gradient applied by the chain rule.
+ExactNoise::Float4 note_noise(const BaseSurface &p_base, const Band &p_band, int p_m, const Vector3i64 &p_p, const ExactNoise::Float4 *p_warp);
 
 // Band channels on its insertion lattice at lattice point p: perlin3 per cell times
 // amp * 2^(-insert_shift |S|).

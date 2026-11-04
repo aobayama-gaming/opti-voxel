@@ -124,8 +124,6 @@ Float4 eval_curve(const Curve &p_c, const Float4 &p_x) {
     return dflush(Float4{ p_x.x * d, p_x.y * d, p_x.z * d, v });
 }
 
-namespace {
-
 // Quilez's polynomial smooth min of p_a and p_b over p_k voxels (p_inv = 0.5 / p_k): h = clamp(1/2 + (b - a) / (2k), 0,
 // 1), b + h (a - b) - k h (1 - h); outside the blend the smaller register itself. Not the archetype IR's smooth_min4: the
 // climate's products flush under 2^-64 (its exactness note). Its dip, k / 4 at a = b, is biome_compiler.cpp's bound.
@@ -143,6 +141,8 @@ Float4 smooth_min(const Float4 &p_a, const Float4 &p_b, float p_k, float p_inv) 
     const Float4 m = dadd(p_b, dmul(h, dsub(p_a, p_b)));
     return dsub(m, dscale(dmul(h, one_h), p_k));
 }
+
+namespace {
 
 // smooth_min in GLSL (after the shared helpers).
 constexpr const char GLSL_SMOOTH_MIN[] = R"glsl(
@@ -438,6 +438,14 @@ int64_t program_records(const Table &p_table, const SampleCarry &p_carry, Cascad
 }
 
 } // namespace
+
+ov::str smooth_min_glsl() {
+    return GLSL_SMOOTH_MIN;
+}
+
+ov::str curve_at_glsl() {
+    return ov::replace_all(ov::str(GLSL_CURVE_AT) + curve_tail(), "FLUSH", Cascade::glsl_flush());
+}
 
 Float4 up_value(const Float4 &p_base, int p_lod) {
     return Cascade::dscale(p_base, ExactNoise::exact_pow2(p_lod));

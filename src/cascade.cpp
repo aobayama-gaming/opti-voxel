@@ -7,35 +7,6 @@ namespace Cascade {
 
 namespace {
 
-// floor(p_v / 2), for negative indices too (inner loop: a shift, not WorldCoord::floor_div).
-int64_t half_floor(int64_t p_v) {
-    return p_v >= 0 ? (p_v >> 1) : ~((~p_v) >> 1);
-}
-
-// The axis rule of H at one child point for one group (at slot p_base): p_get(slot, b) reads the
-// parent a (b false) or b (b true), p_put(slot, v) writes the child. A copy reads parent a only.
-template <typename Get, typename Put>
-void axis_rule(int p_base, int p_axis, bool p_copy, Get p_get, Put p_put) {
-    auto pair = [&](int p_v, int p_s) {
-        float v, s;
-        if (p_copy) {
-            hermite_copy(p_get(p_v, false), p_get(p_s, false), v, s);
-        } else {
-            hermite_mid(p_get(p_v, false), p_get(p_v, true), p_get(p_s, false), p_get(p_s, true), v, s);
-        }
-        p_put(p_v, v);
-        p_put(p_s, s);
-    };
-    // The transverse slopes are interpolated linearly.
-    const int axis_slope = p_base + DX + p_axis;
-    pair(p_base + VALUE, axis_slope);
-    for (int s = p_base + DX; s <= p_base + DZ; s++) {
-        if (s != axis_slope) {
-            p_put(s, p_copy ? p_get(s, false) : (p_get(s, false) + p_get(s, true)) * 0.5f);
-        }
-    }
-}
-
 // The axis rule for every group a level carries: the ground, p_fields field groups and p_carry carry
 // groups, the copied one (p_copied) from parent a whether the child is a copy or a midpoint.
 template <typename Get, typename Put>
@@ -63,17 +34,9 @@ Level subdivide_axis(const Level &p_in, int p_fields, int p_carry, int p_axis, i
     Level out;
     out.allocate(p_in.m, box, p_fields, p_carry);
     out.copied = p_in.copied;
-    const int64_t in_stride[3] = { p_in.box.size(1) * p_in.box.size(2), p_in.box.size(2), 1 };
-    for_each_point(box, [&](const Vector3i64 &p_p, int64_t p_o) {
-        const int64_t idx[3] = { p_p.x, p_p.y, p_p.z };
-        const int64_t c = idx[p_axis];
-        int64_t ia = 0;
-        for (int a = 0; a < 3; a++) {
-            ia += ((a == p_axis ? half_floor(c) : idx[a]) - p_in.box.lo[a]) * in_stride[a];
-        }
-        const int64_t ib = ia + in_stride[p_axis];
+    axis_pass(p_in.box, box, p_axis, [&](int64_t p_o, int64_t p_ia, int64_t p_ib, bool p_copy) {
         axis_rules(
-                p_fields, p_carry, p_in.copied, p_axis, (c & 1) == 0, [&](int p_s, bool p_b) { return p_in.ch[p_s][p_b ? ib : ia]; },
+                p_fields, p_carry, p_in.copied, p_axis, p_copy, [&](int p_s, bool p_b) { return p_in.ch[p_s][p_b ? p_ib : p_ia]; },
                 [&](int p_s, float p_v) { out.ch[p_s][p_o] = p_v; });
     });
     return out;
@@ -90,51 +53,13 @@ struct BandFactors {
     }
 };
 
-WorldPos band_pos(const Spec &p_spec, const Band &p_band, const Vector3i64 &p_p) {
-    const int64_t step = int64_t(1) << p_spec.insert_level(p_band);
-    WorldPos pos;
-    pos.voxel = Vector3i64(p_p.x * step, p_p.y * step, p_p.z * step);
-    return pos;
-}
-
-// A band's noise at p_pos (perlin3). A stretched band reads it
-// stretched along the base's up (BaseSurface::stretched, the base sample at the band's insertion lattice), its gradient
-// back through the stretch (per cell of 2^k voxels).
-ExactNoise::Float4 band_noise(const Spec &p_spec, const Band &p_band, const WorldPos &p_pos) {
-    const bool stretch = p_band.stretch > 0;
-    const ExactNoise::Float4 b = stretch ? p_spec.base.stretch_base(p_pos.voxel, p_spec.insert_level(p_band)) : ExactNoise::Float4{};
-    const WorldPos pos = stretch ? p_spec.base.stretched(p_pos, p_band.stretch, b, p_spec.insert_level(p_band)) : p_pos;
-    const ExactNoise::Float4 n = ExactNoise::perlin3(pos, p_band.k, p_band.seed, p_band.offset);
-    return stretch ? p_spec.base.stretch_gradient(n, p_band.stretch, b) : n;
-}
-
 void band_channels(const Spec &p_spec, const Band &p_band, const BandFactors &p_factors, const Vector3i64 &p_p, float r_ch[CHANNELS]) {
-    const WorldPos pos = band_pos(p_spec, p_band, p_p);
     const float *factor = p_factors.f;
-    const ExactNoise::Float4 n = band_noise(p_spec, p_band, pos);
+    const ExactNoise::Float4 n = note_noise(p_spec.base, p_band, p_spec.insert_level(p_band), p_p, nullptr);
     r_ch[VALUE] = n.w * factor[0];
     r_ch[DX] = n.x * factor[1];
     r_ch[DY] = n.y * factor[1];
     r_ch[DZ] = n.z * factor[1];
-}
-
-// p_pos displaced by the warp's values (LOD0 voxels, clamped to WARP_LIMIT): the floor to the voxel, the rest to the
-// fraction (below 1: a rest that rounds to 1 carries).
-WorldPos warped(const WorldPos &p_pos, const ExactNoise::Float4 p_warp[3]) {
-    WorldPos pos = p_pos;
-    float *frac[3] = { &pos.frac.x, &pos.frac.y, &pos.frac.z };
-    for (int a = 0; a < 3; a++) {
-        const float w = std::clamp(p_warp[a].w, -WARP_LIMIT, WARP_LIMIT);
-        float fl = std::floor(w);
-        float rest = w - fl;
-        if (rest >= 1.0f) {
-            fl = fl + 1.0f;
-            rest = 0.0f;
-        }
-        pos.voxel[a] += int64_t(fl);
-        *frac[a] = rest;
-    }
-    return pos;
 }
 
 // A modulated band's 4 channels (BandMod p_mod, Modulation), p_slope = 2^-shift. The plain term in the order of the
@@ -142,28 +67,8 @@ WorldPos warped(const WorldPos &p_pos, const ExactNoise::Float4 p_warp[3]) {
 // as flushed dual products.
 void modulated_channels(const Spec &p_spec, const Band &p_band, const BandMod &p_mod, float p_slope, const Vector3i64 &p_p, float r_o[4]) {
     using ExactNoise::Float4;
-    WorldPos pos = band_pos(p_spec, p_band, p_p);
     const bool warp = (p_mod.features & MOD_WARP) != 0u;
-    if (warp) {
-        pos = warped(pos, p_mod.warp);
-    }
-    Float4 n = band_noise(p_spec, p_band, pos);
-    if (warp) {
-        // The chain rule through the displacement: dn' = (I + J)^T dn, J_ab = dW_a / dx_b per voxel (the warp's gradient
-        // per lattice spacing of Λ_m times 2^-m), each product flushed.
-        const float to_voxel = ExactNoise::exact_pow2(-p_spec.insert_level(p_band));
-        const float d[3] = { n.x, n.y, n.z };
-        float out[3];
-        for (int b = 0; b < 3; b++) {
-            float s = 0.0f;
-            for (int a = 0; a < 3; a++) {
-                const float grad[3] = { p_mod.warp[a].x, p_mod.warp[a].y, p_mod.warp[a].z };
-                s = s + flush_value(flush_value(grad[b] * to_voxel) * d[a]);
-            }
-            out[b] = d[b] + flush_value(s);
-        }
-        n = Float4{ out[0], out[1], out[2], n.w };
-    }
+    const Float4 n = note_noise(p_spec.base, p_band, p_spec.insert_level(p_band), p_p, warp ? p_mod.warp : nullptr);
     const Float4 &amp = p_mod.amp[0];
     const float aws = amp.w * p_slope;
     r_o[VALUE] = n.w * amp.w;
@@ -354,7 +259,60 @@ int run_carry(const Spec &p_spec, const FieldRange &p_range, int p_lod, bool p_a
     return p_all ? p_spec.carry_groups() : (p_range.reads_carry(p_lod) ? p_spec.modulation->carry_used(p_lod) : 0);
 }
 
+// p_pos displaced by the warp's values (LOD0 voxels, clamped to WARP_LIMIT): the floor to the voxel, the rest to the
+// fraction (below 1: a rest that rounds to 1 carries).
+WorldPos warped(const WorldPos &p_pos, const ExactNoise::Float4 p_warp[3]) {
+    WorldPos pos = p_pos;
+    float *frac[3] = { &pos.frac.x, &pos.frac.y, &pos.frac.z };
+    for (int a = 0; a < 3; a++) {
+        const float w = std::clamp(p_warp[a].w, -WARP_LIMIT, WARP_LIMIT);
+        float fl = std::floor(w);
+        float rest = w - fl;
+        if (rest >= 1.0f) {
+            fl = fl + 1.0f;
+            rest = 0.0f;
+        }
+        pos.voxel[a] += int64_t(fl);
+        *frac[a] = rest;
+    }
+    return pos;
+}
+
 } // namespace
+
+ExactNoise::Float4 note_noise(const BaseSurface &p_base, const Band &p_band, int p_m, const Vector3i64 &p_p, const ExactNoise::Float4 *p_warp) {
+    using ExactNoise::Float4;
+    const int64_t step = int64_t(1) << p_m;
+    WorldPos pos;
+    pos.voxel = Vector3i64(p_p.x * step, p_p.y * step, p_p.z * step);
+    if (p_warp != nullptr) {
+        pos = warped(pos, p_warp);
+    }
+    // A stretched band reads its noise stretched along the base's up (the base sample at its insertion lattice), its
+    // gradient back through the stretch (per cell of 2^k voxels).
+    const bool stretch = p_band.stretch > 0;
+    const Float4 b = stretch ? p_base.stretch_base(pos.voxel, p_m) : Float4{};
+    const WorldPos at = stretch ? p_base.stretched(pos, p_band.stretch, b, p_m) : pos;
+    Float4 n = ExactNoise::perlin3(at, p_band.k, p_band.seed, p_band.offset);
+    n = stretch ? p_base.stretch_gradient(n, p_band.stretch, b) : n;
+    if (p_warp == nullptr) {
+        return n;
+    }
+    // The chain rule through the displacement: dn' = (I + J)^T dn, J_ab = dW_a / dx_b per voxel (the warp's gradient per
+    // lattice spacing of Λ_m times 2^-m), each product flushed.
+    const float to_voxel = ExactNoise::exact_pow2(-p_m);
+    const float d[3] = { n.x, n.y, n.z };
+    float out[3];
+    for (int i = 0; i < 3; i++) {
+        float s = 0.0f;
+        for (int a = 0; a < 3; a++) {
+            const float grad[3] = { p_warp[a].x, p_warp[a].y, p_warp[a].z };
+            s = s + flush_value(flush_value(grad[i] * to_voxel) * d[a]);
+        }
+        out[i] = d[i] + flush_value(s);
+    }
+    return Float4{ out[0], out[1], out[2], n.w };
+}
 
 Box parent_box(const Box &p_child) {
     Box b;
@@ -637,8 +595,6 @@ constexpr int POINT_CAP = POINT_AXIS * POINT_AXIS * POINT_AXIS;
 struct SmallLevel {
     Box box;
     float ch[SLOTS][POINT_CAP];
-
-    int64_t stride(int p_axis) const { return p_axis == 0 ? box.size(1) * box.size(2) : (p_axis == 1 ? box.size(2) : 1); }
 };
 
 // subdivide_axis on SmallLevels: the same index arithmetic and the same per-point ops (axis_rules), the ground of set
@@ -648,17 +604,9 @@ void subdivide_axis_small(const SmallLevel &p_in, int p_fields, int p_carry, int
     r_out.box = p_in.box;
     r_out.box.lo[p_axis] = p_lo;
     r_out.box.hi[p_axis] = p_hi;
-    const int64_t in_stride[3] = { p_in.stride(0), p_in.stride(1), p_in.stride(2) };
-    for_each_point(r_out.box, [&](const Vector3i64 &p_p, int64_t p_o) {
-        const int64_t idx[3] = { p_p.x, p_p.y, p_p.z };
-        const int64_t c = idx[p_axis];
-        int64_t ia = 0;
-        for (int a = 0; a < 3; a++) {
-            ia += ((a == p_axis ? half_floor(c) : idx[a]) - p_in.box.lo[a]) * in_stride[a];
-        }
-        const int64_t ib = ia + in_stride[p_axis];
+    axis_pass(p_in.box, r_out.box, p_axis, [&](int64_t p_o, int64_t p_ia, int64_t p_ib, bool p_copy) {
         axis_rules(
-                p_fields, p_carry, p_copied, p_axis, (c & 1) == 0, [&](int p_s, bool p_b) { return p_in.ch[p_s][p_b ? ib : ia]; },
+                p_fields, p_carry, p_copied, p_axis, p_copy, [&](int p_s, bool p_b) { return p_in.ch[p_s][p_b ? p_ib : p_ia]; },
                 [&](int p_s, float p_v) { r_out.ch[p_s][p_o] = p_v; });
     });
 }
