@@ -92,7 +92,7 @@ static func every_kind(p_world: Dictionary) -> Dictionary:
 	var n1: String = add.call("note", {"wavelength_m": 409.6, "seed": 1, "amp_m": 20.0, "warp": wp})
 	var n2: String = add.call("note", {"wavelength_m": 102.4, "seed": 2, "amp_m": 5.0, "stretch_y": 2})
 	var s1: String = add.call("shape", {"in": n1, "shape": "ridged"})
-	var mf: String = add.call("multifractal", {"in": s1, "gain": 2.0})
+	var mf: String = add.call("multifractal", {"in": s1, "parent": n0, "low_m": -0.5, "high_m": 0.5})
 	var s2: String = add.call("shape", {"in": n2, "coeffs": [0.0, 0.0, 1.0, 0.0]})
 	var mix: String = add.call("mix", {"rows": [{"in": mf, "x": 1.0}, {"in": s2, "x": 0.5}]})
 	var c: String = add.call("constant", {"value_m": 10.0})

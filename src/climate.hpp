@@ -65,7 +65,7 @@ struct Term {
 
 // A band's shape: phi(n) = c[0] + c[1] n + c[2] |n| + c[3] n^2 of its noise n (the gallery's: plain n, billow 2|n| - 1,
 // ridged (1 - |n|)^2, square n^2). A band inserts its amplitude times phi without its mean (Cascade's NOISE_*_MEAN):
-// c[0] only counts in the multifractal state (Amp::gain).
+// c[0] only counts in a shape at the samples (SampleOp::SHAPE).
 struct Shape {
     float c[4] = { 0.0f, 1.0f, 0.0f, 0.0f };
 };
@@ -85,8 +85,8 @@ struct Field {
     // bands are those notes, each biome playing them like the ground's (Amp::group), its value read by sample programs
     // (FIELD). No biome is placed on it and it has no terms; the format can't name it.
     bool channel = false;
-    // A warp octave's axis (climate_parse.cpp: a note's noise at amplitude 1, read with its seed plus the axis). No
-    // biome is placed on it and it has no terms; the format can't name it.
+    // A note's input: one octave's noise at amplitude 1 (climate_parse.cpp: a warp octave's axis, read with its seed plus
+    // the axis, or a multifractal's parent). No biome is placed on it and it has no terms; the format can't name it.
     bool warp = false;
 };
 
@@ -105,10 +105,18 @@ struct WarpTerm {
     float scale = 0.0f;
 };
 
+// A note's multifractal weight: clamp(mul f + add, 0, 1), f the field `field` (its parent note's noise at amplitude 1,
+// climate_parse.cpp's parent_field; -1: none). From the multifractal node's low_m and high_m, metres of the parent's
+// height (amp_m f): mul = amp_m / (high - low), add = -low / (high - low), so 0 at or under low, 1 at or over high.
+struct Multifractal {
+    int field = -1;
+    float mul = 0.0f;
+    float add = 0.0f;
+};
+
 // How a biome plays the ground's note of octave k: its amplitude (LOD0 voxels: its graph's mix row volume times the
-// note's amplitude, biome_compiler.cpp), the modulated cascade's (combined_spec), and how the biome shapes it. gain > 0
-// weights it by the multifractal state, clamp(gain (1 - c), 0, 1), c the
-// complement of the previous multifractal octave's weighted signal (Musgrave: ridged gain 2, hybrid 1); warps read its
+// note's amplitude, biome_compiler.cpp), the modulated cascade's (combined_spec), and how the biome shapes it. A
+// multifractal weights it by a coarser parent note's height (Multifractal); warps read its
 // noise displaced by the sum of their terms (libnoise's turbulence), the displacement's gradient applied by the chain
 // rule.
 // Left out: weights or warps read from the ground's slope (Quilez's and de Carpentier's slope damping, the swiss
@@ -125,7 +133,7 @@ struct Amp {
     float amp = 0.0f;
     bool has_shape = false; // else plain
     Shape shape;
-    float gain = 0.0f;
+    Multifractal multifractal;
     std::vector<WarpTerm> warps;
 };
 
@@ -298,9 +306,6 @@ struct Table {
 
     // The field named p_name, -1 if none.
     int field_index(const ov::str &p_name) const;
-    // Whether a biome weights a band by the multifractal state (a generic table's always: its text holds every path its
-    // values may take): the combined spec carries one more field group for it.
-    bool has_state() const;
     // Whether a biome has a sample program (generic: always): the ground at a sample is then more than the cascade's
     // (ground_value).
     bool has_programs() const;
@@ -347,9 +352,9 @@ ov::str parse_instances(const ov::Value &p_list, const ov::str &p_where, std::ve
 // A list of features ([{ "kind": "lava_lake", "cell_m": 640, "chance": 0.6, "radius_m": [18, 45] }]: a biome's, the
 // world's) in r_out, as parse_instances.
 ov::str parse_features(const ov::Value &p_list, const ov::str &p_where, std::vector<FeatureShare> &r_out);
-// A shape node ({ "shape", "scale", "offset" } or { "coeffs" }, the format's) as r_shape, p_multifractal whether a
-// multifractal reads it (its constant term counts): empty, or why not.
-ov::str parse_shape(const ov::Value &p_node, bool p_multifractal, Shape &r_shape);
+// A shape node ({ "shape", "scale", "offset" } or { "coeffs" }, the format's) as r_shape, p_constant whether its
+// constant term counts (a shape at the samples; on a note it doesn't): empty, or why not.
+ov::str parse_shape(const ov::Value &p_node, bool p_constant, Shape &r_shape);
 // FNV-1a of a name: a field's seed without one, a biome's debug colour without one (& 0xFFFFFF).
 uint32_t name_hash(const ov::str &p_name);
 

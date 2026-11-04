@@ -139,9 +139,8 @@ WorldPos warped(const WorldPos &p_pos, const ExactNoise::Float4 p_warp[3]) {
 
 // A modulated band's 4 channels (BandMod p_mod, Modulation), p_slope = 2^-shift. The plain term in the order of the
 // GPU's insert_band_shaped: value n.w A, slope n.s (A p_slope) + n.w dA; then its shaped terms, added to it
-// as flushed dual products, and r_state (MOD_STATE) the state's new channels.
-void modulated_channels(const Spec &p_spec, const Band &p_band, const BandMod &p_mod, float p_slope, const Vector3i64 &p_p, float r_o[4],
-        ExactNoise::Float4 *r_state) {
+// as flushed dual products.
+void modulated_channels(const Spec &p_spec, const Band &p_band, const BandMod &p_mod, float p_slope, const Vector3i64 &p_p, float r_o[4]) {
     using ExactNoise::Float4;
     WorldPos pos = band_pos(p_spec, p_band, p_p);
     const bool warp = (p_mod.features & MOD_WARP) != 0u;
@@ -171,13 +170,13 @@ void modulated_channels(const Spec &p_spec, const Band &p_band, const BandMod &p
     r_o[DX] = n.x * aws + n.w * amp.x;
     r_o[DY] = n.y * aws + n.w * amp.y;
     r_o[DZ] = n.z * aws + n.w * amp.z;
-    if ((p_mod.features & (MOD_ABS | MOD_SQ | MOD_STATE)) == 0u) {
+    if ((p_mod.features & (MOD_ABS | MOD_SQ)) == 0u) {
         return;
     }
     // n, |n| and n^2 as duals, gradients per lattice spacing.
     const Float4 nd = dflush(Float4{ n.x * p_slope, n.y * p_slope, n.z * p_slope, n.w });
     const Float4 n2 = dmul(nd, nd);
-    const Float4 an = (p_mod.features & (MOD_ABS | MOD_STATE)) ? smooth_abs(nd, n2) : Float4{ 0.0f, 0.0f, 0.0f, 0.0f };
+    const Float4 an = (p_mod.features & MOD_ABS) ? smooth_abs(nd, n2) : Float4{ 0.0f, 0.0f, 0.0f, 0.0f };
     Float4 shaped{ 0.0f, 0.0f, 0.0f, 0.0f };
     if (p_mod.features & MOD_ABS) {
         shaped = dadd(shaped, dmul(p_mod.amp[1], dsub(an, Float4{ 0.0f, 0.0f, 0.0f, NOISE_ABS_MEAN })));
@@ -189,13 +188,6 @@ void modulated_channels(const Spec &p_spec, const Band &p_band, const BandMod &p
     r_o[DX] = r_o[DX] + shaped.x;
     r_o[DY] = r_o[DY] + shaped.y;
     r_o[DZ] = r_o[DZ] + shaped.z;
-    if ((p_mod.features & MOD_STATE) && r_state) {
-        Float4 s = p_mod.state[0];
-        s = dadd(s, dmul(p_mod.state[1], nd));
-        s = dadd(s, dmul(p_mod.state[2], an));
-        s = dadd(s, dmul(p_mod.state[3], n2));
-        *r_state = s;
-    }
 }
 
 // The bands of Λ_m of each of the first p_groups groups (a field's at most one: one octave per field and lattice,
@@ -281,14 +273,9 @@ void insert_point(const Spec &p_spec, const LevelBands &p_lb, int p_m, const Vec
     }
     // Every band's channels from the channels before the level's insertions, then the adds.
     float o[MAX_MODS][CHANNELS];
-    ExactNoise::Float4 state{ 0.0f, 0.0f, 0.0f, 0.0f };
-    bool writes_state = false;
     p_lb.each([&](int p_b) {
-        const int g = p_lb.group_of(p_b);
-        if ((p_lb.modulated >> g) & 1u) {
-            const BandMod &md = mod[p_lb.mod_of(p_b)];
-            modulated_channels(p_spec, *p_lb.band[p_b], md, p_lb.slope, p_p, o[p_b], g == 0 ? &state : nullptr);
-            writes_state = writes_state || (g == 0 && (md.features & MOD_STATE));
+        if ((p_lb.modulated >> p_lb.group_of(p_b)) & 1u) {
+            modulated_channels(p_spec, *p_lb.band[p_b], mod[p_lb.mod_of(p_b)], p_lb.slope, p_p, o[p_b]);
         } else {
             band_channels(p_spec, *p_lb.band[p_b], p_lb.factors[p_b], p_p, o[p_b]);
         }
@@ -299,16 +286,6 @@ void insert_point(const Spec &p_spec, const LevelBands &p_lb, int p_m, const Vec
             r_ch[base + c] = r_ch[base + c] + o[p_b][c];
         }
     });
-    // The state group is overwritten, not added to (a band-less group: nothing else writes it). At most one note of a
-    // level writes it (Climate::validate).
-    const int sg = p_spec.modulation ? p_spec.modulation->state_group() : -1;
-    if (writes_state && sg > 0 && sg < p_lb.groups) {
-        const int base = group_slot(sg);
-        r_ch[base + VALUE] = state.w;
-        r_ch[base + DX] = state.x;
-        r_ch[base + DY] = state.y;
-        r_ch[base + DZ] = state.z;
-    }
 }
 
 // Calls p_f(slot) for the slots a level of the ground, p_fields field groups and p_carry carry groups carries.
@@ -455,8 +432,8 @@ void Level::channels_at(const Vector3i64 &p_p, float r_ch[CHANNELS]) const {
 }
 
 bool Spec::stretched(int p_group) const {
-    if (generic && p_group <= 0 && !base.curved()) {
-        return true; // an unstretched band's base_stretched is the point itself
+    if (generic && !base.curved()) {
+        return true; // an unstretched band's base_stretched is the point itself (a multifractal's parent field may be stretched)
     }
     for (int g = 0; g < group_count(); g++) {
         if (p_group >= 0 && g != p_group) {

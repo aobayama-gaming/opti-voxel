@@ -51,9 +51,9 @@ static func debug_color(p_biome: Dictionary) -> Color:
 	return Color(hex) if hex.begins_with("#") else ClassDB.class_call_static("ClimateReportNode", "debug_color", String(p_biome.get("name", "")))
 
 
-# A shape node's phi at p_ns (p_multifractal: a multifractal reads it): {error, phi}.
-static func shape_phi(p_node: Dictionary, p_multifractal: bool, p_ns: PackedFloat32Array) -> Dictionary:
-	return ClassDB.class_call_static("ClimateReportNode", "shape", p_node, p_multifractal, p_ns)
+# A shape node's phi at p_ns, as a note's (its constant term doesn't count): {error, phi}.
+static func shape_phi(p_node: Dictionary, p_ns: PackedFloat32Array) -> Dictionary:
+	return ClassDB.class_call_static("ClimateReportNode", "shape", p_node, p_ns)
 
 
 # p_world[p_key]: inline, or the file its string names (relative to the world file p_path), as WorldFile reads it.

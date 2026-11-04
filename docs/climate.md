@@ -40,7 +40,11 @@ them.
      doesn't mix it),
    - `phi_b(n) = c0 + c1 n + c2 |n| + c3 n^2` (the biome's shape: plain, billow, ridged, square), inserted without its
      mean,
-   - times `clamp(gain (1 - c), 0, 1)` with a multifractal (c: the coarser notes' weighted signal, Musgrave's chain),
+   - times `clamp((h_p - low_m) / (high_m - low_m), 0, 1)` with a multifractal: `h_p` the height of its `"parent"`, a
+     note strictly coarser read on its own (its noise times its `"amp_m"`, stretched as it says, no warp; it plays
+     nothing itself). 0 at or under `low_m`, 1 at or over `high_m`; `low_m` above `high_m` inverts it (detail in the
+     parent's valleys). Musgrave's chain is each octave with its next coarser one as parent; one parent for a whole
+     chain costs one field,
    - read at the point moved by `amount_m * (x, y, z)` with a warp: the note's `"warp"` input is a warp node whose
      input is notes (a note or a mix of them, every one coarser than the note), read with their seed, seed + 1 and
      seed + 2 for x, y and z (libnoise's turbulence).
@@ -100,32 +104,36 @@ macro layer in double on the CPU, `BaseSurface`'s region machinery).
   - `up` is `SampleOp::UP`, the sample's height above the base (`up_value`: `BaseSurface::at` times `2^lod`, exact;
     GLSL `climate_ground(ch, p, lod)` reads `base_at` where a program reads it). A cave is a smooth min on the mix's
     output, `smin(mix, up - C)` (`docs/caves.md`);
-  - refused: a multifractal past a chain (it weighs a note by the coarser multifractal notes), a warp read as a value
-    (it is a note's input), a warp of a node past the notes, of shaped, multifractal, warped or stretched notes, or of
-    a note not coarser than one it moves, a sub-mix with two notes on one octave or a multifractal.
+  - refused: a multifractal past a chain (it weighs one note), a parent that is no note, is warped or isn't coarser
+    than the note, `low_m` equal to `high_m`, a warp read as a value (it is a note's input), a warp of a node past the
+    notes, of shaped, multifractal, warped or stretched notes, or of a note not coarser than one it moves, a sub-mix
+    with two notes on one octave.
 
   Existing graphs (the old row form) relax to what they were: the same notes, programs and bits. The compiler keeps a
   note per (octave, seed, stretch, group), turns each row into its biome's `Amp` on each octave (volume times the note's
   amplitude, under a planet's `note_cap`), folds the notes every biome plays alike into constant bands and lists the
   others in every biome (0 where it doesn't mix them). Refused: more than `MAX_FIELDS` (24) fields or `MAX_BIOMES` (16) biomes,
-  more than `Cascade::MAX_LEVEL_NOTES` (8) notes on one octave or two multifractal ones (the state holds one octave's
-  signal; an octave with a modulated note modulates all of its notes), a note mixed twice by one biome, a negative
+  more than `Cascade::MAX_LEVEL_NOTES` (8) notes on one octave (an octave with a modulated note modulates all of its
+  notes), a note mixed twice by one biome, a negative
   amplitude, a
   shaped amplitude past the cap (`Ground::amp_cap`: a planet's relief, the exact range's top on the flat world), a
   curve moving the ground past it, a curve whose
   offset is steeper than `MAX_CURVE_SLOPE` (4: the skirts and the gradient scale with it), a curve whose points all
   lie past the heights the ground reaches (a constant offset: a wrong unit or sign), an `"offset"`
-  without a multifractal (bands are inserted without their mean, so only the state reads it), a field's multiplier
+  on a note's shape (bands are inserted without their mean; a shape at the samples keeps it), a field's multiplier
   without a ground one, a carry past `Cascade::MAX_CARRY`.
 - **In the cascade** (`Climate::combined_spec`): the fields are `Spec::fields`, groups carried down with the
   ground (`Cascade::field_slot`; on the GPU after the ground's 4 channels, `Spec::gpu_base`). A note some biome names
   is modulated (`Cascade::Modulation`, `Climate::Modulator` in `climate_modulator.cpp`): at each point of its level
   the climate (`Climate::state`: field terms, then weights) gives a `Cascade::BandMod` (three amplitudes on n, |n|, n^2;
-  the multifractal state's new channels; the warp), and the band inserts value and slopes as dual numbers
+  the warp), and the band inserts value and slopes as dual numbers
   (`Cascade::modulated_channels`; GLSL `cascade_shaped_glsl.cpp`). `|n|` is `Cascade::smooth_abs`,
   `sqrt(n^2 + 0.01) - 0.1`: with the bare kink the Hermite subdivision rang along the lattice axes (ridged bands'
-  gradient channels 21% off the values' finite differences against 2.5% plain). The multifractal state is a band-less
-  field group (`Modulation::state_group`) the ground's band overwrites. The warp moves the read point by int64 +
+  gradient channels 21% off the values' finite differences against 2.5% plain). A multifractal multiplies the biome's
+  weight by `clamp(mul f + add, 0, 1)` (`Climate::Multifractal`: `mul = amp_m / (high - low)`, the parent's
+  amplitude under the note cap, `add = -low / (high - low)`; a silent parent or one the LOD count doesn't have folds
+  `clamp(add, 0, 1)` into the row's volume), f its parent's field: a warp field (`Field::warp`, `climate_parse.cpp`'s
+  `parent_field`, `~parent<k>_<seed>_<stretch>`, one per parent whatever reads it) of one octave at amplitude 1, read before the note's level like a warp's. The warp moves the read point by int64 +
   fraction (`WARP_LIMIT`), its gradient by the chain rule through the fields' gradients; in the engine a warped note
   costs no extra noise read (the warp fields' own octaves are inserted on their coarse lattices and interpolated
   down). Slope damping and the swiss turbulence (warps read from the ground's slope) were built and dropped: their
@@ -134,21 +142,21 @@ macro layer in double on the CPU, `BaseSurface`'s region machinery).
   specialize_shaders`, the `VoxelTerrain` property `specialize_shaders`; the game specialises, the mixer's 3D view
   doesn't): one compiler and one modulator, and a term's text is the same code either way. *Specialised*, the table's
   structure is its values': a note silent everywhere is dropped, a note every biome plays alike is a constant band,
-  and a term whose coefficient is 0 (an amplitude on |n| or n^2, a multifractal gain, a state coefficient, a warp) is
+  and a term whose coefficient is 0 (an amplitude on |n| or n^2, a warp) is
   not in the text. *Generic* (`Table::generic`), the text is an interpreter of the compiled table: it holds every
-  feature (shapes, the multifractal state, warps, on the ground and on the sub-mixes), loops over data where the
+  feature (shapes, multifractals, warps, on the ground and on the sub-mixes; every field group on the stretched noise
+  path, bit-equal for an unstretched band, so a stretched parent appearing keeps the text), loops over data where the
   specialised text unrolls (the modulator's levels, entries, biomes and parts; the field terms and the biome axes; the
   sample programs, `cl_run` over their instruction records; the extra notes of a level, from its ground entry in the
   band table; the per-LOD switches as param tables) and tests each value where `biome_mod` does (`if (k != 0.0)`,
-  `gain > 0.0 ? ...`). Its numbers are in the shader params: a fixed part the text indexes with literals, then a heap
+  `field >= 0.0 ? ...`). Its numbers are in the shader params: a fixed part the text indexes with literals, then a heap
   (`ShaderParams::put`, read with `cl_heap`) of the variable-length records, which the fixed part points into, so a
   record growing moves no literal. Its sizes are capacities (`Climate::Caps`: notes per level, carry groups, sub-mix
-  fields, warp fields; each a power of two (the warp fields: their count) at least what the table needs and at least the previous start's, `World::Kept`), and
+  fields, warp and multifractal fields; each a power of two (the warp fields: their count) at least what the table needs and at least the previous start's, `World::Kept`), and
   the param block is at its largest. So any edit that fits the capacities keeps the text, a node deleted, a shape's
   type changed, a curve removed included: a world's restart compiles nothing; one past them compiles once with larger
   ones. The specialised text is the same per-term code with the compile's knowledge folded (literals, dead terms
-  out), so the bits are the same: the extra carry parts hold 0 (`Cascade::flush`), the extra state group is never
-  read, a constant level takes the constant inserts, a silent band inserts nothing (the unit test "a table's text
+  out), so the bits are the same: the extra carry parts hold 0 (`Cascade::flush`), a constant level takes the constant inserts, a silent band inserts nothing (the unit test "a table's text
   follows its structure, the generic one's through every edit, with the specialised bits": 7 tables, 7 edits each;
   on the GPU `cascade_test.sh --generic=1`). The template ground (no
   climate) is specialised either way: nothing edits it. Cost (`cascade_test.sh` timing, µs per chunk, 2026-11-03):

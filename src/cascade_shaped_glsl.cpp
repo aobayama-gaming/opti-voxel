@@ -26,7 +26,7 @@ ov::str stretch_helper(const Spec &p_spec) {
 ov::str shaped_helpers() {
     using ExactNoise::glsl_float;
     ov::str code = R"glsl(
-struct BandMod { uint features; vec4 amp[3]; vec4 state[4]; vec4 warp[3]; };
+struct BandMod { uint features; vec4 amp[3]; vec4 warp[3]; };
 
 vec4 cl_smooth_abs(vec4 n, vec4 n2) {
     precise float q = n2.w + SABS_E2;
@@ -60,7 +60,7 @@ WorldPos cascade_warped(WorldPos p, vec4 warp[3]) {
 }
 
 // Cascade::modulated_channels for group p_group's band: `Ch insert_band_shaped_<g>(Ch ch, WorldPos p, CascadeBand band,
-// BandMod md, int m)`, the plain term first (modulated_channels' order), then the shaped ones and the state (group 0). Only
+// BandMod md, int m)`, the plain term first (modulated_channels' order), then the shaped ones. Only
 // the code for the features some level of the group uses (Modulation::group_features): the rest never runs.
 ov::str shaped_band_function(const Spec &p_spec, int p_group) {
     using ExactNoise::glsl_float;
@@ -90,7 +90,7 @@ ov::str shaped_band_function(const Spec &p_spec, int p_group) {
         }
         return a + "    return ch;\n}\n\n";
     };
-    const uint32_t shaped_bits = MOD_ABS | MOD_SQ | MOD_STATE;
+    const uint32_t shaped_bits = MOD_ABS | MOD_SQ;
     if ((used & shaped_bits) == 0u) {
         return code + adds();
     }
@@ -98,10 +98,8 @@ ov::str shaped_band_function(const Spec &p_spec, int p_group) {
     code += "        precise vec4 nd0 = vec4(g.x * " + slope + ov::str(", g.y * ") + slope + ov::str(", g.z * ") + slope + ov::str(", g.w);\n");
     code += "        vec4 nd = cl_flush(nd0);\n        vec4 n2 = cl_mul(nd, nd);\n        vec4 sh = vec4(0.0);\n";
     // |n| only where a feature reads it (the CPU's modulated_channels computes it under the same test).
-    if (used & (MOD_ABS | MOD_STATE)) {
-        code += "        vec4 an = (md.features & " + ov::itos(MOD_ABS | MOD_STATE) + ov::str("u) != 0u ? cl_smooth_abs(nd, n2) : vec4(0.0);\n");
-    }
     if (used & MOD_ABS) {
+        code += "        vec4 an = (md.features & " + ov::itos(MOD_ABS) + ov::str("u) != 0u ? cl_smooth_abs(nd, n2) : vec4(0.0);\n");
         code += "        if ((md.features & " + ov::itos(MOD_ABS) + ov::str("u) != 0u) {\n            sh = cl_add(sh, cl_mul(md.amp[1], cl_sub(an, vec4(0.0, 0.0, 0.0, ") +
                 glsl_float(NOISE_ABS_MEAN) + ov::str("))));\n        }\n");
     }
@@ -110,18 +108,6 @@ ov::str shaped_band_function(const Spec &p_spec, int p_group) {
                 glsl_float(NOISE_SQ_MEAN) + ov::str("))));\n        }\n");
     }
     code += "        o = o + sh;\n";
-    const int sg = p_spec.modulation->state_group();
-    // Without the state group (the samples' view: no field reaches below them), or on a level inserting no field band
-    // (g_field_bands), Cascade's insert_point writes none either.
-    if (p_group == 0 && sg > 0 && sg < p_spec.group_count() && (used & MOD_STATE)) {
-        const int sb = p_spec.gpu_base(sg);
-        code += "        if (g_field_bands && (md.features & " + ov::itos(MOD_STATE) + ov::str("u) != 0u) {\n");
-        code += "            vec4 st = md.state[0];\n            st = cl_add(st, cl_mul(md.state[1], nd));\n";
-        code += "            st = cl_add(st, cl_mul(md.state[2], an));\n            st = cl_add(st, cl_mul(md.state[3], n2));\n";
-        // Overwritten after this group's adds (below): the CPU writes it after every group's, the slots are disjoint.
-        code += ov::format("            ch.c[%d] = st.w;\n            ch.c[%d] = st.x;\n            ch.c[%d] = st.y;\n            ch.c[%d] = st.z;\n        }\n", sb, sb + 1,
-                sb + 2, sb + 3);
-    }
     code += "    }\n";
     return code + adds();
 }

@@ -18,7 +18,6 @@ const SURFACE := {"flat": "#5c7a3a", "steep": "#6b625a"}
 class PhiGraph:
 	extends Control
 	var node := {}
-	var multifractal := false
 
 	func _init() -> void:
 		custom_minimum_size = Vector2(200, 70)
@@ -28,7 +27,7 @@ class PhiGraph:
 		var ns := PackedFloat32Array()
 		for i in 65:
 			ns.append(lerpf(-1.0, 1.0, i / 64.0))
-		var r := EngineInfo.shape_phi(node, multifractal, ns)
+		var r := EngineInfo.shape_phi(node, ns)
 		var font := get_theme_default_font()
 		if String(r.error) != "":
 			draw_string(font, Vector2(4, 14), String(r.error), HORIZONTAL_ALIGNMENT_LEFT, size.x - 8, 10, Color(1.0, 0.5, 0.45))
@@ -124,7 +123,6 @@ static func refresh(p_gn: GraphNode, p_node: Dictionary, p_ctx: Object) -> void:
 	if p_gn.has_meta("phi"):
 		var phi: PhiGraph = p_gn.get_meta("phi")
 		phi.node = p_node
-		phi.multifractal = Graph.nodes(p_ctx.model.graph).any(func(n): return n.kind == "multifractal" and String(n.get("in", "")) == String(p_node.id))
 		phi.queue_redraw()
 
 

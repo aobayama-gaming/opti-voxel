@@ -63,12 +63,13 @@ TEST_CASE("Climate shape: a table without shapes keeps the bits it had before th
     // re-pinned when the climate's numbers moved to the shader params (Cascade::ShaderParams, a uniform block: each value put
     // back as its literal gave the old texts' hashes), when the skirt depths joined them (they follow the amplitudes), and when
     // the plain amplitudes' text folded into the shaped one (cascade_mods, insert_band_shaped: the bits kept). Both again
-    // when the per-LOD switches became param tables (level_table) and a level's extra notes data (its ground entry).
-    CHECK(chunk_text == 15766694351514418112ull);
+    // when the per-LOD switches became param tables (level_table) and a level's extra notes data (its ground entry), and
+    // when the multifractal state left BandMod (a parent's field instead).
+    CHECK(chunk_text == 8193419427396817385ull);
     // The point shader re-pinned when point items became any lattice point with its unit register (point_frame, 16 B),
     // and (all three) when the derive moved before the level's insertions (one climate per point).
     // The bits and the point shader re-pinned when the biomes became a centre and span per field (Climate::weights).
-    CHECK(point_text == 2307510855263589523ull);
+    CHECK(point_text == 9069992480234452530ull);
 }
 
 // Free graphs (graph_test.json) as the relaxer plays them: chained's warp after its shape moves before it (one chain per
@@ -134,7 +135,7 @@ TEST_CASE("Climate shape: the relaxer plays free graphs: chains per octave, sub-
     CHECK(over == 0);
     ov::Value data;
     CLIMATE_REQUIRE(load_table("res://climate/graph_test.json", data) == ov::str());
-    // Refused: a multifractal past a mix (it weighs one note by the coarser multifractal notes), and a warp of a node past
+    // Refused: a multifractal past a mix (it weighs one note by its parent's height), and a warp of a node past
     // the notes (it moves where notes are read).
     for (const bool warp : { false, true }) {
         ov::Value bad = data;
@@ -149,12 +150,12 @@ TEST_CASE("Climate shape: the relaxer plays free graphs: chains per octave, sub-
                 break;
             }
             if (!warp && nodes[n]["id"].as_str() == "cs") {
-                nodes.at(n) = ClimateTest::json(R"({"id": "cs", "kind": "multifractal", "in": "caves", "gain": 2})");
+                nodes.at(n) = ClimateTest::json(R"({"id": "cs", "kind": "multifractal", "in": "caves", "parent": "caves", "low_m": 0, "high_m": 1})");
             }
         }
         const ClimateSDF broken(bad, 15);
         CHECK(broken.sdf.get_climate() == nullptr);
-        CHECK(ov::contains(broken.sdf.get_climate_error(), warp ? "not a node past them" : "a multifractal weighs a note"));
+        CHECK(ov::contains(broken.sdf.get_climate_error(), warp ? "not a node past them" : "a multifractal weighs one note"));
     }
     // Two sub-mixes of one biome sit on two fields even where their octaves don't meet (each read is its own sum), and
     // sub-mix fields past MAX_FIELDS are refused before anything indexes by them.
@@ -305,13 +306,23 @@ TEST_CASE("Climate shape: a shaped table parses into its groups, box runs equal 
     CLIMATE_REQUIRE(s.sdf.get_climate() != nullptr);
     const Table &t = *s.sdf.get_climate();
     const Cascade::Spec &spec = s.sdf.get_spec();
-    CHECK(t.has_state());
     CHECK(t.has_programs());
-    CHECK(spec.fields.size() == t.fields.size() + 1); // the state group, band-less
-    CHECK(spec.fields.back().empty());
+    CHECK(spec.fields.size() == t.fields.size());
     CLIMATE_REQUIRE(spec.modulation != nullptr);
     CHECK(spec.modulation->group_features(0) != 0u);
-    CHECK(spec.modulation->state_group() == int(t.fields.size()) + 1); // the ground, the fields, then the state
+    // The multifractal biome's octaves weighted by their parents' fields.
+    int weighted = 0;
+    for (const Climate::Biome &b : t.biomes) {
+        for (const Amp &a : b.amps) {
+            if (a.multifractal.field >= 0) {
+                weighted++;
+                CHECK(t.fields[size_t(a.multifractal.field)].warp);
+                CHECK(a.multifractal.mul > 0.0f);
+                CHECK(a.multifractal.add == doctest::Approx(0.5f));
+            }
+        }
+    }
+    CHECK(weighted > 8);
     int64_t bad = 0;
     for (const int lod : { 0, 3, 8 }) {
         for (const int64_t base : { int64_t(5), (int64_t(1) << 32) - 2, -(int64_t(1) << 44) }) {
@@ -319,18 +330,6 @@ TEST_CASE("Climate shape: a shaped table parses into its groups, box runs equal 
         }
     }
     CHECK(bad == 0);
-    // The state is written where the multifractal biome has its octaves, a weight's complement in about [0, 1].
-    int written = 0;
-    for (int i = 0; i < 64; i++) {
-        float slots[Cascade::SLOTS];
-        Cascade::point_slots(spec, Vector3i64(int64_t(i) * 7919, 3, int64_t(i) * -1301), 2, slots, true);
-        const float c = slots[Cascade::field_slot(int(t.fields.size()))];
-        written += c != 0.0f;
-        CHECK(std::isfinite(c));
-        CHECK(c >= -0.05f);
-        CHECK(c <= 1.05f);
-    }
-    CHECK(written > 8);
 }
 
 TEST_CASE("Climate shape: ground terms reach every SDF path, the samples' and the points'") {
@@ -414,8 +413,22 @@ TEST_CASE("Climate shape: malformed shapes and terms are refused with the reason
     };
     const ov::str f1 = R"({"fields": [{"name": "t", "bands": [{"from_m": 400, "to_m": 26000, "amp": 1}]}], )";
     CHECK(ov::contains(err(f1 + biome(R"({"id": "s", "kind": "shape", "in": "n", "shape": "spiky"}, )", "s")), "plain, billow"));
-    CHECK(ov::contains(err(f1 + biome(R"({"id": "f", "kind": "field", "field": "t"}, {"id": "m", "kind": "multifractal", "in": "f", "gain": 2}, )", "m")),
-            "a multifractal weighs a note"));
+    CHECK(ov::contains(err(f1 + biome(R"({"id": "f", "kind": "field", "field": "t"}, {"id": "m", "kind": "multifractal", "in": "f", "parent": "n", "low_m": 0, "high_m": 1}, )", "m")),
+            "a multifractal weighs one note"));
+    // A multifractal's parent: a plain note strictly coarser than its own, low_m and high_m apart.
+    auto mf = [&](const char *p_parent, double p_low, double p_high, const ov::str &p_note = ov::str()) {
+        return ov::format(R"({"id": "c", "kind": "note", "wavelength_m": 409.6, "seed": 3, "amp_m": 0.5%s}, {"id": "w", "kind": "warp", "in": "c", "amount_m": 1}, )"
+                          R"({"id": "m", "kind": "multifractal", "in": "n", "parent": "%s", "low_m": %s, "high_m": %s}, )",
+                p_note, p_parent, ov::num(p_low, 3), ov::num(p_high, 3));
+    };
+    CHECK(err(f1 + biome(mf("c", -0.25, 0.25), "m")) == ov::str());
+    CHECK(err(f1 + biome(mf("c", 0.25, -0.25), "m")) == ov::str());
+    CHECK(err(f1 + biome(mf("c", 0, 1), "m")) == ov::str()); // add 0: weight 0 at the parent's zero height
+    CHECK(ov::contains(err(f1 + biome(mf("n", -1, 1), "m")), "coarser than its note"));
+    CHECK(ov::contains(err(f1 + biome(mf("w", -1, 1), "m")), "parent is a note"));
+    CHECK(ov::contains(err(f1 + biome(mf("c", 1, 1), "m")), "differ"));
+    CHECK(err(f1 + biome(mf("c", -1, 1, R"(, "stretch_y": 2)"), "m")) == ov::str());
+    CHECK(ov::contains(err(f1 + biome(mf("c", -1, 1, R"(, "warp": "w")"), "m")), "without a warp"));
     // A warp is a note's input, its notes coarser than the note (the planner's rule) and plain: the ground's slope (the
     // swiss turbulence's) is not offered, nor its damping (climate.hpp).
     const ov::str coarse = R"({"id": "c", "kind": "note", "wavelength_m": 409.6, "seed": 3, "amp_m": 0.5}, )";
@@ -427,22 +440,13 @@ TEST_CASE("Climate shape: malformed shapes and terms are refused with the reason
             "no shape"));
     CHECK(ov::contains(err(f1 + biome(coarse, "n", R"(, "warp": "c")")), "is a warp node"));
     CHECK(ov::contains(err(f1 + biome("", "n", R"(, "damp": 4)")), "unknown key 'damp'"));
-    // An offset is a constant term: inserted without its mean, it only counts in a multifractal's state (ridged's scales
-    // its |n| too).
-    CHECK(ov::contains(err(f1 + biome(R"({"id": "s", "kind": "shape", "in": "n", "shape": "billow", "offset": 0.5}, )", "s")), "only counts in a multifractal"));
+    // An offset is a constant term: inserted without its mean, it doesn't count on a note (ridged's scales its |n| too).
+    CHECK(ov::contains(err(f1 + biome(R"({"id": "s", "kind": "shape", "in": "n", "shape": "billow", "offset": 0.5}, )", "s")), "doesn't count on a note"));
     CHECK(ov::contains(err(R"({"fields": [{"name": "t", "bands": [{"wavelength_m": 400, "amp": 1, "offset": 0.5}]}], "biomes": [{"name": "a"}]})"),
             "unknown key 'offset'"));
-    CHECK(ov::contains(err(f1 + biome(R"({"id": "s", "kind": "shape", "in": "n", "coeffs": [0.5, 1, 0, 0]}, )", "s")), "only counts in a multifractal"));
-    CHECK(err(f1 + biome(R"({"id": "s", "kind": "shape", "in": "n", "offset": 0.5}, {"id": "m", "kind": "multifractal", "in": "s", "gain": 1}, )", "m")) == ov::str());
+    CHECK(ov::contains(err(f1 + biome(R"({"id": "s", "kind": "shape", "in": "n", "coeffs": [0.5, 1, 0, 0]}, )", "s")), "doesn't count on a note"));
     CHECK(err(f1 + biome(R"({"id": "s", "kind": "shape", "in": "n", "shape": "ridged", "offset": 0.8}, )", "s")) == ov::str());
     CHECK(ov::contains(err(f1 + biome(R"({"id": "s", "kind": "shape", "in": "n", "coeffs": [1, 2]}, )", "s")), "4 numbers"));
-    // A multifractal's state takes a field group: MAX_FIELDS fields leave it none.
-    ov::str full = "{\"fields\": [";
-    for (int i = 0; i < MAX_FIELDS; i++) {
-        full += ov::format("%s{\"name\": \"f%d\", \"bands\": [{\"wavelength_m\": 400, \"amp\": 1}]}", i ? ", " : "", i);
-    }
-    full += "], " + biome(R"({"id": "m", "kind": "multifractal", "in": "n", "gain": 2}, )", "m");
-    CHECK(ov::contains(err(full), ov::format("at most %d fields", MAX_FIELDS - 1)));
 }
 
 TEST_CASE("Climate shape: the example world parses at any LOD count, shaped, and box runs equal point queries") {
@@ -451,7 +455,6 @@ TEST_CASE("Climate shape: the example world parses at any LOD count, shaped, and
         CHECK(c.sdf.get_climate_error() == ov::str());
         CLIMATE_REQUIRE(c.sdf.get_climate() != nullptr);
         const Table &t = *c.sdf.get_climate();
-        CHECK(t.has_state());
         CHECK(t.has_programs());
         CHECK(c.sdf.has_ground_materials());
         const Cascade::Spec &spec = c.sdf.get_spec();
@@ -696,7 +699,7 @@ TEST_CASE("Climate shape: stretched bands lower the ground's vertical slope") {
     // On Λ_9 the octaves under 100 m (unstretched, their slope kept: 0.87 / 1.23 on Λ_8) are not inserted yet.
     const double r_iso = ratio(iso, 9), r_stretched = ratio(s.sdf, 9);
     MESSAGE("mean |dh/dy| / |dh/dx| on Λ_9: isotropic ", r_iso, ", stretched by 4 ", r_stretched);
-    CHECK(r_stretched < 0.6 * r_iso); // measured 0.46 / 1.09
+    CHECK(r_stretched < 0.7 * r_iso); // measured 0.64 / 1.03 (0.46 / 1.09 under the old multifractal state's weights)
 
     Table t;
     for (const double bad : { 3.0, 0.5, 1024.0 }) {
@@ -774,7 +777,7 @@ TEST_CASE("Climate shape: the field step between LOD L and L+1 stays within the 
 }
 
 // p_table with every number the mixer's sliders move scaled or shifted, its structure kept: constants, smooth k, curve
-// heights, note amplitudes, gains, warp amounts, mix factors, biome centres.
+// heights, note amplitudes, multifractal bounds, warp amounts, mix factors, biome centres.
 static ov::Value retuned(ov::Value p_table) {
     for (size_t b = 0; b < p_table["biomes"].size(); b++) {
         ov::Value &biome = p_table["biomes"].at(b);
@@ -799,7 +802,8 @@ static ov::Value retuned(ov::Value p_table) {
                 scale("amp_m", 0.25);
                 node["seed"] = node["seed"].as_double() + 1.0;
             } else if (kind == "multifractal") {
-                scale("gain", 0.9);
+                scale("low_m", 0.9);
+                scale("high_m", 1.2);
             } else if (kind == "warp") {
                 scale("amount_m", 1.3);
             } else if (kind == "curve") {
@@ -818,8 +822,8 @@ static ov::Value retuned(ov::Value p_table) {
 
 // p_table with the edits whose values the specialised compile folds (p_kind): 0 every shape on a note's chain another
 // type (a shape at the samples kept: its type moves the program's bounds, not its structure), 1 the values
-// at 0 (warp amounts, gains, each biome's first mix row), 2 neutral (every row at volume 1, shapes plain, no warp or
-// gain: notes every biome plays alike turn constant). The structure kept.
+// at 0 (warp amounts, each biome's first mix row), 2 neutral (every row at volume 1, shapes plain, no warp). The
+// structure kept.
 static ov::Value folded(ov::Value p_table, int p_kind) {
     static const char *const SHAPES[] = { "ridged", "plain", "billow", "square" };
     for (size_t b = 0; b < p_table["biomes"].size(); b++) {
@@ -839,8 +843,6 @@ static ov::Value folded(ov::Value p_table, int p_kind) {
                 node["shape"] = p_kind == 0 ? SHAPES[(b + n) % 4] : "plain";
             } else if (kind == "warp" && p_kind != 0) {
                 node["amount_m"] = 0.0;
-            } else if (kind == "multifractal" && p_kind != 0) {
-                node["gain"] = 0.0;
             } else if (kind == "mix" && p_kind != 0) {
                 for (size_t i = 0; i < node["rows"].size(); i++) {
                     node["rows"].at(i)["x"] = p_kind == 2 ? 1.0 : (i == 0 ? 0.0 : node["rows"][i]["x"].as_double());

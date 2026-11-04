@@ -63,9 +63,10 @@ namespace Climate {
 //              band inserts its shape without its mean; |n| is smoothed below the lattice's resolution (Cascade::smooth_abs).
 //              Past a note's chain (a second shape, a mix of several notes, a node past the notes) it shapes their sum at
 //              the samples, its constant term counting (SampleOp::SHAPE).
-//     "multifractal": "in", "gain": 2: the octave weighted by clamp(gain (1 - c), 0, 1), c the multifractal state's
-//              complement (the previous multifractal octave's weighted signal: Musgrave's ridged multifractal with gain
-//              2 and the ridged shape, hybrid with 1 and plain + offset).
+//     "multifractal": "in", "parent": a note strictly coarser than in's (no warp), "low_m": -50, "high_m": 100: in's note
+//              weighted by where its parent's height (amp_m times its noise, stretched as the note says) lies between
+//              low_m (weight 0) and high_m (weight 1), clamped; low_m above high_m inverts it. The parent plays nothing
+//              itself (a stretched note's parent stretched alike keeps its weight's vertical slope down).
 //     "mix":   "rows": [ { "in": id, "x": 1.2 (volume, default 1) } ]: the rows' sum, each row any node.
 //     "curve": "in", "points": [[h, R], ...] (h increasing, metres): the ground height h becomes R(h) where the biome's
 //              weight is 1 (R - h through libnoise's cubic, constant past the ends; Biome).
@@ -82,7 +83,7 @@ const std::vector<GraphKind> &graph_kinds() {
         { "note", { "warp" }, { { "wavelength_m", "number", true, NAN, "" }, { "seed", "seed", true, NAN, "" }, { "amp_m", "number", true, NAN, "" }, { "stretch_y", "pow2", false, 1.0, "" } } },
         { "warp", { "in" }, { { "amount_m", "number", true, NAN, "" } } },
         { "shape", { "in" }, { { "shape", "shape", false, NAN, "plain|billow|ridged|square" }, { "scale", "number", false, 1.0, "" }, { "offset", "number", false, NAN, "" }, { "coeffs", "coeffs", false, NAN, "" } } },
-        { "multifractal", { "in" }, { { "gain", "number", true, NAN, "" } } },
+        { "multifractal", { "in", "parent" }, { { "low_m", "number", true, NAN, "" }, { "high_m", "number", true, NAN, "" } } },
         { "mix", {}, { { "rows", "rows", true, NAN, "" } } },
         { "constant", {}, { { "value_m", "number", true, NAN, "" } } },
         { "field", {}, { { "field", "field", true, NAN, "" } } },
@@ -168,7 +169,7 @@ public:
     // A list of instances or features alone (parse_list).
     void run_list(const ov::Value &p_list, const ov::str &p_where, std::vector<InstanceShare> &r_out) { instances(p_list, p_where, r_out); }
     void run_list(const ov::Value &p_list, const ov::str &p_where, std::vector<FeatureShare> &r_out) { features(p_list, p_where, r_out); }
-    void shape_of(const ov::Value &p_node, bool p_multifractal, Shape &r_shape) { shape(p_node, "shape", p_multifractal, r_shape); }
+    void shape_of(const ov::Value &p_node, bool p_constant, Shape &r_shape) { shape(p_node, "shape", p_constant, r_shape); }
 
 private:
     const Ground &ground;
@@ -294,9 +295,9 @@ private:
         return i;
     }
 
-    // A shape (shape, scale, offset or coeffs) of a node: the plain one without any. Only a multifractal's state
-    // (p_state: the row has one) reads a shape's constant term.
-    bool shape(const ov::Value &p_d, const ov::str &p_where, bool p_state, Shape &r_s) {
+    // A shape (shape, scale, offset or coeffs) of a node: the plain one without any. Only a shape at the samples
+    // (p_constant) keeps its constant term: a band is inserted without its mean.
+    bool shape(const ov::Value &p_d, const ov::str &p_where, bool p_constant, Shape &r_s) {
         if (p_d.has("coeffs")) {
             const ov::Value c = array(p_d, "coeffs", p_where);
             if (c.size() != 4 || p_d.has("shape")) {
@@ -310,8 +311,8 @@ private:
                     fail(p_where, "'coeffs' is 4 numbers.");
                 }
             }
-            if (r_s.c[0] != 0.0f && !p_state) {
-                fail(p_where, "the constant coefficient only counts in a multifractal (a band is inserted without its mean).");
+            if (r_s.c[0] != 0.0f && !p_constant) {
+                fail(p_where, "the constant coefficient doesn't count on a note (a band is inserted without its mean).");
             }
             return true;
         }
@@ -323,9 +324,9 @@ private:
         const bool ridged = name == "ridged";
         const double o = number(p_d, "offset", p_where, ridged ? 1.0 : 0.0);
         // Plain, billow and square: the offset is the constant term, inserted without its mean (Cascade::NOISE_*_MEAN):
-        // only a multifractal's state reads it. Ridged's (o - |a n|)^2 also scales |n| by it.
-        if (p_d.has("offset") && !ridged && !p_state) {
-            fail(p_where, "'offset' only counts in a multifractal (a plain, billow or square band is inserted without its mean).");
+        // it doesn't count on a note. Ridged's (o - |a n|)^2 also scales |n| by it.
+        if (p_d.has("offset") && !ridged && !p_constant) {
+            fail(p_where, "'offset' doesn't count on a note (a plain, billow or square band is inserted without its mean).");
             return true;
         }
         // plain a n + o, billow 2 |a n| - 1 + o, ridged (o - |a n|)^2, square (a n)^2 + o.
@@ -510,8 +511,7 @@ private:
         int reg = -1;
     };
 
-    // How a graph is read back from its output: each node's value once (by id; a multifractal's shape apart: it reads
-    // the state), the note sums lifted to registers (their rows and the instruction graph() makes the ground's or a
+    // How a graph is read back from its output: each node's value once (by id), the note sums lifted to registers (their rows and the instruction graph() makes the ground's or a
     // sub-mix's read), the depth (a loop).
     struct Reading {
         ov::HashMap<ov::str, Value, ov::DefaultHash> memo;
@@ -521,7 +521,7 @@ private:
 
     // Whether p_v is one note's chain a per-octave node may extend (at volume 1, no multifractal yet).
     static bool per_octave(const Value &p_v) {
-        return p_v.reg < 0 && p_v.rows.size() == 1 && p_v.rows[0].x == 1.0f && p_v.rows[0].gain == 0.0f;
+        return p_v.reg < 0 && p_v.rows.size() == 1 && p_v.rows[0].x == 1.0f && p_v.rows[0].multifractal.field < 0;
     }
 
     int emit(Biome &r_b, SampleOp p_op, int p_a = -1, int p_b = -1, float p_value = 0.0f, int p_index = 0) {
@@ -551,33 +551,32 @@ private:
         return r;
     }
 
-    // Node p_n's value; p_state: a multifractal reads it (its shape's constant term counts).
-    Value expr(const std::vector<ov::Value> &p_nodes, const ov::Value *p_n, const ov::str &p_where, Biome &r_b, Reading &r_read, bool p_state = false) {
+    // Node p_n's value.
+    Value expr(const std::vector<ov::Value> &p_nodes, const ov::Value *p_n, const ov::str &p_where, Biome &r_b, Reading &r_read) {
         if (!error.empty() || p_n == nullptr) {
             return Value();
         }
         const ov::str id = (*p_n)["id"].as_str();
-        const ov::str key = p_state ? id + ov::str("|state") : id;
-        if (const Value *m = r_read.memo.getptr(key)) {
+        if (const Value *m = r_read.memo.getptr(id)) {
             return *m;
         }
         if (++r_read.depth > 4096) {
             fail(p_where + ov::str(" node '") + id + ov::str("'"), "the graph loops.");
             return Value();
         }
-        const Value v = node_value(p_nodes, p_n, p_where, r_b, r_read, p_state);
-        r_read.memo.insert(key, v);
+        const Value v = node_value(p_nodes, p_n, p_where, r_b, r_read);
+        r_read.memo.insert(id, v);
         return v;
     }
 
     // A shape or a multifractal (p_kind): the note chain it extends per octave, or a shape at the samples.
     Value chain_value(const ov::str &kind, const std::vector<ov::Value> &p_nodes, const ov::Value *p_n, const ov::str &p_where, const ov::str &where, Biome &r_b,
-            Reading &r_read, bool p_state) {
+            Reading &r_read) {
         Value out;
         if (kind == "shape") {
             out = expr(p_nodes, input(p_nodes, *p_n, "in", where), p_where, r_b, r_read);
             if (per_octave(out) && !out.rows[0].has_shape) {
-                out.rows[0].has_shape = shape(*p_n, where, p_state, out.rows[0].shape);
+                out.rows[0].has_shape = shape(*p_n, where, false, out.rows[0].shape);
                 return out;
             }
             Shape s;
@@ -587,17 +586,68 @@ private:
             return Value{ {}, error.empty() ? emit(r_b, SampleOp::SHAPE, a, -1, 0.0f, int(r_b.program.shapes.size()) - 1) : -1 };
         }
         if (kind == "multifractal") {
-            const float gain = float(number(*p_n, "gain", where));
-            out = expr(p_nodes, input(p_nodes, *p_n, "in", where), p_where, r_b, r_read, gain > 0.0f);
+            out = expr(p_nodes, input(p_nodes, *p_n, "in", where), p_where, r_b, r_read);
             if (error.empty() && !per_octave(out)) {
-                fail(where, "a multifractal weighs a note by the coarser multifractal notes: its input is a note through a shape.");
+                fail(where, "a multifractal weighs one note: its input is a note (through a warp and a shape).");
             }
             if (error.empty()) {
-                out.rows[0].gain = gain;
+                multifractal(*p_n, input(p_nodes, *p_n, "parent", where), where, out.rows[0]);
             }
             return out;
         }
         return out;
+    }
+
+    // Row r_row weighted by multifractal node p_mf: clamp(mul f + add, 0, 1), f its parent's noise at amplitude 1
+    // (parent_field), 0 at the parent's height low_m, 1 at high_m (its amplitude under the note cap, as it would play). A
+    // parent the LOD count doesn't have, or a silent one, is at height 0: the weight a constant, folded into the row's
+    // volume.
+    void multifractal(const ov::Value &p_mf, const ov::Value *p_parent, const ov::str &p_where, GraphRow &r_row) {
+        const double low = number(p_mf, "low_m", p_where), high = number(p_mf, "high_m", p_where);
+        if (!is_kind(p_parent, "note")) {
+            fail(p_where, "a multifractal's parent is a note.");
+            return;
+        }
+        NoteNode parent;
+        note(*p_parent, p_where, parent);
+        if (!error.empty()) {
+            return;
+        }
+        if (p_parent->has("warp")) {
+            fail(p_where, "a multifractal's parent is read without a warp.");
+        } else if (parent.k <= r_row.note.k) {
+            fail(p_where, ov::format("a multifractal's parent is coarser than its note: %s m isn't coarser than %s m.", ov::num(std::ldexp(ground.voxel_size, parent.k), 2), ov::num(std::ldexp(ground.voxel_size, r_row.note.k), 2)));
+        } else if (!(std::isfinite(low) && std::isfinite(high) && low != high)) {
+            fail(p_where, "a multifractal's low_m and high_m differ.");
+        }
+        if (!error.empty()) {
+            return;
+        }
+        const double add = -low / (high - low);
+        const double amp_m = double(note_amp(parent, ground)) * ground.voxel_size;
+        if (!note_plays(parent, ground) || amp_m == 0.0) {
+            r_row.x = r_row.x * float(ov::clamp(add, 0.0, 1.0));
+            return;
+        }
+        r_row.multifractal = Multifractal{ parent_field(parent), float(amp_m / (high - low)), float(add) };
+    }
+
+    // The field of multifractal parent p_note: its noise at amplitude 1, stretched as a ground octave. A note of octave
+    // k reads it before level k's insertions, whole: it is coarser.
+    int parent_field(const NoteNode &p_note) {
+        const int stretch = note_stretch(p_note, p_note.k);
+        const ov::str name = ov::format("~parent%d_%d_%d", int64_t(p_note.k), int64_t(p_note.seed), int64_t(stretch));
+        const int known = table.field_index(name);
+        if (known >= 0) {
+            return known;
+        }
+        Field f;
+        f.name = name;
+        f.warp = true;
+        f.bands.push_back(ExactNoise::make_octave(p_note.seed, uint32_t(p_note.k), p_note.k, 1.0f));
+        f.bands.back().stretch = stretch;
+        table.fields.push_back(f);
+        return int(table.fields.size()) - 1;
     }
 
     // Note row r_row read through warp node p_w: one term per note of its input (every one coarser than the note: what
@@ -619,7 +669,7 @@ private:
         const double amount = number(*p_w, "amount_m", where) / ground.voxel_size;
         for (size_t i = 0; i < in.rows.size() && error.empty(); i++) {
             const GraphRow &row = in.rows[i];
-            if (row.has_shape || row.gain != 0.0f || !row.warps.empty() || row.note.stretch != 0) {
+            if (row.has_shape || row.multifractal.field >= 0 || !row.warps.empty() || row.note.stretch != 0) {
                 fail(where, "a warp's input is notes or a mix of them (no shape, multifractal, warp or stretch).");
             } else if (row.note.k <= r_row.note.k) {
                 fail(where, ov::format("a warp is coarser than the note it moves: its note of %s m isn't coarser than %s m.", ov::num(std::ldexp(ground.voxel_size, row.note.k), 2), ov::num(std::ldexp(ground.voxel_size, r_row.note.k), 2)));
@@ -687,7 +737,7 @@ private:
     // (rows, or a sum at the samples), and the samples' ops on registers: "constant" value_m, "field" (a climate
     // field's value), "add" / "subtract" / "multiply" / "min" / "max" (a, b), "smin" / "smax" (a, b, k_m), "curve" (in,
     // points), "up".
-    Value node_value(const std::vector<ov::Value> &p_nodes, const ov::Value *p_n, const ov::str &p_where, Biome &r_b, Reading &r_read, bool p_state) {
+    Value node_value(const std::vector<ov::Value> &p_nodes, const ov::Value *p_n, const ov::str &p_where, Biome &r_b, Reading &r_read) {
         const ov::str kind = (*p_n)["kind"].as_str();
         const ov::str where = p_where + ov::str(" node '") + (*p_n)["id"].as_str() + ov::str("'");
         Value out;
@@ -707,7 +757,7 @@ private:
             return out;
         }
         if (kind == "shape" || kind == "multifractal") {
-            return chain_value(kind, p_nodes, p_n, p_where, where, r_b, r_read, p_state);
+            return chain_value(kind, p_nodes, p_n, p_where, where, r_b, r_read);
         }
         if (kind == "mix") {
             return mix_value(p_nodes, p_n, p_where, where, r_b, r_read);
@@ -1001,12 +1051,12 @@ ov::str height_curve(const std::vector<double> &p_h_m, const std::vector<double>
     return ov::str();
 }
 
-ov::str parse_shape(const ov::Value &p_node, bool p_multifractal, Shape &r_shape) {
+ov::str parse_shape(const ov::Value &p_node, bool p_constant, Shape &r_shape) {
     const Ground ground;
     Table table;
     Parser parser(ground, table);
     Shape s;
-    parser.shape_of(p_node, p_multifractal, s);
+    parser.shape_of(p_node, p_constant, s);
     if (parser.error.empty()) {
         r_shape = s;
     }
