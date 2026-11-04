@@ -28,12 +28,12 @@ struct Sampled {
     std::vector<float> fields;
     std::vector<float> weights;
     std::vector<int> picks;
-    // The pick at the coarsest modulated level (Spec::field_range's ceiling) over the same point, or -1 (no modulation, or
-    // the slice's lattice is that coarse): the climate the ground's coarsest modulated octave reads (the LOD rule).
+    // The pick on the weights' own lattice over the same point, or -1 (the slice's lattice is that coarse): the climate
+    // the ground's biome blend reads (the LOD rule).
     std::vector<int> coarse_picks;
     int coarse_m = -1;
     std::vector<double> altitude; // LOD0 voxels above the base: the column's surface, or 0 (the tangent plane)
-    // The ground channels (SDFCascade::ground_channels) at the column's lattice point: height (LOD0 voxels) and its x / z
+    // The ground channels (the program's output) at the column's lattice point: height (LOD0 voxels) and its x / z
     // slopes per lattice spacing; fdx / fdz the central differences of the heights of its 4 neighbours at the same y.
     std::vector<float> h, gx, gz, fdx, fdz;
 };
@@ -63,9 +63,10 @@ Sampled sample(const Table &p_table, const SDFCascade &p_sdf, bool p_surface, in
     s.weights.resize(points * s.nb);
     s.picks.resize(points);
     s.coarse_picks.assign(points, -1);
-    const Cascade::FieldRange range = p_sdf.get_spec().field_range();
-    if (p_picks && !range.empty() && range.ceiling > p_m) {
-        s.coarse_m = range.ceiling;
+    const Terrain::LevelProgram &prog = p_sdf.program();
+    const int weights_m = prog.weights.empty() ? -1 : prog.nodes[size_t(prog.weights[0])].level;
+    if (p_picks && s.nb > 1 && weights_m <= Cascade::MAX_LEVEL && weights_m > p_m) {
+        s.coarse_m = weights_m;
     }
     s.altitude.resize(points);
     s.h.resize(points);
@@ -85,16 +86,12 @@ Sampled sample(const Table &p_table, const SDFCascade &p_sdf, bool p_surface, in
             const VoxelPos g = p_surface ? p_sdf.ground_along(top, p_trace) : top;
             s.altitude[i] = base.altitude(g);
             const Vector3i64 p(WorldCoord::floor_div(g.x, step), WorldCoord::floor_div(g.y, step), WorldCoord::floor_div(g.z, step));
-            State st;
-            float slots[Cascade::SLOTS], ch[Cascade::CHANNELS];
-            Cascade::point_slots(p_sdf.get_spec(), p, p_m, slots, true);
-            state(p_table, slots, st); // fields_at, then the weights
-            const Float4 *f = st.fields;
-            const Float4 *w = st.w;
-            p_sdf.ground_channels(slots, VoxelPos(p.x * step, p.y * step, p.z * step), p_m, ch);
-            s.h[i] = ch[Cascade::VALUE];
-            s.gx[i] = ch[Cascade::DX];
-            s.gz[i] = ch[Cascade::DZ];
+            Float4 f[MAX_FIELDS], w[MAX_BIOMES], ground;
+            int pick = 0;
+            p_sdf.climate_at(p, p_m, ground, pick, f, w);
+            s.h[i] = ground.w;
+            s.gx[i] = ground.x;
+            s.gz[i] = ground.z;
             auto height = [&](int64_t p_dx, int64_t p_dz) {
                 float c[Cascade::CHANNELS];
                 p_sdf.channels_at(VoxelPos((p.x + p_dx) * step, p.y * step, (p.z + p_dz) * step), p_m, c);
@@ -102,12 +99,11 @@ Sampled sample(const Table &p_table, const SDFCascade &p_sdf, bool p_surface, in
             };
             s.fdx[i] = float((height(1, 0) - height(-1, 0)) * 0.5);
             s.fdz[i] = float((height(0, 1) - height(0, -1)) * 0.5);
-            s.picks[i] = p_picks ? pick_slots(p_table, slots) : -1; // the samples' pick, derived on the level above
+            s.picks[i] = p_picks ? pick : -1;
             if (s.coarse_m >= 0) {
                 const int64_t up = int64_t(1) << (s.coarse_m - p_m);
                 const Vector3i64 q(WorldCoord::floor_div(p.x, up), WorldCoord::floor_div(p.y, up), WorldCoord::floor_div(p.z, up));
-                Cascade::point_slots(p_sdf.get_spec(), q, s.coarse_m, slots, true);
-                s.coarse_picks[i] = pick_slots(p_table, slots);
+                s.coarse_picks[i] = Terrain::point(prog, q, s.coarse_m).pick;
             }
             for (int c = 0; c < s.nf; c++) {
                 s.fields[i * s.nf + c] = f[c].w;
@@ -353,7 +349,7 @@ ov::str shading_section(const Table &p_table, const Sampled &p_s, int p_n, int p
 }
 
 // The field table (octaves, min / mean / max) and one grey map per field (-max|v| .. +max|v|).
-ov::str field_section(const Table &p_table, const Cascade::Spec &p_spec, const Sampled &p_s, int p_n, int p_m, const ov::str &p_dir, ov::Value &r_images) {
+ov::str field_section(const Table &p_table, const Sampled &p_s, int p_n, int p_m, const ov::str &p_dir, ov::Value &r_images) {
     const int64_t points = int64_t(p_n) * p_n;
     ov::str md = "| field | octaves (k) | min | mean | max |\n|---|---|---|---|---|\n";
     for (int f = 0; f < p_s.nf; f++) {
@@ -369,7 +365,7 @@ ov::str field_section(const Table &p_table, const Cascade::Spec &p_spec, const S
         }
         const std::vector<Cascade::Band> &bands = p_table.fields[size_t(f)].bands;
         ov::str ks = bands.empty() ? ov::str("-") : ov::format("%d .. %d", bands.back().k, bands.front().k);
-        if (bands.empty() || p_spec.insert_level(bands.front()) < p_m) {
+        if (bands.empty() || bands.front().k - ExactNoise::BAND_SHIFT < p_m) {
             ks += ov::format(" (all inserted below lattice %d: only its terms here)", p_m);
         }
         md += ov::format("| %s | %s | %s | %s | %s |\n", p_table.fields[size_t(f)].name, ks, ov::num(lo, 3), ov::num(sum / double(points), 3),
@@ -498,8 +494,8 @@ ov::Value ClimateReport::run(const ov::str &p_out_dir, const ov::str &p_world_pa
     const Ground ground = sdf.climate_ground();
 
     const int n = ov::max(p_size, 16);
-    if (p_lattice > sdf.get_spec().top_level()) {
-        report["error"] = ov::format("--lattice=%d: above the cascade's top lattice %d.", p_lattice, sdf.get_spec().top_level());
+    if (p_lattice > sdf.program().top) {
+        report["error"] = ov::format("--lattice=%d: above the cascade's top lattice %d.", p_lattice, sdf.program().top);
         OV_ERR_FAIL_V_MSG(report, "ClimateReport: " + report["error"].as_str());
     }
     const int m = p_lattice >= 0 ? p_lattice : slice_lattice(p_extent_km, n, ground.voxel_size);
@@ -519,7 +515,7 @@ ov::Value ClimateReport::run(const ov::str &p_out_dir, const ov::str &p_world_pa
     md += border_section(table, s, n, spacing_m, ground.voxel_size, c) + ov::str("\n");
     md += relief_section(table, s, n, spacing_m, ground.voxel_size, p_out_dir, images) + ov::str("\n");
     md += shading_section(table, s, n, m, p_out_dir, images) + ov::str("\n");
-    md += field_section(table, sdf.get_spec(), s, n, m, p_out_dir, images);
+    md += field_section(table, s, n, m, p_out_dir, images);
     md += "\nImages (x right, z down): ";
     for (size_t i = 0; i < images.size(); i++) {
         md += ov::str(i ? ", " : "") + "`" + images[i].as_str() + "`";
@@ -552,9 +548,9 @@ ClimateReport::Preview ClimateReport::preview(const ov::Value &p_world, const ov
     const Table &table = *sdf.get_climate();
     const double voxel = sdf.climate_ground().voxel_size;
     const int n = ov::max(p_size, 2);
-    // Not above the top lattice; a ground of no notes (every mix row at 0) has none (its top -1): the extent's lattice.
-    const int top = sdf.get_spec().top_level();
-    const int m = top < 0 ? slice_lattice(p_extent_km, n, voxel) : ov::min(slice_lattice(p_extent_km, n, voxel), top);
+    // Not above the top lattice; a ground of no notes has top 0: the extent's lattice.
+    const int top = sdf.program().top;
+    const int m = top <= 0 ? slice_lattice(p_extent_km, n, voxel) : ov::min(slice_lattice(p_extent_km, n, voxel), top);
     const Slice slice = sample_slice(sdf, p_surface, m, m, n, p_center_x, p_center_z, false, p_priority);
     const Sampled &s = slice.s;
     out.us_per_point = slice.us_per_point;

@@ -2,6 +2,7 @@
 
 #include "base_surface.hpp"
 #include "climate.hpp"
+#include "level_program.hpp"
 #include "world_coord.hpp"
 
 #include "ov/containers.hpp"
@@ -32,9 +33,9 @@ struct Texel {
 bool any(const Climate::Table &p_table);
 // The texel of biome weights p_w (values in .w).
 Texel of_weights(const Climate::Table &p_table, const Climate::Float4 p_w[Climate::MAX_BIOMES]);
-// The texel of the climate at LOD0 voxel p_voxel, read on Λ_m (min(p_m, the spec's top); every field carried there:
-// Climate::fields_at's): the biome weights of the climate low-passed at Λ_m's spacing.
-Texel at(const Climate::Table &p_table, const Cascade::Spec &p_spec, const VoxelPos &p_voxel, int p_m);
+// The texel of the climate at LOD0 voxel p_voxel, read on Λ_m (min(p_m, the program's top)): the biome weights of
+// p_prog (Terrain::point_nodes) low-passed at Λ_m's spacing.
+Texel at(const Climate::Table &p_table, const Terrain::LevelProgram &p_prog, const VoxelPos &p_voxel, int p_m);
 
 // The lattice: SIZE^3 cells of 2^cell_shift LOD0 voxels, centred on a cell (Stream: the camera's). Only cells within
 // MARGIN cells of the layer (every cell a trilinear read in it touches) are evaluated, each from the climate of the base

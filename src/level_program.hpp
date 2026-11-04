@@ -28,9 +28,9 @@ using ExactNoise::Float4;
 
 // The ops. Inputs `in`, constants `k`:
 //   NOTE   perlin3 of `band` at the point (amplitude 1, gradient per lattice spacing), read displaced by in[0..2] (LOD0
-//          voxels per axis) if it has them; 0 on a level finer than its own (a run of a coarser LOD).
+//          voxels per axis) if it has them; 0 on a level coarser than its own (a run of a coarser LOD: the note absent).
 //   CONST  k[0]. UP: the point's height above the base (LOD0 voxels, Climate::up_value).
-//   LIN    sum of k[i] in[i], in order (a k of 1 multiplies nothing: the same bits).
+//   LIN    sum of k[i] in[i], in order (a k of 1 multiplies nothing).
 //   MUL    in[0] in[1]. MIN, MAX: the input with the smaller / larger value (in[1] if it wins strictly).
 //   SMIN, SMAX: Climate::smooth_min of in[0], in[1] over k[0] voxels (k[1] = 0.5 / k[0]); SMAX = -smin(-a, -b).
 //   CURVE  curves[curve] of in[0] (Climate::eval_curve: the curve's own value, not plus its input).
@@ -90,6 +90,9 @@ struct LevelProgram {
     int output = -1; // the ground height (LOD0 voxels): what height_sdf reads at a run's last level
     int pick = -1; // the biome (PICK, or a constant)
     int biomes = 1;
+    // The climate's nodes the CPU reads (BiomePick, CloudClimate, ClimateReport): each field's value, each biome's weight.
+    std::vector<int> fields, weights;
+    bool generic = false; // compiled Mode::GENERIC: the GPU runs it through the interpreter (level_glsl.hpp)
     // What a stretched note stretches along and what `up` measures from (SDFCascade's base).
     BaseSurface base = BaseSurface::flat(0);
     // Bounds (graph_compile.cpp): each node's value within [lo, hi]; step[L], the output's largest change between LOD L
@@ -112,10 +115,10 @@ struct OpPoint {
 
 // The op table: each op's name, input count (-1: any), CPU form and GLSL form. The GLSL form is an expression of the
 // inputs `$0`, `$1`, ... and the node's constants `#0`, `#1`, ... (literals or ShaderParams reads, the emitter's
-// choice), the point `@p` (WorldPos) and its level `@m` (int), a NOTE's band `@band` (CascadeBand) and a CURVE's record
-// `@curve` (its index in the params' heap, Climate::curve_at_glsl's layout). Variadic ops: LIN's form is one term,
-// applied to each input `$i` with its constant `#i` and the sum so far `$acc` (the first term: "cl_scale($i, #i)");
-// PICK's is a call on the array `$all` of its inputs (`#n` of them). The functions it calls are glsl_helpers()'s and
+// choice), the point `@p` (WorldPos) and its level `@m` (int), a NOTE's own level `@level` and band `@band`
+// (CascadeBand) and a CURVE's record `@curve` (its index in the params' heap, Climate::curve_at_glsl's layout). Variadic
+// ops: LIN's form is one term, of input `$i` and its constant `#i`, the terms summed in order by cl_add (the first one
+// alone); PICK's is a call on the array `$all` of its inputs (`#n` of them). The functions it calls are glsl_helpers()'s and
 // the climate's shared ones (cl_add, cl_mul, cl_axis, ...: Climate::shared_helpers_glsl, smooth_min_glsl,
 // curve_at_glsl) and the cascade's (perlin3, base_at, base_stretched, cascade_warped, cl_smooth_abs).
 struct OpDef {
@@ -126,8 +129,11 @@ struct OpDef {
     const char *glsl;
 };
 const OpDef &op_def(Op p_op);
-// The GLSL functions the forms call beyond the shared ones (tp_note, tp_shape, tp_norm, tp_pick).
+// The GLSL functions the forms call beyond the shared ones (cl_smooth_abs, cascade_warped, then tp_note, tp_term,
+// tp_shape, tp_axis, tp_norm, tp_pick), after the climate's shared helpers, smooth min, curve and the base's stretch.
 ov::str glsl_helpers();
+// cl_smooth_abs (Cascade::smooth_abs) and cascade_warped (Cascade::warped), op for op.
+ov::str glsl_warp_helpers();
 // Node p_node's value from its inputs' values p_in at p_at (op_def's CPU form).
 Float4 eval_node(const LevelProgram &p_prog, const Node &p_node, const Float4 *p_in, const OpPoint &p_at);
 
@@ -149,11 +155,14 @@ struct Values {
 // does. r_levels (optional) receives every level, top first. The result's output and pick slots hold the samples.
 Values run(const LevelProgram &p_prog, const Cascade::Box &p_box, int p_lod, std::vector<Values> *r_levels = nullptr);
 
-// A point query: run() on the one-point box (the same ops: the same bits).
+// A point query: run() on the one-point box (the same ops in the same order: the same bits), on a flat per-thread
+// workspace (no allocation once warm), computing only the nodes the targets depend on.
 struct Sample {
     Float4 ground;
     int pick = 0;
 };
 Sample point(const LevelProgram &p_prog, const Vector3i64 &p_p, int p_lod);
+// The values of nodes p_targets[0 .. p_count) at point p_p of Λ_p_lod (a run down to p_lod: its last level's).
+void point_nodes(const LevelProgram &p_prog, const Vector3i64 &p_p, int p_lod, const int *p_targets, int p_count, Float4 *r_values);
 
 } // namespace Terrain

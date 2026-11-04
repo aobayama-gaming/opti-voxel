@@ -41,7 +41,7 @@ Float4 shape(const float *p_c, const Float4 &p_a) {
 
 // NOTE: the note's noise at the point (Cascade::note_noise, its warp from in[0..2]), gradient per lattice spacing.
 Float4 note(const LevelProgram &p_prog, const Node &p_node, const Float4 *p_in, const OpPoint &p_at) {
-    if (p_at.m < p_node.level) {
+    if (p_at.m > p_node.level) {
         return ZERO; // a run of a coarser LOD: the note is absent (its mean)
     }
     const Float4 n = Cascade::note_noise(p_prog.base, p_node.band, p_at.m, p_at.p, p_node.in.empty() ? nullptr : p_in);
@@ -73,10 +73,10 @@ Float4 pick(const Node &p_node, const Float4 *p_in, const OpPoint &p_at) {
     [](const LevelProgram &p_prog [[maybe_unused]], const Node &p_node [[maybe_unused]], const Float4 *p_in [[maybe_unused]], const OpPoint &p_at [[maybe_unused]]) -> Float4 { p_body }
 
 const OpDef OPS[] = {
-    { Op::NOTE, "note", -1, OV_OP(return note(p_prog, p_node, p_in, p_at);), "tp_note(@p, @m, @band, $0, $1, $2)" },
+    { Op::NOTE, "note", -1, OV_OP(return note(p_prog, p_node, p_in, p_at);), "tp_note(@p, @m, @level, @band, $0, $1, $2)" },
     { Op::CONST, "constant", 0, OV_OP(return (Float4{ 0.0f, 0.0f, 0.0f, p_node.k[0] });), "vec4(0.0, 0.0, 0.0, #0)" },
     { Op::UP, "up", 0, OV_OP(return up(p_prog, p_at);), "cl_scale(base_at(@p, @m), exact_pow2(@m))" },
-    { Op::LIN, "lin", -1, OV_OP(return lin(p_node, p_in);), "cl_add($acc, cl_scale($i, #i))" },
+    { Op::LIN, "lin", -1, OV_OP(return lin(p_node, p_in);), "tp_term($i, #i)" },
     { Op::MUL, "multiply", 2, OV_OP(return dmul(p_in[0], p_in[1]);), "cl_mul($0, $1)" },
     { Op::MIN, "min", 2, OV_OP(return p_in[1].w < p_in[0].w ? p_in[1] : p_in[0];), "($1.w < $0.w ? $1 : $0)" },
     { Op::MAX, "max", 2, OV_OP(return p_in[1].w > p_in[0].w ? p_in[1] : p_in[0];), "($1.w > $0.w ? $1 : $0)" },
@@ -97,8 +97,41 @@ static_assert(sizeof(OPS) / sizeof(OPS[0]) == size_t(Op::COUNT), "one op table e
 // The forms' own GLSL functions, op for op with the CPU forms above (after the climate's shared helpers and the cascade's
 // noise, base and shaped-band helpers). A NOTE without a warp reads a zero displacement: the same bits (a lattice point
 // moved by 0, the chain rule adding 0, -0 flushed to 0).
+constexpr const char GLSL_WARP_HELPERS[] = R"glsl(
+vec4 cl_smooth_abs(vec4 n, vec4 n2) {
+    precise float q = n2.w + SABS_E2;
+    precise float r = det_rsqrt(q);
+    precise float d0 = n.w * r;
+    float d = abs(d0) < FLUSH ? 0.0 : d0;
+    precise vec4 res = vec4(n.x * d, n.y * d, n.z * d, q * r - SABS_E);
+    return cl_flush(res);
+}
+
+WorldPos cascade_warped(WorldPos p, vec4 warp[3]) {
+    WorldPos q = p;
+    ivec3 d;
+    for (int a = 0; a < 3; a++) {
+        precise float w = clamp(warp[a].w, -WARP_LIMIT, WARP_LIMIT);
+        precise float fl = floor(w);
+        precise float rest = w - fl;
+        if (rest >= 1.0) {
+            fl = fl + 1.0;
+            rest = 0.0;
+        }
+        d[a] = int(fl);
+        q.frac[a] = rest;
+    }
+    i64_add(q.lo, q.hi, d);
+    return q;
+}
+
+)glsl";
+
 constexpr const char GLSL_HELPERS[] = R"glsl(
-vec4 tp_note(WorldPos p, int m, CascadeBand band, vec4 wx, vec4 wy, vec4 wz) {
+vec4 tp_note(WorldPos p, int m, int level, CascadeBand band, vec4 wx, vec4 wy, vec4 wz) {
+    if (m > level) {
+        return vec4(0.0);
+    }
     vec4 w[3] = vec4[3](wx, wy, wz);
     WorldPos q = cascade_warped(p, w);
     vec4 g = perlin3(base_stretched(q, int(band.info.w)), int(band.info.z), band.info.y, band.offset_lo.xyz, band.offset_hi.xyz);
@@ -117,6 +150,10 @@ vec4 tp_note(WorldPos p, int m, CascadeBand band, vec4 wx, vec4 wy, vec4 wz) {
     }
     precise vec4 r = vec4(o.x * SLOPE, o.y * SLOPE, o.z * SLOPE, g.w);
     return cl_flush(r);
+}
+
+vec4 tp_term(vec4 a, float k) {
+    return k == 1.0 ? a : cl_scale(a, k);
 }
 
 vec4 tp_shape(vec4 a, vec4 c) {
@@ -253,9 +290,14 @@ const OpDef &op_def(Op p_op) {
     return OPS[size_t(p_op)];
 }
 
+ov::str glsl_warp_helpers() {
+    using ExactNoise::glsl_float;
+    return ov::replace_all(GLSL_WARP_HELPERS, { { "SABS_E2", glsl_float(Cascade::SMOOTH_ABS_E * Cascade::SMOOTH_ABS_E) }, { "SABS_E", glsl_float(Cascade::SMOOTH_ABS_E) }, { "WARP_LIMIT", glsl_float(Cascade::WARP_LIMIT) }, { "FLUSH", Cascade::glsl_flush() } });
+}
+
 ov::str glsl_helpers() {
     using ExactNoise::glsl_float;
-    return ov::replace_all(GLSL_HELPERS, { { "FLUSH", Cascade::glsl_flush() }, { "SLOPE", glsl_float(ExactNoise::exact_pow2(-ExactNoise::BAND_SHIFT)) }, { "KERNEL_FADE", glsl_float(Climate::KERNEL_FADE) }, { "MAX_BIOMES", ov::itos(Climate::MAX_BIOMES) }, { "PICK_SEED", ov::itos(int64_t(Climate::PICK_SEED)) + ov::str("u") } });
+    return glsl_warp_helpers() + ov::replace_all(GLSL_HELPERS, { { "FLUSH", Cascade::glsl_flush() }, { "SLOPE", glsl_float(ExactNoise::exact_pow2(-ExactNoise::BAND_SHIFT)) }, { "KERNEL_FADE", glsl_float(Climate::KERNEL_FADE) }, { "MAX_BIOMES", ov::itos(Climate::MAX_BIOMES) }, { "PICK_SEED", ov::itos(int64_t(Climate::PICK_SEED)) + ov::str("u") } });
 }
 
 Float4 eval_node(const LevelProgram &p_prog, const Node &p_node, const Float4 *p_in, const OpPoint &p_at) {
@@ -313,12 +355,113 @@ Values run(const LevelProgram &p_prog, const Cascade::Box &p_box, int p_lod, std
     return cur;
 }
 
+namespace {
+
+// A point run's level boxes hold at most 2 points per axis (level_bound(1, j)), and so do the axis passes' boxes between.
+constexpr int POINT_BOX = 8;
+
+// A point run's per-thread storage: each node's values on the level's box (POINT_BOX per node), the cone of the targets.
+struct PointWork {
+    std::vector<Float4> cur, next, in;
+    std::vector<uint8_t> cone;
+};
+
+float &channel(Float4 &r_v, int p_c) {
+    return p_c == Cascade::VALUE ? r_v.w : (p_c == Cascade::DX ? r_v.x : (p_c == Cascade::DY ? r_v.y : r_v.z));
+}
+
+// subdivide()'s three axis passes for one node, from p_from (box p_in) onto p_to (box p_out), then the flush.
+void subdivide_point(bool p_copy_all, const Float4 *p_from, const Cascade::Box &p_in, Float4 *r_to, const Cascade::Box &p_out) {
+    Float4 a[POINT_BOX], b[POINT_BOX];
+    std::copy(p_from, p_from + p_in.count(), a);
+    Cascade::Box box = p_in;
+    for (int axis = 0; axis < 3; axis++) {
+        Cascade::Box next = box;
+        next.lo[axis] = p_out.lo[axis];
+        next.hi[axis] = p_out.hi[axis];
+        Cascade::axis_pass(box, next, axis, [&](int64_t p_o, int64_t p_ia, int64_t p_ib, bool p_copy) {
+            if (p_copy_all) {
+                b[p_o] = a[p_ia];
+                return;
+            }
+            Cascade::axis_rule(0, axis, p_copy, [&](int p_c, bool p_b) { return channel(a[p_b ? p_ib : p_ia], p_c); }, [&](int p_c, float p_v) { channel(b[p_o], p_c) = p_v; });
+        });
+        std::copy(b, b + next.count(), a);
+        box = next;
+    }
+    for (int64_t i = 0; i < p_out.count(); i++) {
+        r_to[i] = Float4{ Cascade::flush_value(a[i].x), Cascade::flush_value(a[i].y), Cascade::flush_value(a[i].z), Cascade::flush_value(a[i].w) };
+    }
+}
+
+// compute()'s ops for the nodes of p_code in the cone, at every point of p_box (Λ_p_m).
+void compute_point(const LevelProgram &p_prog, const std::vector<int> &p_code, const Cascade::Box &p_box, int p_m, PointWork &r_w) {
+    for (const int n : p_code) {
+        if (!r_w.cone[size_t(n)]) {
+            continue;
+        }
+        const Node &node = p_prog.nodes[size_t(n)];
+        r_w.in.resize(ov::max(r_w.in.size(), node.in.size()));
+        Cascade::for_each_point(p_box, [&](const Vector3i64 &p_p, int64_t p_i) {
+            for (size_t i = 0; i < node.in.size(); i++) {
+                r_w.in[i] = r_w.next[size_t(node.in[i]) * POINT_BOX + size_t(p_i)];
+            }
+            r_w.next[size_t(n) * POINT_BOX + size_t(p_i)] = eval_node(p_prog, node, r_w.in.data(), OpPoint{ p_p, p_m });
+        });
+    }
+}
+
+} // namespace
+
+void point_nodes(const LevelProgram &p_prog, const Vector3i64 &p_p, int p_lod, const int *p_targets, int p_count, Float4 *r_values) {
+    thread_local PointWork w;
+    const size_t n = p_prog.nodes.size();
+    w.cone.assign(n, 0);
+    w.cur.resize(n * POINT_BOX);
+    w.next.resize(n * POINT_BOX);
+    for (int t = 0; t < p_count; t++) {
+        w.cone[size_t(p_targets[t])] = 1;
+    }
+    for (size_t i = n; i-- > 0;) {
+        for (const int in : p_prog.nodes[i].in) {
+            w.cone[size_t(in)] |= w.cone[i];
+        }
+    }
+    const Cascade::Box lod_box = Cascade::point_box(p_p);
+    const int top = ov::max(p_prog.top, p_lod);
+    Cascade::Box parent;
+    for (int m = top; m >= p_lod; m--) {
+        const Cascade::Box box = Cascade::level_box(lod_box, m - p_lod);
+        if (m < top) {
+            for (const int in : p_prog.inputs(m)) {
+                if (w.cone[size_t(in)]) {
+                    const size_t at = size_t(in) * POINT_BOX;
+                    subdivide_point(p_prog.nodes[size_t(in)].op == Op::PICK, w.cur.data() + at, parent, w.next.data() + at, box);
+                }
+            }
+        }
+        if (m > p_lod) {
+            if (m <= p_prog.top) {
+                compute_point(p_prog, p_prog.levels[size_t(m)].code, box, m, w);
+            }
+        } else {
+            for (int s = ov::min(p_lod, p_prog.top); s >= 0; s--) {
+                compute_point(p_prog, p_prog.levels[size_t(s)].code, box, m, w);
+            }
+        }
+        std::swap(w.cur, w.next);
+        parent = box;
+    }
+    for (int t = 0; t < p_count; t++) {
+        r_values[t] = w.cur[size_t(p_targets[t]) * POINT_BOX];
+    }
+}
+
 Sample point(const LevelProgram &p_prog, const Vector3i64 &p_p, int p_lod) {
-    const Values v = run(p_prog, Cascade::point_box(p_p), p_lod);
-    Sample s;
-    s.ground = v.has(p_prog.output) ? v.at(p_prog.output, 0) : ZERO;
-    s.pick = v.has(p_prog.pick) ? int(v.at(p_prog.pick, 0).w) : 0;
-    return s;
+    const int targets[2] = { p_prog.output, p_prog.pick };
+    Float4 v[2];
+    point_nodes(p_prog, p_p, p_lod, targets, 2, v);
+    return Sample{ v[0], int(v[1].w) };
 }
 
 } // namespace Terrain

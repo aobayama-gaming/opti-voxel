@@ -7,7 +7,7 @@
 #include "ov/str.hpp"
 
 // The Hermite cascade on the GPU (shared by GPUDirectMesher and CascadeSpike), bit for bit what
-// Cascade::run computes on the CPU.
+// Terrain::run computes on the CPU.
 //
 // One compute dispatch per level, every chunk of the batch in the same dispatch: level m = L + j of each
 // chunk (its LOD L), j = J ... 0 with J = T - (the batch's smallest LOD). A chunk whose level m is above
@@ -19,15 +19,14 @@
 // A child point is computed from its 2x2x2 parent corners, replaying the CPU's three axis passes on the
 // same inputs in the same order: the x pass at the (up to) 4 (y, z) parent positions, the y pass at the
 // 2 z positions, the z pass once (copy at even indices, midpoint at odd ones). Same ops on the same values,
-// so the same bits as the CPU's box-wide passes, with no intermediate box stored. Then the level's band is
-// inserted (perlin3 times the band factors, ch = ch + o) and every channel flushed below 2^-64, like
-// Cascade::run.
+// so the same bits as the CPU's box-wide passes, with no intermediate box stored. Then every channel is flushed below
+// 2^-64 and the level's program runs (Terrain::run, op for op).
 //
 // Ping-pong scratch: odd j in buffer A (17^3 points per chunk), even j >= 2 in buffer B (10^3), 1 vec4 per
 // point. j = 0 (Λ_L) stores no channel: it converts straight to the mesher's
 // sdf_sample (SDF cascade_terrain_sdf -> metres -> skirt), the same 16 B per sample as the sdf pass it
-// replaces. The bands reach the GPU as a table indexed by level (band_table), so the shader does not change
-// with the spec. Debug variant (CascadeSpike): the last level also stores its channels; the meshers' variant
+// replaces. The level's own work is the program's (Terrain::level_run, level_glsl.hpp): its notes' bands reach the GPU
+// as a table (Terrain::band_table, binding 5). Debug variant (CascadeSpike): the last level also stores its channels; the meshers' variant
 // doesn't, so the channels the sample doesn't use are dead code there.
 //
 // Items: the meshers' are chunks (32 points per axis, box from the chunk's anchor minus the skirt). Point items
@@ -39,7 +38,6 @@
 namespace CascadeGLSL {
 
 static constexpr uint32_t BAND_BYTES = 64;
-static constexpr int BAND_ENTRIES = Cascade::MAX_LEVEL + 1;
 static constexpr uint32_t PUSH_BYTES = 32;
 static constexpr uint32_t LOCAL_SIZE = 64;
 // The fold variant's workgroup: a cube of FOLD_CUBE^3 samples of level 0 (given a chunk size that is a multiple of it,
@@ -53,53 +51,34 @@ static constexpr int TABLE_LIST_BINDING = 8;
 static constexpr int MATERIAL_BINDING = 9;
 // The numbers of the generated climate code (Cascade::ShaderParams: a uniform block), after the base regions' (10, 11).
 static constexpr int PARAM_BINDING = 12;
-// Its largest size: a uniform block's guaranteed one (Vulkan maxUniformBufferRange, WebGPU maxUniformBufferBindingSize),
-// the size of every generic climate's block (Cascade::Spec::generic).
-static constexpr size_t MAX_PARAM_BYTES = 16384;
+// Its largest size, the size of every generic program's block (its records: level_glsl.hpp). Half the 64 KB of WebGPU's
+// default maxUniformBufferBindingSize and of desktop Vulkan drivers' maxUniformBufferRange (Vulkan guarantees 16 KB only:
+// mobile isn't a target); the 16 KB it was held the example table's generic records (17.7 KB) short.
+static constexpr size_t MAX_PARAM_BYTES = 32768;
 
-// std430 CascadeBand[group_count * BAND_ENTRIES + the ground's other notes]: the ground's (first) band of insertion
-// level m at m, then the ground's other notes of each level (Spec::level_notes, Cascade::MAX_LEVEL_NOTES), levels in
-// order, then field group g's at (g * BAND_ENTRIES + those notes) + m: a view without the fields reads the ground's
-// at the same offsets. Each entry: factor (amp * 2^(-shift |S|) per derivative order; unused when modulated), offset low words, offset
-// high words, info (present, seed, k, stretch). A field has at most one band per level.
-ov::bytes band_table(const Cascade::Spec &p_spec);
-
-// Scratch points per chunk of buffer A (odd levels) and B (even levels >= 2), and vec4s per point (the ground's
-// channels, plus 4 per field group where p_range, the passes' field_range, carries any).
+// Scratch points per chunk of buffer A (odd levels) and B (even levels >= 2), and vec4s per point (one per channel of
+// the program's Ch: Terrain::GpuLayout::channels).
 uint32_t scratch_points_a(int p_item_size);
 uint32_t scratch_points_b(int p_item_size);
-uint32_t vec4s_per_point(const Cascade::Spec &p_spec, const Cascade::FieldRange &p_range);
+uint32_t vec4s_per_point(const CascadeSource *p_sdf);
 // The scratch buffers A and B of p_sdf's passes for p_items items of p_item_size points per axis (1: point items): what
 // CascadePasses allocates, and what sizes a batch of point items.
 void scratch_bytes(const CascadeSource *p_sdf, int p_item_size, uint64_t p_items, uint64_t &r_a, uint64_t &r_b);
 
 // Whether p_sdf's samples carry a ground material (its base palette is longer than {GROUND}: the climate's biomes).
 bool ground_materials(const CascadeSource *p_sdf);
-// Where the passes of p_sdf carry the field groups and the carry: the spec's FieldRange (what its modulation and ground
-// terms read), with ground materials, for chunk items (p_points false), the samples' terms too (the pick, derived on the
-// level above every sample; the ground's bits are the same whether they are carried or not). Empty without a climate.
-Cascade::FieldRange field_range(const CascadeSource *p_sdf, bool p_points);
 
-// The channels a level shader carries: the ground alone (the levels no climate reaches), the ground, the fields and
-// the carry (the levels that derive the climate for the level below), or the ground and the carry (a run's last level,
-// its samples: what they read is derived on the level above).
-enum class View {
-    GROUND,
-    FIELDS,
-    SAMPLES,
-};
-
-// The level pass compute shader (one source for every level) for p_sdf's cascade; p_debug: the variant
-// whose level 0 also stores its channels in debug_channels; p_points: point items; p_fold: level 0 folds the
-// chunks' instance lists (cascade_sample_sdf), its workgroups cubes of FOLD_CUBE^3 samples (level 0 only; p_cubes false,
-// for a chunk size that is not a multiple of FOLD_CUBE: per sample, the chunk's own workgroups). Without, it
-// is the bare cascade_terrain_sdf: the same bits as the fold over empty lists, for the batches that have none. p_material: level 0 also writes each sample's material
-// (the fold's winner's palette index, 0 = ground) to sdf_material at MATERIAL_BINDING; with ground materials
-// (ground_materials), for every chunk, a ground sample's being cascade_ground_material's (its biome's).
-// p_view: the channels it carries (View; a spec without a climate has only GROUND, which FIELDS equals). r_params: the
-// values the text reads at PARAM_BINDING (Cascade::ShaderParams), the text a function of the terrain's structure alone.
-ov::str level_shader(const CascadeSource *p_sdf, bool p_debug, bool p_points = false, bool p_fold = false, bool p_material = false, View p_view = View::FIELDS,
-        bool p_cubes = true, Cascade::ShaderParams *r_params = nullptr);
+// The level pass compute shader (one source for every level) for p_sdf's program (Terrain::level_glsl); p_debug: the
+// variant whose level 0 also stores its channels (the output, the pick) in debug_channels; p_points: point items; p_fold:
+// level 0 folds the chunks' instance lists (cascade_sample_sdf), its workgroups cubes of FOLD_CUBE^3 samples (level 0
+// only; p_cubes false, for a chunk size that is not a multiple of FOLD_CUBE: per sample, the chunk's own workgroups).
+// Without, it is the bare cascade_terrain_sdf: the same bits as the fold over empty lists, for the batches that have
+// none. p_material: level 0 also writes each sample's material (the fold's winner's palette index, 0 = ground) to
+// sdf_material at MATERIAL_BINDING; with ground materials (ground_materials), for every chunk, a ground sample's being
+// cascade_ground_material's (its biome's). r_params: the values the text reads at PARAM_BINDING (Cascade::ShaderParams).
+// Empty (an ERR) if the program doesn't fit the text (a generic program past its caps).
+ov::str level_shader(const CascadeSource *p_sdf, bool p_debug, bool p_points = false, bool p_fold = false, bool p_material = false, bool p_cubes = true,
+        Cascade::ShaderParams *r_params = nullptr);
 
 // The point items' ChunkParam: p_param with skirt 0 (with the items' extent 0, an item's box is its point alone).
 ChunkParam point_param(const ChunkParam &p_param);

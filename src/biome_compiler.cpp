@@ -489,24 +489,43 @@ ov::str compile(const std::vector<BiomeGraph> &p_graphs, const Ground &p_ground,
     return ov::str();
 }
 
-int template_top(double p_voxel_m) {
+namespace {
+
+double template_amp_m(double p_voxel_m, int p_k) {
+    return ov::min(TEMPLATE_STEEPNESS * std::ldexp(1.0, p_k), TEMPLATE_MAX_AMP_M / p_voxel_m) * p_voxel_m;
+}
+
+} // namespace
+
+int template_top(double p_voxel_m, const Ground *p_ground) {
     int top = ExactNoise::BAND_SHIFT;
+    double reach = 0.0; // the sum of the notes' amplitudes up to top (LOD0 voxels), as p_ground caps them
+    auto capped = [&](int p_k) {
+        NoteNode n;
+        n.amp_m = template_amp_m(p_voxel_m, p_k);
+        return double(note_amp(n, *p_ground));
+    };
+    reach = p_ground ? capped(top) : 0.0;
     while (std::ldexp(TEMPLATE_STEEPNESS * p_voxel_m, top) < TEMPLATE_MAX_AMP_M * (1.0 - 1e-9) && top < ExactNoise::MAX_K) {
+        if (p_ground && reach + capped(top + 1) > double(p_ground->amp_cap)) {
+            break;
+        }
+        reach += p_ground ? capped(top + 1) : 0.0;
         top++;
     }
     return top;
 }
 
-ov::Value template_graph(double p_voxel_m) {
+ov::Value template_graph(double p_voxel_m, const Ground *p_ground) {
     ov::Value nodes = ov::Value::array();
     ov::Value rows = ov::Value::array();
-    for (int k = template_top(p_voxel_m); k >= ExactNoise::BAND_SHIFT; k--) {
+    for (int k = template_top(p_voxel_m, p_ground); k >= ExactNoise::BAND_SHIFT; k--) {
         ov::Value note = ov::Value::object();
         note["id"] = ov::format("ground_%d", int64_t(k));
         note["kind"] = "note";
         note["wavelength_m"] = std::ldexp(p_voxel_m, k);
         note["seed"] = int64_t(TEMPLATE_SEED);
-        note["amp_m"] = ov::min(TEMPLATE_STEEPNESS * std::ldexp(1.0, k), TEMPLATE_MAX_AMP_M / p_voxel_m) * p_voxel_m;
+        note["amp_m"] = template_amp_m(p_voxel_m, k);
         nodes.push_back(note);
         ov::Value row = ov::Value::object();
         row["in"] = note["id"];
@@ -527,10 +546,10 @@ ov::Value template_graph(double p_voxel_m) {
     return graph;
 }
 
-ov::Value template_biome(double p_voxel_m, const ov::str &p_name) {
+ov::Value template_biome(double p_voxel_m, const ov::str &p_name, const Ground *p_ground) {
     ov::Value b = ov::Value::object();
     b["name"] = p_name;
-    b["graph"] = template_graph(p_voxel_m);
+    b["graph"] = template_graph(p_voxel_m, p_ground);
     return b;
 }
 

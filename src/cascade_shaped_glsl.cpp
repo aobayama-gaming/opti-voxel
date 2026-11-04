@@ -1,5 +1,7 @@
 #include "cascade_shaped_glsl.hpp"
 
+#include "level_program.hpp"
+
 // The shaped bands' GLSL (Cascade::Modulation's BandMod features): CascadeGLSL's band functions and insert code call
 // these for a shaped spec.
 namespace CascadeShapedGLSL {
@@ -28,35 +30,8 @@ ov::str shaped_helpers() {
     ov::str code = R"glsl(
 struct BandMod { uint features; vec4 amp[3]; vec4 warp[3]; };
 
-vec4 cl_smooth_abs(vec4 n, vec4 n2) {
-    precise float q = n2.w + SABS_E2;
-    precise float r = det_rsqrt(q);
-    precise float d0 = n.w * r;
-    float d = abs(d0) < FLUSH ? 0.0 : d0;
-    precise vec4 res = vec4(n.x * d, n.y * d, n.z * d, q * r - SABS_E);
-    return cl_flush(res);
-}
-
-WorldPos cascade_warped(WorldPos p, vec4 warp[3]) {
-    WorldPos q = p;
-    ivec3 d;
-    for (int a = 0; a < 3; a++) {
-        precise float w = clamp(warp[a].w, -WARP_LIMIT, WARP_LIMIT);
-        precise float fl = floor(w);
-        precise float rest = w - fl;
-        if (rest >= 1.0) {
-            fl = fl + 1.0;
-            rest = 0.0;
-        }
-        d[a] = int(fl);
-        q.frac[a] = rest;
-    }
-    i64_add(q.lo, q.hi, d);
-    return q;
-}
-
 )glsl";
-    return ov::replace_all(code, { { "SABS_E2", glsl_float(SMOOTH_ABS_E * SMOOTH_ABS_E) }, { "SABS_E", glsl_float(SMOOTH_ABS_E) }, { "WARP_LIMIT", glsl_float(WARP_LIMIT) }, { "FLUSH", glsl_flush() } });
+    return code + Terrain::glsl_warp_helpers(); // cl_smooth_abs, cascade_warped: the v2 op table's
 }
 
 // Cascade::modulated_channels for group p_group's band: `Ch insert_band_shaped_<g>(Ch ch, WorldPos p, CascadeBand band,

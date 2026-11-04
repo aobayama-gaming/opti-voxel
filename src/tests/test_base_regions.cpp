@@ -1,4 +1,4 @@
-#include "test_common.hpp"
+#include "test_climate_common.hpp"
 
 #include "base_regions.hpp"
 #include "cascade.hpp"
@@ -213,11 +213,7 @@ TEST_CASE("SDFCascade: a planet's relief is capped at PLANET_RELIEF of its radiu
         SDFCascade sdf;
         sdf.planet_radius_m = p_radius_m;
         sdf.configure(param, 16);
-        float amp = 0.0f;
-        for (const Cascade::Band &b : sdf.get_spec().bands) {
-            amp = ov::max(amp, b.amp);
-        }
-        return double(amp);
+        return double(ClimateTest::note_amp(sdf.program()));
     };
     const double flat = max_amp(0.0);
     CHECK(flat == doctest::Approx(Climate::TEMPLATE_MAX_AMP_M / 0.05));
@@ -225,7 +221,7 @@ TEST_CASE("SDFCascade: a planet's relief is capped at PLANET_RELIEF of its radiu
     CHECK(max_amp(2000.0) == doctest::Approx(SDFCascade::PLANET_RELIEF / SDFCascade::PLANET_HEADROOM * 2000.0 / 0.05));
 }
 
-TEST_CASE("SDFCascade: a climate's biome multipliers fit under a 2 km planet's relief; its curves in metres don't") {
+TEST_CASE("SDFCascade: on a 2 km planet the template fits its relief; the example's metres don't") {
     auto error = [](const char *p_path) {
         SDFCascade sdf;
         CHECK(load_table(p_path, sdf.climate_data) == ov::str());
@@ -236,10 +232,18 @@ TEST_CASE("SDFCascade: a climate's biome multipliers fit under a 2 km planet's r
         CHECK((sdf.get_climate() != nullptr) == sdf.get_climate_error().empty());
         return sdf.get_climate_error();
     };
-    // Biome multipliers up to 2.5 (it was refused at 1: the octaves started at the relief itself).
-    CHECK(error("res://climate/plain.json") == ov::str());
-    // The mountains' 1.1 km curve: more than the planet's 62.5 m relief.
-    CHECK(error("res://climate/example.json").find("its curve moves the ground") != ov::str::npos);
+    // The template, its octaves stopped under the relief: the program's output bound fits the 62.5 m cap.
+    SDFCascade sdf;
+    sdf.planet_radius_m = 2000.0;
+    ChunkParam param;
+    param.voxel_size = 0.05f;
+    sdf.configure(param, 16);
+    const Terrain::LevelProgram &prog = sdf.program();
+    const size_t out = size_t(prog.output);
+    CHECK(ov::max(std::fabs(prog.lo[out]), std::fabs(prog.hi[out])) <= SDFCascade::PLANET_RELIEF * 2000.0 / 0.05);
+    CHECK(ClimateTest::note_top_k(prog) < Climate::template_top(0.05));
+    // The example's mountains (km of relief): more than the planet's 62.5 m.
+    CHECK(error("res://climate/example.json").find("over the cap") != ov::str::npos);
 }
 
 TEST_CASE("BaseSurface::on_base: the base's point along the up, on any side of a planet") {

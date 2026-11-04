@@ -44,6 +44,8 @@ src/level_program.cpp
 src/graph_compile.hpp
 src/graph_compile.cpp
 src/graph_bounds.cpp
+src/level_glsl.hpp
+src/level_glsl.cpp
 src/archetype_ir.hpp
 src/archetype_ir.cpp
 src/archetype_glsl.hpp

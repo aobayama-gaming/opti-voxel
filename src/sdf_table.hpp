@@ -213,10 +213,10 @@ protected:
     // Waits for the stream's tasks and drops it: they call the subclass's ground_field, so its destructor calls this first.
     void stop_streaming();
 
-    // The climate the scenes' sites read their biome from (BiomePick), and its combined cascade: none here, the
-    // subclass's (SDFCascade: its world's climate). Valid from configure() on.
+    // The climate the scenes' sites read their biome from (BiomePick), and its program: none here, the subclass's
+    // (SDFCascade: its world's climate). Valid from configure() on.
     virtual const Climate::Table *placing_climate() const { return nullptr; }
-    virtual const Cascade::Spec *placing_spec() const { return nullptr; }
+    virtual const Terrain::LevelProgram *placing_program() const { return nullptr; }
 
     // The base palette (SDFGpuTable::base_palette): GROUND, then p_ground's materials, registered by name (their
     // parameters replaced on a reconfigure). Call from configure(); empty: {GROUND}.

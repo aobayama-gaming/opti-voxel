@@ -6,20 +6,22 @@
 #include <cstdint>
 
 namespace Cascade {
-struct Spec;
 struct ShaderParams;
 } //namespace Cascade
+namespace Terrain {
+struct LevelProgram;
+} //namespace Terrain
 class BaseSurface;
 
-// What the cascade's level shader (cascade_glsl.hpp) reads of a terrain: its bands and the GLSL pieces it splices.
+// What the cascade's level shader (cascade_glsl.hpp) reads of a terrain: its program and the GLSL pieces it splices.
 // SDFBase implements it; the shader text needs nothing else of the terrain, so it is built without the engine.
 class CascadeSource {
 public:
     virtual ~CascadeSource() = default;
 
-    // The Hermite cascade's bands (never null): the meshers compute the samples with the cascade passes
-    // (cascade_glsl.hpp), and evaluate() only takes lattice points (frac 0, voxel a multiple of 2^lod).
-    virtual const Cascade::Spec *get_cascade() const = 0;
+    // The ground's program (cascade v2, level_program.hpp; never null): the meshers compute the samples with the cascade
+    // passes (cascade_glsl.hpp), and evaluate() only takes lattice points (frac 0, voxel a multiple of 2^lod).
+    virtual const Terrain::LevelProgram *get_program() const = 0;
 
     // GPU code spliced into the cascade passes (SDFCascade: the cascade's register, metres and skirt
     // functions). The shader provides the chunk_param
@@ -33,27 +35,10 @@ public:
     // barriers), [group_lo, group_hi] holding the workgroup's points; p_group_size 0: per sample (no barrier, the group
     // ignored).
     virtual ov::str get_sample_fold_glsl(uint32_t p_group_size) const = 0;
-    // With a per-sample ground material (base_palette longer than one): the GLSL the cascade level passes' fields variant
-    // splices after its channel code, defining `uint cascade_ground_material(Ch ch, WorldPos p)`, the palette index of a
-    // sample no record colours (ch: its channels on Λ_L, the fields carried; p: its absolute point). Empty otherwise.
-    virtual ov::str get_ground_material_glsl(const Cascade::Spec &p_view) const {
-        (void)p_view;
-        return ov::str();
-    }
-    // Whether a sample's ground is more than the cascade's ground channels (a biome's curve): then
-    // the cascade level passes carry the fields at every level, point items too, and splice get_ground_glsl after their
-    // channel code, defining `vec4 climate_ground(Ch ch, WorldPos p, int lod)`, the ground channels (value, gradient) of a
-    // sample (p, lod: where a program reads up, base_at). Its
-    // numbers go to r_params (Cascade::ShaderParams).
-    virtual bool has_ground_terms() const { return false; }
-    virtual ov::str get_ground_glsl(const Cascade::Spec &p_view, Cascade::ShaderParams &r_params) const {
-        (void)p_view;
-        (void)r_params;
-        return ov::str();
-    }
-    // The dual-number helpers the climate's generated functions share, spliced once before them all (Climate's
-    // shared_helpers_glsl, with a modulation or ground terms); empty without (no climate GLSL calls them).
-    virtual ov::str get_climate_helpers_glsl() const { return ov::str(); }
+    // With a per-sample ground material (base_palette longer than one): the GLSL the cascade level passes splice after
+    // the program, defining `uint cascade_ground_material(Ch ch)`, the palette index of a sample no record colours (ch:
+    // its run's last level, Terrain::level_run's: the pick in channel 1). Empty otherwise.
+    virtual ov::str get_ground_material_glsl() const { return ov::str(); }
 
     // The ground's base surface when it is curved (BaseSurface::curved): get_glsl_code's base_at then reads the batch's regions
     // (base_regions.hpp), which the cascade passes upload with each batch. Null for a flat base.

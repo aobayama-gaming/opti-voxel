@@ -187,4 +187,31 @@ inline int64_t box_point_mismatches(const Cascade::Spec &p_spec, const Vector3i6
     return bad;
 }
 
+// A v2 program's notes (Terrain::Op::NOTE): their largest amplitude (a LIN's coefficient of one), coarsest octave and count.
+inline float note_amp(const Terrain::LevelProgram &p_prog) {
+    float amp = 0.0f;
+    for (const Terrain::Node &n : p_prog.nodes) {
+        for (size_t i = 0; n.op == Terrain::Op::LIN && i < n.in.size(); i++) {
+            amp = p_prog.nodes[size_t(n.in[i])].op == Terrain::Op::NOTE ? ov::max(amp, std::fabs(n.k[i])) : amp;
+        }
+    }
+    return amp;
+}
+
+inline int note_top_k(const Terrain::LevelProgram &p_prog) {
+    int k = 0;
+    for (const Terrain::Node &n : p_prog.nodes) {
+        k = n.op == Terrain::Op::NOTE ? ov::max(k, n.band.k) : k;
+    }
+    return k;
+}
+
+inline int note_count(const Terrain::LevelProgram &p_prog) {
+    int c = 0;
+    for (const Terrain::Node &n : p_prog.nodes) {
+        c += n.op == Terrain::Op::NOTE ? 1 : 0;
+    }
+    return c;
+}
+
 } // namespace ClimateTest

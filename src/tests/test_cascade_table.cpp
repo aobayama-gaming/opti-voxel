@@ -851,26 +851,24 @@ TEST_CASE("SDFCascade table: the fold variant culls per cube, the bare variants 
     ScatteredCascade t(64);
     const String point = "    p.lo = m_lo;\n    p.hi = m_hi;\n    i64_add(p.lo, p.hi, ivec3(i));\n    i64_shl(p.lo, p.hi, m);\n    p.frac = vec3(0.0);\n";
     for (const bool debug : { false, true }) {
-        for (const CascadeGLSL::View view : { CascadeGLSL::View::GROUND, CascadeGLSL::View::FIELDS, CascadeGLSL::View::SAMPLES }) {
-            for (const bool material : { false, true }) {
-                const String fold = godot_str(CascadeGLSL::level_shader(&t.sdf, debug, false, true, material, view));
-                const String sample = godot_str(CascadeGLSL::level_shader(&t.sdf, debug, false, true, material, view, false));
-                const String bare = godot_str(CascadeGLSL::level_shader(&t.sdf, debug, false, false, material, view));
-                for (const String &code : { fold, sample, bare }) {
-                    CHECK(!code.contains("/*"));
-                    CHECK(glsl_reserved_words_used(code) == std::vector<std::string>());
-                    CHECK(code.contains(vformat("local_size_x = %d,", CascadeGLSL::LOCAL_SIZE)));
-                }
-                CHECK(fold.contains("if (!sample_live) {"));
-                CHECK(fold.contains(vformat("shared uint s_fold_word[%d];", CascadeGLSL::LOCAL_SIZE)));
-                CHECK(fold.contains("arch_meets_box(group_lo, group_hi, "));
-                CHECK(fold.count(point) == 2);
-                CHECK(bare.count(point) == 1);
-                CHECK(sample.contains("arch_fold(u * s, p, lod, "));
-                for (const String &code : { sample, bare }) {
-                    CHECK(!code.contains("bool sample_live"));
-                    CHECK(!code.contains("barrier()"));
-                }
+        for (const bool material : { false, true }) {
+            const String fold = godot_str(CascadeGLSL::level_shader(&t.sdf, debug, false, true, material));
+            const String sample = godot_str(CascadeGLSL::level_shader(&t.sdf, debug, false, true, material, false));
+            const String bare = godot_str(CascadeGLSL::level_shader(&t.sdf, debug, false, false, material));
+            for (const String &code : { fold, sample, bare }) {
+                CHECK(!code.contains("/*"));
+                CHECK(glsl_reserved_words_used(code) == std::vector<std::string>());
+                CHECK(code.contains(vformat("local_size_x = %d,", CascadeGLSL::LOCAL_SIZE)));
+            }
+            CHECK(fold.contains("if (!sample_live) {"));
+            CHECK(fold.contains(vformat("shared uint s_fold_word[%d];", CascadeGLSL::LOCAL_SIZE)));
+            CHECK(fold.contains("arch_meets_box(group_lo, group_hi, "));
+            CHECK(fold.count(point) == 2);
+            CHECK(bare.count(point) == 1);
+            CHECK(sample.contains("arch_fold(u * s, p, lod, "));
+            for (const String &code : { sample, bare }) {
+                CHECK(!code.contains("bool sample_live"));
+                CHECK(!code.contains("barrier()"));
             }
         }
     }

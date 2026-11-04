@@ -1,8 +1,9 @@
 # Cascade v2: one graph, coarse to fine
 
-Status: **design, not implemented.** This note says what the terrain evaluation becomes, what it deletes and in which
-order; it is the contract the v2 PRs (C to G below) are reviewed against. Until v2 lands, `docs/cascade.md` and
-`docs/climate.md` describe the code. v2 deliberately breaks the bits of every existing world once: the old terrain is
+Status: **stage D: the runtime runs v2** (`SDFCascade` on `LevelProgram`, the GLSL forms in `level_glsl.cpp`); the
+old machinery is still compiled, for stage E to delete. This note says what the terrain evaluation becomes, what it
+deletes and in which order; it is the contract the v2 PRs (C to G below) are reviewed against. Until stage E,
+`docs/cascade.md` and `docs/climate.md` describe the old code. v2 deliberately breaks the bits of every existing world once: the old terrain is
 not an oracle, and nothing below exists to reproduce it.
 
 ## Why
@@ -168,6 +169,7 @@ It drops the ones that only protected the record layouts.
 | notes per octave | `MAX_LEVEL_NOTES` 8 | none (instructions) |
 | instructions | `MAX_SAMPLE_INSTRS` 64 at the samples | one cap per level |
 | biomes | `MAX_BIOMES` 16 | kept if the weights' channels need it |
+| shader params | 16 KB | `MAX_PARAM_BYTES` 32 KB: the generic records of `example.json` take 17.7 KB (registers: `MAX_REGISTERS` 96) |
 
 ## What stays
 
@@ -215,9 +217,9 @@ It drops the ones that only protected the record layouts.
 | Check | Becomes |
 |---|---|
 | CascadeCheck G1 (GPU == CPU every level) | the same on `LevelProgram`: every channel, every level, bits |
-| G3 (LOD relation) | per channel: V_L is the subdivision of V_{L+1} plus level L's instructions |
+| G3 (LOD relation) | per chunk: the GPU's level L + 1 channels subdivided on the CPU, then `last_code(L)`, against the GPU's output and pick |
 | G9 (fold samples), G10 (materials), D1 (points) | unchanged in meaning, on v2 |
-| `--generic=1` | generic == specialised, bits, on every set |
+| `--generic=1` | every check on the generic text (GPU generic == CPU generic program, bits); generic vs specialised differ by blend factoring, so a doctest bounds them on the CPU (a few float steps of the output's bound) |
 | unit tests | level rule, gate refusals, linear fold (an fBm is one channel), blend factoring, box == point, the L / L+1 step within the skirt on every test table, a ridged multifractal parent |
 | new pins | one hash per test table, taken once v2 is reviewed: they guard v2 against itself, not against the old terrain |
 | `--walk_verify`, `--discovery_compare`, origin parity, `--destroy_verify`, audits | unchanged |

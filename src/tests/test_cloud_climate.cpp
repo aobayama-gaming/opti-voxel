@@ -165,7 +165,7 @@ TEST_CASE("CloudClimate::at on the world climate: every biome sets its clouds, t
     const uint64_t t0 = ov::now_usec();
     for (int i = 0; i < n; i++) {
         const VoxelPos v(int64_t(i) * 200000, datum, int64_t(i) * 70000 - 7000000);
-        const CloudClimate::Texel x = CloudClimate::at(*t, world.sdf.get_spec(), v, layer.climate_cell_shift);
+        const CloudClimate::Texel x = CloudClimate::at(*t, world.sdf.program(), v, layer.climate_cell_shift);
         CHECK(x.weight == doctest::Approx(1.0).epsilon(1e-3));
         CHECK(x.cover >= 0.0f);
         CHECK(x.cover <= 0.8f + 1e-4f);

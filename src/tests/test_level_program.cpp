@@ -245,6 +245,34 @@ TEST_CASE("Terrain: a box run and a point query give the same bits, on every tes
     }
 }
 
+// The two modes differ by blend factoring (a note every biome plays alike out of the weights' products): the same ground
+// up to the weights' normalisation error, a few float steps of the output's bound. CascadeCheck's --generic=1 checks
+// the GPU's generic text against this generic program, bit for bit; this is the bridge to the specialised one.
+TEST_CASE("Terrain: the generic and specialised programs of a table agree within float steps of its bound") {
+    std::mt19937 rng(29);
+    for (const char *path : TABLES) {
+        LevelProgram spec, gen;
+        CHECK_OR_RETURN(compile_table(test_table(path), spec, Mode::SPECIALISED) == ov::str());
+        CHECK_OR_RETURN(compile_table(test_table(path), gen, Mode::GENERIC) == ov::str());
+        const size_t o = size_t(spec.output);
+        const double bound = ov::max(std::fabs(spec.lo[o]), std::fabs(spec.hi[o]));
+        double worst = 0.0;
+        int picks = 0;
+        for (const int lod : { 0, 2, 5 }) {
+            for (int i = 0; i < 32; i++) {
+                const int64_t span = int64_t(1) << (18 - lod);
+                const Vector3i64 p(int64_t(rng() % uint32_t(span)) - span / 2, int64_t(rng() % 512u) - 256, int64_t(rng() % uint32_t(span)) - span / 2);
+                const Sample a = point(spec, p, lod), b = point(gen, p, lod);
+                worst = ov::max(worst, std::fabs(double(a.ground.w) - double(b.ground.w)));
+                picks += a.pick == b.pick ? 1 : 0;
+            }
+        }
+        MESSAGE(std::string(path), ": worst |specialised - generic| ", worst, " voxels, bound ", bound, "; ", picks, " / 96 picks alike");
+        CHECK(worst <= bound * 1e-5 + 1e-4);
+        CHECK(picks >= 94); // a pick differs only where two weights tie within their rounding
+    }
+}
+
 TEST_CASE("Terrain: the step between LOD L and L + 1 stays within the skirt's step, on every test table") {
     std::mt19937 rng(17);
     for (const char *path : TABLES) {

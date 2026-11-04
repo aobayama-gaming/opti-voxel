@@ -282,7 +282,7 @@ void SDFTable::stop_streaming() {
 
 void SDFTable::start_field_gpu(const ChunkParam &p_param) {
     stop_field_gpu();
-    if (stream && get_cascade()) {
+    if (stream && get_program()) {
         field_gpu_starting = std::make_shared<FieldGPU>();
         field_gpu_starting->start(this, p_param, FIELD_GPU_SCRATCH_MB);
     }
@@ -524,7 +524,7 @@ std::function<int(const Site &)> SDFTable::site_class(const Group &p_group) cons
         }
         return [world](const Site &p_site) { return pick_share(world, p_site.variant); };
     }
-    const BiomePick pick(climate, placing_spec());
+    const BiomePick pick(climate, placing_program());
     return [pick, shares](const Site &p_site) { return pick_share(shares[size_t(pick.at(p_site.base, p_site.seed))], p_site.variant); };
 }
 
@@ -720,7 +720,7 @@ std::vector<Biome::Site> SDFTable::feature_sites() const {
     }
     // A candidate stands where its biome's entry of its kind and cell keeps it (BiomePick; the world's for a biome that
     // lists none), its radius that entry's. No pick for one no entry keeps.
-    const BiomePick pick(climate, placing_spec());
+    const BiomePick pick(climate, placing_program());
     const size_t own = lists.size() - (climate != nullptr ? climate->biomes.size() : 0); // the biomes' own lists
     for (Biome::Site site : all) {
         if (site.chance_draw >= cells.at({ site.feature, site.shift })) {

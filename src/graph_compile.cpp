@@ -677,14 +677,20 @@ ov::str compile(const ov::Value &p_data, const Climate::Ground &p_ground, Mode p
     Node pick;
     pick.op = Op::PICK;
     pick.in = w;
+    // The ground and the pick, then the fields and the weights (read on the CPU: BiomePick, CloudClimate, ClimateReport).
     std::vector<int> roots = { blend(g, w, out), w.size() == 1 ? g.constant(0.0f) : g.add(pick) };
+    roots.insert(roots.end(), fields.begin(), fields.end());
+    roots.insert(roots.end(), w.begin(), w.end());
     g = merge_lins(g, roots);
     g = partial_sums(g, roots);
     g = rebuild(g, roots, [](const Node &p_n, const std::vector<int> &, const std::vector<int> &, Graph &r_g) { return r_g.add(p_n); });
     r_program = std::move(g.prog);
     r_program.output = roots[0];
     r_program.pick = roots[1];
+    r_program.fields.assign(roots.begin() + 2, roots.begin() + 2 + ptrdiff_t(fields.size()));
+    r_program.weights.assign(roots.begin() + 2 + ptrdiff_t(fields.size()), roots.end());
     r_program.biomes = int(r_table.biomes.size());
+    r_program.generic = p_mode == Mode::GENERIC;
     err = lower(r_program);
     err = err.empty() ? bound_program(p_ground, r_program) : err;
     if (!err.empty()) {

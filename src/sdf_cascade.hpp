@@ -2,11 +2,14 @@
 
 #include "base_regions.hpp"
 #include "base_surface.hpp"
-#include "biome_compiler.hpp"
+#include "biome_compiler.hpp" // Climate::template_biome (a world file in stage E)
 #include "cascade.hpp"
 #include "cascade_terrain.hpp"
 #include "climate.hpp"
 #include "exact_noise.hpp"
+#include "graph_compile.hpp"
+#include "level_glsl.hpp"
+#include "level_program.hpp"
 #include "ov/format.hpp"
 #include "ov/math.hpp"
 #include "ov/on_error.hpp"
@@ -17,15 +20,14 @@
 #include <algorithm>
 #include <cmath>
 
-// The cascade test terrain (CascadeTerrain, PR 2) as the meshed terrain: a 3D height field of perlin3 octaves carried down
-// the Hermite cascade, the notes the biomes' graphs mix (the biome compiler, biome_compiler.hpp; without a climate the
-// template biome's: octaves from k = 3 up to the first at the 3.3 km cap, steepness 1/8), 4 channels (value + gradient),
-// surface at altitude h over the base surface (BaseSurface::flat at BaseSurface::DATUM_M). A function of the absolute
-// position only.
+// The meshed terrain: the world's climate compiled into one cascade v2 program (Terrain::compile, docs/cascade-v2.md; without
+// a climate the template biome's: octaves from k = 3 up to the first at the 3.3 km cap, steepness 1/8), its output the
+// height h (value + gradient) of a surface over the base surface (BaseSurface::flat at BaseSurface::DATUM_M). A function
+// of the absolute position only.
 //
 // The cascade only exists on lattice points: a LOD-L chunk's samples are the points of Λ_L, computed by
-// the meshers' cascade passes (cascade_glsl.hpp) bit for bit like Cascade::run, and evaluate() takes the
-// same points only (frac 0, voxel a multiple of 2^lod), through Cascade::point. There is no off-lattice
+// the meshers' cascade passes (cascade_glsl.hpp) bit for bit like Terrain::run, and evaluate() takes the
+// same points only (frac 0, voxel a multiple of 2^lod), through Terrain::point. There is no off-lattice
 // evaluation: the vertex normals between samples come from the samples' gradients (cascade_glsl.hpp).
 //
 // The instance table (SDFTable: the world's instances and trees, runtime edits) is folded onto each sample: the cascade's
@@ -37,18 +39,17 @@ public:
     // The stream's tasks read ground_field: stopped before this class's members go.
     ~SDFCascade() override { stop_streaming(); }
 
-    // Set before configure(): a climate table (Climate::parse's format), empty for none. configure() compiles it
-    // (Climate::parse) and carries its notes and fields in the cascade (Climate::combined_spec), the notes modulated by
-    // the biomes' graphs. Without one, or one it refuses (an ERR, and no climate), the template biome's ground
+    // Set before configure(): a climate table (the world file's format), empty for none. configure() compiles it
+    // (Terrain::compile). Without one, or one it refuses (an ERR, and no climate), the template biome's ground
     // (Climate::template_biome).
     ov::Value climate_data = ov::Value::object();
-    // Set before configure(): the climate compiled specialised to its values (Climate::Ground::specialize, a little
-    // faster), or generic (false, the biome mixer's: its GPU text reads the table as data, so an edit compiles nothing),
-    // its capacities at least caps (a restart's previous ones: generic_caps).
+    // Set before configure(): the program specialised to the climate's values (Terrain::Mode::SPECIALISED), or generic
+    // (false, the biome mixer's: its GPU text interprets the program as data, so an edit compiles nothing). caps: unused
+    // by v2 (stage E removes them with World::Kept.caps).
     bool specialize = true;
     Climate::Caps caps;
 
-    // Set before configure(). DEFAULT: the climate's notes. FLAT (the shapes gallery): no note and the ground at
+    // Set before configure(). DEFAULT: the climate's notes. FLAT (the shapes gallery): a constant output, the ground at
     // FLAT_GROUND_M, a plane y = datum (the same passes, a zero height).
     enum class Preset { DEFAULT,
         FLAT };
@@ -94,55 +95,35 @@ public:
             const BaseSurface planet = planet_base(planet_radius_m, vs, planet_ring_m);
             base = planet.curved() ? planet : base; // refused (ERR): the flat datum
         }
-        spec = Cascade::Spec();
-        spec.base = base; // a climate's stretched octaves stretch along it
         voxel_size = p_param.voxel_size;
         attach_climate();
         build_table(p_lod_count);
-        // Skirt depth per LOD (metres). A face neighbour is at most one LOD away, so its surface differs
-        // from this chunk's by one octave: k = L + 2 (a finer neighbour's extra one) or k = L + 3 (the one
-        // a coarser neighbour drops). Twice the larger amplitude (the 2D seam model needs 1.3x), never deeper than
-        // the old skirt_depth voxels of the LOD: the groove at the border is depth / 4. With instances placed, plus
-        // their erosion step (SDFTable::min_skirt_depth cells): next to a rock smooth-unioned into the ground both
-        // steps happen at the same seam, so the sum. Without, the bare cascade's
-        // skirts, bit for bit: a runtime edit on a cascade configured with no instance gets no extra depth. Flat: the
-        // hard-CSG gallery's creases differ between LODs by up to a cell, so skirt_depth cells of the LOD.
-        // The moment blobs' own step (SDFTable::MOMENT_SKIRT_CELLS) is added only at the samples a blob touches
-        // (moment_skirt_table, sample_sdf): everywhere else the skirt walls stay the band rule's.
+        // Skirt depth per LOD (metres). A face neighbour is at most one LOD away, so its surface differs from this chunk's
+        // by the program's step (LevelProgram::step: the output's largest change when the notes of Λ_L are dropped), never
+        // deeper than skirt_depth cells of the LOD: the groove at the border is depth / 4. With instances placed, plus their
+        // erosion step (SDFTable::min_skirt_depth cells): next to a rock smooth-unioned into the ground both steps happen at
+        // the same seam, so the sum. Flat: the hard-CSG gallery's creases differ between LODs by up to a cell, so
+        // skirt_depth cells of the LOD. The moment blobs' own step (SDFTable::MOMENT_SKIRT_CELLS) is added only at the
+        // samples a blob touches (moment_skirt_table, sample_sdf).
         const double erode_cells = current()->empty() && !get_stream() ? 0.0 : SDFTable::instance_erode_cells();
         skirt_depth_table.assign(p_lod_count, 0.0f);
         moment_skirt_table.assign(p_lod_count, 0.0f);
         for (int l = 0; l < p_lod_count; l++) {
-            double amp = octave_step(l);
-            if (has_ground_terms()) {
-                amp = Climate::ground_step(table, l, amp);
-            }
+            const double step = size_t(l) < prog.step.size() ? prog.step[size_t(l)] : 0.0;
             const double cell_m = vs * std::ldexp(1.0, l);
-            const double ground_m = preset == Preset::FLAT ? double(p_param.skirt_depth) * cell_m : ov::min(2.0 * amp * vs, double(p_param.skirt_depth) * cell_m);
+            const double ground_m = preset == Preset::FLAT ? double(p_param.skirt_depth) * cell_m : ov::min(step * vs, double(p_param.skirt_depth) * cell_m);
             skirt_depth_table[l] = float(ground_m + erode_cells * cell_m);
             moment_skirt_table[l] = float(SDFTable::moment_skirt_cells() * cell_m);
         }
     }
 
-    // The ground's band step between LOD p_lod and p_lod + 1 (LOD0 voxels): its largest L+2 / L+3 note, the biomes'
-    // largest amplitude of it. The skirts take it, plus the climate's ground terms (Climate::ground_step).
-    double octave_step(int p_lod) const {
-        double amp = 0.0;
-        for (const Cascade::Band &b : spec.bands) {
-            if (b.k == p_lod + 2 || b.k == p_lod + 3) {
-                amp = ov::max(amp, double(Climate::max_amp(table, b)));
-            }
-        }
-        return amp;
-    }
-
-    const Cascade::Spec *get_cascade() const override { return &spec; }
+    const Terrain::LevelProgram *get_program() const override { return &prog; }
     // The world's parsed climate (configure), null without one (the template ground); why climate_data was refused,
     // empty if it wasn't.
     const Climate::Table *get_climate() const { return given ? &table : nullptr; }
     // The scenes' sites read their biome from the world's climate (SDFTable's sources, BiomePick).
     const Climate::Table *placing_climate() const override { return get_climate(); }
-    const Cascade::Spec *placing_spec() const override { return &spec; }
+    const Terrain::LevelProgram *placing_program() const override { return &prog; }
     const ov::str &get_climate_error() const { return climate_error; }
     // The relief the sky stays above (metres: AtmosphereMedium, CloudLayer), p_look_m (the world's look.relief_m), at
     // most a planet's PLANET_RELIEF of its radius.
@@ -151,30 +132,44 @@ public:
     // Whether ground samples take their biome's material: a climate with fields (the pick reads them; a table without
     // any has its one default biome, drawn as the procedural ground).
     bool has_ground_materials() const { return given && !table.fields.empty(); }
-    // The palette index of a ground sample (one no record colours; 0 without ground materials): 1 + its biome (the base
-    // palette holds biome b's material, Climate::biome_material, at 1 + b), Climate::pick_slots of p_slots, the slots of a
-    // run's last level (the pick the level above derived). The GPU's cascade_ground_material, bit for bit.
-    uint32_t ground_material(const float p_slots[Cascade::SLOTS]) const {
-        return has_ground_materials() ? uint32_t(1 + Climate::pick_slots(table, carry, p_slots)) : 0u;
-    }
+    // The palette index of a ground sample (one no record colours; 0 without ground materials): 1 + its biome p_pick (the
+    // base palette holds biome b's material, Climate::biome_material, at 1 + b), the program's pick at the sample. The
+    // GPU's cascade_ground_material, bit for bit.
+    uint32_t ground_material(int p_pick) const { return has_ground_materials() ? uint32_t(1 + p_pick) : 0u; }
     // The same at LOD0 voxel p_voxel, a multiple of 2^lod.
     uint32_t ground_material_at(const VoxelPos &p_voxel, int p_lod) const {
-        const Vector3i64 p(p_voxel.x >> p_lod, p_voxel.y >> p_lod, p_voxel.z >> p_lod);
-        float slots[Cascade::SLOTS];
-        Cascade::point_slots(spec, p, p_lod, slots, true);
-        return ground_material(slots);
+        return ground_material(Terrain::point(prog, Vector3i64(p_voxel.x >> p_lod, p_voxel.y >> p_lod, p_voxel.z >> p_lod), p_lod).pick);
     }
 
-    ov::str get_ground_material_glsl(const Cascade::Spec &p_view) const override {
+    ov::str get_ground_material_glsl() const override {
         if (!has_ground_materials()) {
             return ov::str();
         }
-        return Climate::pick_glsl(table, p_view) + R"glsl(
-// SDFCascade::ground_material: 1 + the sample's biome.
+        return R"glsl(
+// SDFCascade::ground_material: 1 + the sample's biome (Terrain::level_run's pick).
 uint cascade_ground_material(Ch ch) {
-    return 1u + climate_biome(ch);
+    return 1u + uint(ch.c[4]);
 }
 )glsl";
+    }
+
+    // The climate at point p_p of Λ_m (a run down to m): the ground, the pick, each field's and biome weight's value
+    // (r_fields[f], r_w[b], 0 past the table's) (ClimateReport).
+    void climate_at(const Vector3i64 &p_p, int p_m, ExactNoise::Float4 &r_ground, int &r_pick, ExactNoise::Float4 r_fields[Climate::MAX_FIELDS],
+            ExactNoise::Float4 r_w[Climate::MAX_BIOMES]) const {
+        std::vector<int> targets = { prog.output, prog.pick };
+        targets.insert(targets.end(), prog.fields.begin(), prog.fields.end());
+        targets.insert(targets.end(), prog.weights.begin(), prog.weights.end());
+        std::vector<ExactNoise::Float4> v(targets.size());
+        Terrain::point_nodes(prog, p_p, p_m, targets.data(), int(targets.size()), v.data());
+        r_ground = v[0];
+        r_pick = int(v[1].w);
+        for (int f = 0; f < Climate::MAX_FIELDS; f++) {
+            r_fields[f] = size_t(f) < prog.fields.size() ? v[2 + size_t(f)] : ExactNoise::Float4{};
+        }
+        for (int b = 0; b < Climate::MAX_BIOMES; b++) {
+            r_w[b] = size_t(b) < prog.weights.size() ? v[2 + prog.fields.size() + size_t(b)] : ExactNoise::Float4{};
+        }
     }
     // What a climate table is compiled for (Climate::parse / validate), after configure(): the LOD count's octaves, a
     // planet's relief (the flat world: the exact range's top).
@@ -183,13 +178,9 @@ uint cascade_ground_material(Ch ch) {
         return Climate::Ground{ double(voxel_size), k_max, float(relief), base.curved() ? relief / PLANET_HEADROOM : INFINITY, specialize, caps };
     }
     float skirt_depth_m(int p_lod) const override { return skirt_depth_table[p_lod]; }
-    const Cascade::Spec &get_spec() const { return spec; }
-    // The capacities the climate's generic text has (its spec's), for the next start's caps.
-    Climate::Caps generic_caps() const {
-        const int channels = int(std::count_if(table.fields.begin(), table.fields.end(), [](const Climate::Field &p_f) { return p_f.channel; }));
-        const int warps = int(std::count_if(table.fields.begin(), table.fields.end(), [](const Climate::Field &p_f) { return p_f.warp; }));
-        return Climate::Caps{ spec.max_level_notes(), spec.carry_groups(), channels, warps };
-    }
+    const Terrain::LevelProgram &program() const { return prog; }
+    // The old generic capacities (v2's generic text has fixed caps: level_glsl.hpp): passed through until stage E.
+    Climate::Caps generic_caps() const { return caps; }
     int64_t get_datum_y() const { return base.datum_y(); }
     const BaseSurface &get_base() const override { return base; }
     const BaseSurface *get_curved_base() const override { return base.curved() ? &base : nullptr; }
@@ -209,43 +200,15 @@ uint cascade_ground_material(Ch ch) {
         return sdf(ch, p_pos.voxel, p_lod).w;
     }
 
-    // The ground channels of Λ_lod at LOD0 voxel p_voxel, a multiple of 2^lod: Cascade::point_into, through
-    // ground_channels where the climate has ground terms (the spec's FieldRange derives them above the point).
+    // The ground channels of Λ_lod at LOD0 voxel p_voxel, a multiple of 2^lod: the program's output there
+    // (Terrain::point), in Cascade::Channel order.
     void channels_at(const VoxelPos &p_voxel, int p_lod, float r_ch[Cascade::CHANNELS]) const {
-        const Vector3i64 p(p_voxel.x >> p_lod, p_voxel.y >> p_lod, p_voxel.z >> p_lod);
-        if (!has_ground_terms()) {
-            Cascade::point_into(spec, p, p_lod, r_ch);
-            return;
-        }
-        float slots[Cascade::SLOTS];
-        Cascade::point_slots(spec, p, p_lod, slots);
-        ground_channels(slots, p_voxel, p_lod, r_ch);
+        const ExactNoise::Float4 g = Terrain::point(prog, Vector3i64(p_voxel.x >> p_lod, p_voxel.y >> p_lod, p_voxel.z >> p_lod), p_lod).ground;
+        r_ch[Cascade::VALUE] = g.w;
+        r_ch[Cascade::DX] = g.x;
+        r_ch[Cascade::DY] = g.y;
+        r_ch[Cascade::DZ] = g.z;
     }
-
-    // Whether the ground at a sample is more than the cascade's channels (Climate::Table::has_programs): the
-    // samples then read terms derived on the level above them (FieldRange::sample, CPU and GPU, point items too).
-    bool has_ground_terms() const override { return ground_terms; }
-    // The ground channels of a point's slots p_slots (a run's last level, the samples' terms carried) at LOD0 voxel
-    // p_voxel of Λ_lod: Climate::ground_value (UP from the base there), or the cascade's ground channels as they are
-    // (GLSL: climate_ground, get_ground_glsl).
-    void ground_channels(const float p_slots[Cascade::SLOTS], const VoxelPos &p_voxel, int p_lod, float r_ch[Cascade::CHANNELS]) const {
-        for (int c = 0; c < Cascade::CHANNELS; c++) {
-            r_ch[c] = p_slots[c];
-        }
-        if (has_ground_terms()) {
-            const ExactNoise::Float4 up = reads_up ? Climate::up_value(base.at(p_voxel, p_lod), p_lod) : ExactNoise::Float4{};
-            const ExactNoise::Float4 g = Climate::ground_value(table, carry, p_slots, up);
-            r_ch[Cascade::VALUE] = g.w;
-            r_ch[Cascade::DX] = g.x;
-            r_ch[Cascade::DY] = g.y;
-            r_ch[Cascade::DZ] = g.z;
-        }
-    }
-
-    ov::str get_ground_glsl(const Cascade::Spec &p_view, Cascade::ShaderParams &r_params) const override {
-        return has_ground_terms() ? Climate::ground_glsl(table, p_view, r_params) : ov::str();
-    }
-    ov::str get_climate_helpers_glsl() const override { return spec.modulation || table.has_programs() ? Climate::shared_helpers_glsl() : ov::str(); }
 
     // CascadeTerrain::height_sdf of the channels of Λ_lod over the base at LOD0 voxel p_voxel: the unit gradient
     // and the distance in voxels of LOD p_lod (GLSL cascade_terrain_unit, bit for bit).
@@ -386,7 +349,9 @@ uint cascade_ground_material(Ch ch) {
     ov::str get_glsl_code(Cascade::ShaderParams &r_params) const override {
         using namespace ExactNoise;
         const ov::str regions = base.curved() ? BaseRegions::glsl(base) : ov::str();
-        ov::str code = base.glsl() + regions + CascadeTerrain::GLSL_HEIGHT_SDF + R"glsl(
+        // A stretched note reads base_stretched (flat base only: attach_climate refuses one on a curved base).
+        const ov::str stretch = base.curved() ? ov::str(STRETCH_STUBS) : base.glsl_stretch();
+        ov::str code = base.glsl() + stretch + regions + CascadeTerrain::GLSL_HEIGHT_SDF + R"glsl(
 // CascadeTerrain::height_sdf over the base (SDFCascade::unit). c0 = (value, d/dx, d/dy, d/dz) on Λ_lod at p.
 vec4 cascade_terrain_unit(vec4 c0, WorldPos p, int lod) {
     return height_sdf(c0, base_at(p, lod), lod);
@@ -478,43 +443,74 @@ private:
         return true;
     }
 
-    // The climate_data table (or the template) compiled onto the ground spec (configure, after the base and voxel size).
+    // The curved base's stand-ins for base_stretched (no stretched note there: attach_climate).
+    static constexpr const char STRETCH_STUBS[] = R"glsl(
+WorldPos base_stretched(WorldPos p, int j) {
+    return p;
+}
+
+vec4 base_stretch_gradient(vec4 g, int j) {
+    return g;
+}
+)glsl";
+
+    // A table of one biome whose graph's output is the constant 0 (the flat preset).
+    static ov::Value flat_table() {
+        ov::Value c = ov::Value::object();
+        c["id"] = "c";
+        c["kind"] = "constant";
+        c["value_m"] = 0.0;
+        ov::Value o = ov::Value::object();
+        o["id"] = "o";
+        o["kind"] = "output";
+        o["height"] = "c";
+        ov::Value biome = ov::Value::object();
+        biome["name"] = "flat";
+        biome["graph"] = ov::Value::object();
+        biome["graph"]["nodes"] = ov::Value::array();
+        biome["graph"]["nodes"].push_back(c);
+        biome["graph"]["nodes"].push_back(o);
+        ov::Value t = ov::Value::object();
+        t["biomes"] = ov::Value::array();
+        t["biomes"].push_back(biome);
+        return t;
+    }
+
+    // The climate_data table (or the template, or the flat preset's) compiled into the program (configure, after the base
+    // and voxel size).
     void attach_climate() {
         given = false;
         climate_error = ov::str();
         set_ground_materials({});
-        if (!climate_data.is_empty()) {
-            climate_error = Climate::parse(climate_data, climate_ground(), table);
-            // TODO: a stretched band reads the base at its insertion LOD, whose regions the GPU doesn't have (BaseRegions
+        const Terrain::Mode mode = specialize ? Terrain::Mode::SPECIALISED : Terrain::Mode::GENERIC;
+        if (!climate_data.is_empty() && preset != Preset::FLAT) {
+            climate_error = Terrain::compile(climate_data, climate_ground(), mode, table, prog);
+            const bool stretched = std::any_of(prog.nodes.begin(), prog.nodes.end(), [](const Terrain::Node &p_n) { return p_n.op == Terrain::Op::NOTE && p_n.band.stretch > 0; });
+            // TODO: a stretched note reads the base at its own level, whose regions the GPU doesn't have (BaseRegions
             // uploads the chunk's LOD only); upload those too to lift this.
-            if (climate_error.empty() && base.curved() && table.has_stretch()) {
+            if (climate_error.empty() && base.curved() && stretched) {
                 climate_error = "a stretched note (stretch_y) on a curved base has no GPU path yet";
             }
+            ov::str layout_error;
+            if (climate_error.empty()) {
+                Terrain::gpu_layout(prog, layout_error);
+            }
+            climate_error = climate_error.empty() ? layout_error : climate_error;
             given = climate_error.empty();
             if (!given) {
                 OV_ERR_PRINT("SDFCascade: " + climate_error + ": no climate, the template ground.");
             }
         }
         if (!given) {
+            const Climate::Ground ground = climate_ground();
             ov::Value t = ov::Value::object();
             t["biomes"] = ov::Value::array();
-            t["biomes"].push_back(Climate::template_biome(double(voxel_size)));
+            t["biomes"].push_back(Climate::template_biome(double(voxel_size), "ground", &ground));
             // Specialised whatever specialize says: nothing edits the template.
-            Climate::Ground ground = climate_ground();
-            ground.specialize = true;
-            const ov::str err = Climate::parse(t, ground, table);
+            const ov::str err = Terrain::compile(preset == Preset::FLAT ? flat_table() : t, ground, Terrain::Mode::SPECIALISED, table, prog);
             OV_ERR_FAIL_COND_MSG(!err.empty(), "SDFCascade: the template ground: " + err);
         }
-        if (preset == Preset::FLAT) {
-            table.notes.clear(); // no top lattice either: a chunk's run is its own level
-            for (Climate::Biome &b : table.biomes) {
-                b.amps.clear();
-            }
-        }
-        spec = Climate::combined_spec(table, spec);
-        ground_terms = table.has_programs();
-        reads_up = std::any_of(table.biomes.begin(), table.biomes.end(), [](const Climate::Biome &p_b) { return p_b.program.reads_up(); });
-        carry = Climate::sample_carry(table);
+        prog.base = base; // compiled on the flat datum 0: the program's stretch and `up` read this one
         std::vector<std::pair<ov::str, Material::Params>> grounds;
         for (size_t b = 0; has_ground_materials() && b < table.biomes.size(); b++) {
             grounds.emplace_back("biome:" + table.biomes[b].name, Climate::biome_material(table.biomes[b]));
@@ -524,16 +520,13 @@ private:
 
     ExactNoise::Float4 metres(const ExactNoise::Float4 &p_u, int p_lod) const { return to_metres(p_u, p_lod, voxel_size); }
 
-    Cascade::Spec spec;
+    Terrain::LevelProgram prog;
     std::vector<float> skirt_depth_table; // skirt_depth_m per LOD, see configure()
     std::vector<float> moment_skirt_table; // the moment skirt per LOD (metres, 0 without moment blobs), see configure()
     BaseSurface base; // the ground's reference: flat at the datum (configure)
     float voxel_size = 0.5f;
     int k_max = 0; // a note's or a field's coarsest octave (lod_count + 4)
-    Climate::Table table; // the compiled ground: climate_data's, or the template's
+    Climate::Table table; // the climate's fields and biomes (places, looks, contents): climate_data's, or the template's
     bool given = false; // table is climate_data's (get_climate)
-    bool ground_terms = false; // table.has_programs(), read per sample
-    bool reads_up = false; // a program reads UP: the base at each sample
-    Climate::SampleCarry carry; // Climate::sample_carry(table), read per sample
     ov::str climate_error;
 };

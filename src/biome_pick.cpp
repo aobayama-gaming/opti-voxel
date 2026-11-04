@@ -5,29 +5,16 @@
 
 #include <algorithm>
 
-BiomePick::BiomePick(const Climate::Table *p_table, const Cascade::Spec *p_spec) :
-        table(p_table && p_spec && p_table->biomes.size() > 1 ? p_table : nullptr) {
+BiomePick::BiomePick(const Climate::Table *p_table, const Terrain::LevelProgram *p_prog) :
+        table(p_table && p_prog && p_table->biomes.size() > 1 ? p_table : nullptr), prog(p_prog) {
     if (table == nullptr) {
         return;
     }
-    spec = *p_spec;
-    const bool ground = std::any_of(table->fields.begin(), table->fields.end(),
-            [](const Climate::Field &p_f) { return std::any_of(p_f.terms.begin(), p_f.terms.end(), [](const Climate::Term &p_t) { return p_t.source == Climate::GROUND; }); });
-    if (!ground) {
-        spec.bands.clear();
-        spec.modulation.reset();
-    }
-    // The finest band of a field some biome's place names: coarser lattices read the same weights (no finer octave of
-    // theirs), finer ones would cost levels for nothing.
     lattice = Cascade::MAX_LEVEL;
-    for (const Climate::Biome &b : table->biomes) {
-        for (const Climate::Axis &a : b.at) {
-            for (const Cascade::Band &band : table->fields[size_t(a.field)].bands) {
-                lattice = ov::min(lattice, spec.insert_level(band));
-            }
-        }
+    for (const int w : prog->weights) {
+        lattice = ov::min(lattice, prog->nodes[size_t(w)].level);
     }
-    lattice = ov::max(lattice, 0);
+    lattice = ov::clamp(lattice, 0, Cascade::MAX_LEVEL);
 }
 
 void BiomePick::weights(const VoxelPos &p_voxel, float r_w[Climate::MAX_BIOMES]) const {
@@ -37,10 +24,9 @@ void BiomePick::weights(const VoxelPos &p_voxel, float r_w[Climate::MAX_BIOMES])
         return;
     }
     const Vector3i64 p = WorldCoord::floor_div(p_voxel, int64_t(1) << lattice);
-    ExactNoise::Float4 fields[Climate::MAX_FIELDS], w[Climate::MAX_BIOMES];
-    Climate::fields_at(*table, spec, p, lattice, fields);
-    Climate::weights(*table, fields, w);
-    for (int b = 0; b < Climate::MAX_BIOMES; b++) {
+    ExactNoise::Float4 w[Climate::MAX_BIOMES];
+    Terrain::point_nodes(*prog, p, lattice, prog->weights.data(), int(prog->weights.size()), w);
+    for (size_t b = 0; b < prog->weights.size(); b++) {
         r_w[b] = w[b].w;
     }
 }

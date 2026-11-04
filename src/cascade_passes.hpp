@@ -28,7 +28,7 @@ public:
     bool create_points(ov::gpu::Device *p_device, const SDFBase *p_sdf, const ChunkParam &p_point_param, uint32_t p_max_points, Buffer p_input,
             Buffer p_param_ubo, Buffer p_values);
     void free();
-    bool is_valid() const { return uniform_set[0].is_valid() || uniform_set[2].is_valid() || uniform_set[4].is_valid(); }
+    bool is_valid() const { return uniform_set[0].is_valid(); }
 
     // Number of levels a batch whose smallest LOD is p_min_lod runs (j = count - 1 ... 0).
     int level_count(int p_min_lod) const;
@@ -40,8 +40,8 @@ public:
     // Records level j for chunks [p_base, p_base + p_count) of the input (p_count <= max chunks: the scratch
     // holds chunk p_base + i at slot i) as one compute list. p_fold: level 0 folds the chunks' instance lists (a
     // batch with any instance listed; needs the table's buffers). Off, the bare cascade: the same bits over empty
-    // lists, without the fold's cost. p_lods: the batch's smallest and largest LOD (ChunkMath::lod_range): the
-    // fields' variant where Cascade::FieldRange::batch says.
+    // lists, without the fold's cost. p_lods: the batch's smallest and largest LOD (ChunkMath::lod_range; unused by v2's
+    // one program).
     void record_level(int p_j, uint32_t p_base, uint32_t p_count, const ov::ivec2 &p_lods, bool p_fold = false);
     // Every level, sub-batches of at most max chunks.
     void record_all(const ov::ivec2 &p_lods, uint32_t p_count, bool p_fold = false);
@@ -54,13 +54,11 @@ public:
 
 private:
     ov::gpu::Device *device = nullptr;
-    // [2 * view + (fold ? 1 : 0)]: the bare level-0 output or the instance fold (given the table's buffers), view the
-    // CascadeGLSL::View (the fields and the samples' views where the FieldRange carries any).
-    static constexpr int VARIANTS = 6;
+    // The bare level-0 output, and the instance fold (given the table's buffers).
+    static constexpr int VARIANTS = 2;
     ov::gpu::Pipeline pipeline[VARIANTS];
     ov::gpu::BindSet uniform_set[VARIANTS];
     Buffer params[VARIANTS]; // each variant's Cascade::ShaderParams (PARAM_BINDING)
-    Cascade::FieldRange fields; // empty: no fields variant
     Buffer scratch_a;
     Buffer scratch_b;
     Buffer bands;
@@ -75,8 +73,7 @@ private:
     uint32_t batch_items = 0;
     // At most every slot of every item a distinct region (a point item fills one), plus the zero region.
     uint32_t max_regions() const { return batch_items * (is_points() ? 1u : uint32_t(BaseRegions::SLOTS)) + 1u; }
-    int top = 0;
-    bool carry = false; // some run's last level reads carry groups (Spec::gpu_carry_groups)
+    int top = 0; // the program's top level
     int item_size = 32; // points per axis of an item: the chunk size, or 1 for point items
     uint32_t max_chunks = 0;
     uint64_t scratch_bytes_total = 0;

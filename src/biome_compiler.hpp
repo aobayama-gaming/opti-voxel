@@ -68,14 +68,16 @@ ov::str compile(const std::vector<BiomeGraph> &p_graphs, const Ground &p_ground,
 // The template biome named p_name at p_voxel_m metres: the ground every new biome starts from (the biome mixer's) and
 // the ground of a world without biomes (SDFCascade). A mix "ground" of one note of seed TEMPLATE_SEED per octave from 8
 // voxels (k = BAND_SHIFT, inserted on Λ_0) up to the first whose amplitude TEMPLATE_STEEPNESS * wavelength reaches
-// TEMPLATE_MAX_AMP_M (k = 19 at 5 cm: 26.2 km, 3.3 km), every one at that steepness, capped there. Its "graph" value and
-// the biome.
+// TEMPLATE_MAX_AMP_M (k = 19 at 5 cm: 26.2 km, 3.3 km), every one at that steepness, capped there. With p_ground, the
+// octaves stop before their amplitudes (under its note_cap) sum past its amp_cap: a small planet's template fits its
+// relief (the program's output bound, Terrain::bound_program). Its "graph" value and the biome.
 inline constexpr uint32_t TEMPLATE_SEED = 0xEA27u;
 inline constexpr double TEMPLATE_STEEPNESS = 0.125;
 inline constexpr double TEMPLATE_MAX_AMP_M = 65536.0 * 0.05;
-ov::Value template_graph(double p_voxel_m);
-// The template's coarsest octave: the first whose amplitude TEMPLATE_STEEPNESS * wavelength reaches TEMPLATE_MAX_AMP_M.
-int template_top(double p_voxel_m);
-ov::Value template_biome(double p_voxel_m, const ov::str &p_name = "ground");
+ov::Value template_graph(double p_voxel_m, const Ground *p_ground = nullptr);
+// The template's coarsest octave: the first whose amplitude TEMPLATE_STEEPNESS * wavelength reaches TEMPLATE_MAX_AMP_M,
+// or the last under p_ground's amp_cap.
+int template_top(double p_voxel_m, const Ground *p_ground = nullptr);
+ov::Value template_biome(double p_voxel_m, const ov::str &p_name = "ground", const Ground *p_ground = nullptr);
 
 } // namespace Climate
