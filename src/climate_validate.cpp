@@ -88,8 +88,9 @@ ov::str validate_amp(const Table &p_table, const Ground &p_ground, const Amp &p_
     if (!std::isfinite(p_amp.amp) || p_amp.amp < 0.0f) {
         return ov::format("octave k = %d: the amplitude must be >= 0.", p_amp.k);
     }
-    if (p_amp.gain != 0.0f && !(moderate(p_amp.gain) && p_amp.gain > 0.0f)) {
-        return ov::format("octave k = %d: multifractal gain out of range.", p_amp.k);
+    const Multifractal &mf = p_amp.multifractal;
+    if (mf.field >= 0 && !(mf.field < int(p_table.fields.size()) && p_table.fields[size_t(mf.field)].warp && moderate(mf.mul) && (mf.add == 0.0f || moderate(mf.add)))) {
+        return ov::format("octave k = %d: a multifractal reads its parent's field, its low and high moderate.", p_amp.k);
     }
     for (const WarpTerm &w : p_amp.warps) {
         if (!(moderate(w.scale) && std::fabs(w.scale) <= Cascade::WARP_LIMIT)) {
@@ -227,9 +228,6 @@ ov::str validate(const Table &p_table, const Ground &p_ground) {
         if (!err.empty()) {
             return err;
         }
-    }
-    if (p_table.has_state() && p_table.fields.size() + 1 > size_t(Cascade::MAX_FIELD_GROUPS)) {
-        return ov::format("climate: a multifractal carries its state as a field group: at most %d fields.", Cascade::MAX_FIELD_GROUPS - 1);
     }
     // What a level derives for the one below (the samples' terms, then one level's band parts) fits the carry.
     const int carry = combined_spec(p_table, Cascade::Spec()).carry_groups();

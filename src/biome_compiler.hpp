@@ -12,7 +12,7 @@
 // The biome compiler: every biome's graph (climate_parse.cpp's format) into the one ground the cascade carries. A biome
 // lists exactly the notes it mixes, with any seed, amplitude and stretch; the compiler keeps each note once whatever
 // biome mixes it (identity: octave, seed, stretch), so a biome more costs the notes it adds only, and turns each biome's
-// mix rows into its amplitude, shape, multifractal gain and warp on each note (Amp): the cascade's modulation inserts
+// mix rows into its amplitude, shape, multifractal and warp on each note (Amp): the cascade's modulation inserts
 // sum_b w_b (the biome's term) per note, one noise read whatever the number of biomes. A note every biome plays plain at
 // one amplitude is a constant band (no modulation). docs/climate.md's "Biome graphs" part is this.
 namespace Climate {
@@ -31,7 +31,7 @@ struct GraphRow {
     float x = 1.0f;
     bool has_shape = false;
     Shape shape;
-    float gain = 0.0f;
+    Multifractal multifractal;
     std::vector<WarpTerm> warps;
     int channel = 0; // 0 the ground; c >= 1 the biome's sub-mix c (its program reads it as FIELD -c until compile)
 };
@@ -45,6 +45,8 @@ struct BiomeGraph {
 // Whether p_ground has p_note's octave ([BAND_SHIFT, k_max]: a note the LOD count doesn't have plays nothing, so a
 // world reads at any LOD count).
 bool note_plays(const NoteNode &p_note, const Ground &p_ground);
+// p_note's stretch on octave p_k (Band::stretch: octave k takes at most k - BAND_SHIFT of it).
+int note_stretch(const NoteNode &p_note, int p_k);
 // p_note's amplitude (LOD0 voxels), under p_ground's note_cap.
 float note_amp(const NoteNode &p_note, const Ground &p_ground);
 

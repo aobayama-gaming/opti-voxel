@@ -81,12 +81,6 @@ float curve_bound(const Curve &p_curve) {
     return float(m);
 }
 
-bool Table::has_state() const {
-    return (generic && !biomes.empty()) || std::any_of(biomes.begin(), biomes.end(), [](const Biome &p_b) {
-        return std::any_of(p_b.amps.begin(), p_b.amps.end(), [](const Amp &p_a) { return p_a.gain > 0.0f; });
-    });
-}
-
 bool Table::has_programs() const {
     return (generic && !biomes.empty()) || std::any_of(biomes.begin(), biomes.end(), [](const Biome &p_b) { return !p_b.program.empty(); });
 }

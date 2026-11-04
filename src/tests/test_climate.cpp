@@ -261,8 +261,8 @@ TEST_CASE("Climate: malformed tables are refused with the reason") {
         { R"({"biomes": [{"name": "a", "graph": {"nodes": [{"id": "o", "kind": "output", "height": "x"}]}}]})", "no node 'x'" },
         { R"({"biomes": [{"name": "a", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 4000, "seed": 1, "amp_m": 1}, {"id": "n", "kind": "note", "wavelength_m": 400, "seed": 1, "amp_m": 1}, {"id": "o", "kind": "output", "height": "n"}]}}]})",
                 "two nodes are 'n'" },
-        { R"({"biomes": [{"name": "a", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 4000, "seed": 1, "amp_m": 1}, {"id": "m", "kind": "multifractal", "in": "n", "gain": 1}, {"id": "q", "kind": "multifractal", "in": "m", "gain": 1}, {"id": "o", "kind": "output", "height": "q"}]}}]})",
-                "a multifractal weighs a note" },
+        { R"({"biomes": [{"name": "a", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 4000, "seed": 1, "amp_m": 1}, {"id": "p", "kind": "note", "wavelength_m": 16000, "seed": 1, "amp_m": 1}, {"id": "m", "kind": "multifractal", "in": "n", "parent": "p", "low_m": 0, "high_m": 1}, {"id": "q", "kind": "multifractal", "in": "m", "parent": "p", "low_m": 0, "high_m": 1}, {"id": "o", "kind": "output", "height": "q"}]}}]})",
+                "a multifractal weighs one note" },
         { R"({"biomes": [{"name": "a", "height_m": 100}]})", "unknown key 'height_m'" },
         { R"({"biomes": [{"name": "a", "debug_color": "red"}]})", "#rrggbb" },
         { R"({"biomes": [{"name": "a", "debug_color": "#-00001"}]})", "#rrggbb" },
@@ -333,7 +333,7 @@ TEST_CASE("Climate: the graph kind catalogue is the parser's keys, every kind pa
         { "note", R"({"id": "n", "kind": "note", "wavelength_m": 400, "seed": 1, "amp_m": 1 @})", "n" },
         { "warp", R"({"id": "c", "kind": "note", "wavelength_m": 1600, "seed": 3, "amp_m": 1}, {"id": "x", "kind": "warp", "in": "c", "amount_m": 10 @}, {"id": "n", "kind": "note", "wavelength_m": 400, "seed": 1, "amp_m": 1, "warp": "x"})", "n" },
         { "shape", R"(N, {"id": "x", "kind": "shape", "in": "n", "shape": "ridged" @})", "x" },
-        { "multifractal", R"(N, {"id": "x", "kind": "multifractal", "in": "n", "gain": 2 @})", "x" },
+        { "multifractal", R"(N, {"id": "c", "kind": "note", "wavelength_m": 1600, "seed": 3, "amp_m": 1}, {"id": "x", "kind": "multifractal", "in": "n", "parent": "c", "low_m": -1, "high_m": 1 @})", "x" },
         { "mix", R"(N, {"id": "x", "kind": "mix", "rows": [{"in": "n", "x": 1}] @})", "x" },
         { "constant", R"(N, {"id": "c", "kind": "constant", "value_m": 5 @}, {"id": "x", "kind": "add", "a": "n", "b": "c"})", "x" },
         { "field", R"(N, {"id": "c", "kind": "field", "field": "t" @}, {"id": "x", "kind": "multiply", "a": "n", "b": "c"})", "x" },
@@ -371,7 +371,7 @@ TEST_CASE("Climate: the graph kind catalogue is the parser's keys, every kind pa
         }
     }
     CHECK(graph_kind("carve") == nullptr);
-    // Ridged at its default offset: (1 - |n|)^2, |n| smoothed (0 at n = 0); an offset outside a multifractal refused.
+    // Ridged at its default offset: (1 - |n|)^2, |n| smoothed (0 at n = 0); an offset on a note refused.
     ov::str json_error;
     Shape s;
     CHECK(parse_shape(ov::parse_json(R"({"shape": "ridged"})", json_error), false, s) == "");
@@ -381,7 +381,7 @@ TEST_CASE("Climate: the graph kind catalogue is the parser's keys, every kind pa
     CHECK(shape_phi(s, 0.0) == 1.0);
     const double sabs = std::sqrt(1.0 + double(Cascade::SMOOTH_ABS_E) * Cascade::SMOOTH_ABS_E) - Cascade::SMOOTH_ABS_E;
     CHECK(shape_phi(s, -1.0) == doctest::Approx(2.0 - 2.0 * sabs));
-    CHECK(parse_shape(ov::parse_json(R"({"shape": "plain", "offset": 1})", json_error), false, s).find("multifractal") != ov::str::npos);
+    CHECK(parse_shape(ov::parse_json(R"({"shape": "plain", "offset": 1})", json_error), false, s).find("on a note") != ov::str::npos);
     CHECK(parse_shape(ov::parse_json(R"({"shape": "plain", "offset": 1})", json_error), true, s) == "");
     CHECK(name_hash("") == 2166136261u);
 }
@@ -464,13 +464,25 @@ TEST_CASE("Climate: the compiler shares notes between biomes, constant where eve
     CHECK(find_amp(other.biomes[0], *second)->amp == 0.0f);
     CHECK(find_amp(other.biomes[1], *first)->amp == 0.0f);
     CHECK(find_amp(other.biomes[1], *second)->amp == float(0.125 * 4096.0));
-    // Two multifractal notes on one octave: refused (the state holds one octave's signal).
-    Table two_states;
+    // Two multifractal notes on one octave, one parent: one field, each biome its own bounds (mul = amp / (high - low),
+    // add = -low / (high - low)).
+    Table two_mf;
     const ov::str mf = R"({"name": "b", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 204.8, "seed": 7, "amp_m": 25.6},
-            {"id": "m", "kind": "multifractal", "in": "n", "gain": 1}, {"id": "o", "kind": "output", "height": "m"}]}})";
+            {"id": "p", "kind": "note", "wavelength_m": 1638.4, "seed": 9, "amp_m": 100},
+            {"id": "m", "kind": "multifractal", "in": "n", "parent": "p", "low_m": -50, "high_m": 150}, {"id": "o", "kind": "output", "height": "m"}]}})";
     const ov::str mf_a = R"({"name": "a", "at": {"t": [0, 1]}, "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 204.8, "seed": 8, "amp_m": 25.6},
-            {"id": "m", "kind": "multifractal", "in": "n", "gain": 1}, {"id": "o", "kind": "output", "height": "m"}]}})";
-    CHECK(ov::contains(parse_json(fields + mf_a + ", " + mf + "]}", g.ground, two_states), "one multifractal"));
+            {"id": "p", "kind": "note", "wavelength_m": 1638.4, "seed": 9, "amp_m": 100},
+            {"id": "m", "kind": "multifractal", "in": "n", "parent": "p", "low_m": 100, "high_m": 0}, {"id": "o", "kind": "output", "height": "m"}]}})";
+    CLIMATE_REQUIRE(parse_json(fields + mf_a + ", " + mf + "]}", g.ground, two_mf) == ov::str());
+    const Multifractal &ma = find_amp(two_mf.biomes[0], *note_of(two_mf, 12))->multifractal;
+    const Multifractal &mb = find_amp(two_mf.biomes[1], *note_of(two_mf, 12, 1))->multifractal;
+    CHECK(ma.field >= 0);
+    CHECK(ma.field == mb.field);
+    CHECK(two_mf.fields[size_t(ma.field)].warp);
+    CHECK(ma.mul == doctest::Approx(-1.0f));
+    CHECK(ma.add == doctest::Approx(1.0f));
+    CHECK(mb.mul == doctest::Approx(0.5f));
+    CHECK(mb.add == doctest::Approx(0.25f));
 }
 
 TEST_CASE("Climate: weights are a partition of unity, in [0, 1], without denormals, gradients by the chain rule") {

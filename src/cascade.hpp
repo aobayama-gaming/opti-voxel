@@ -257,20 +257,17 @@ struct FieldRange {
 //
 // Shaped bands (BandMod::features): the band also inserts A_abs (|n| - NOISE_ABS_MEAN) and A_sq (n^2 - NOISE_SQ_MEAN),
 // the means taken out so a coarser LOD dropping the band (mean 0) makes no step; its noise may be read at the point
-// displaced by a warp (LOD0 voxels, the warp's gradient applied to the noise's by the chain rule); and the ground's
-// band may overwrite the state group's channels (state_group) with S_1 + S_n n + S_abs |n| + S_sq n^2: the state its
-// finer octaves read (the multifractals' previous octave). All of it dual numbers, flushed like dmul.
+// displaced by a warp (LOD0 voxels, the warp's gradient applied to the noise's by the chain rule). All of it dual
+// numbers, flushed like dmul.
 struct Spec;
 
 // BandMod::features bits.
 inline constexpr uint32_t MOD_ABS = 1u;
 inline constexpr uint32_t MOD_SQ = 2u;
-inline constexpr uint32_t MOD_STATE = 4u;
 inline constexpr uint32_t MOD_WARP = 8u;
 // |n| of a shaped band is smoothed: sabs(n) = sqrt(n^2 + e^2) - e, e = SMOOTH_ABS_E. A crease at n = 0 is finer than
 // the 8 samples per wavelength a band is carried by: the Hermite subdivision rings along the lattice axes around it,
-// and the gradient channels miss it (measured, the climate report: 16-21% gradient error on ridged bands, 2.5% plain;
-// a multifractal's state streaks). e = 0.1 is about how far n moves between two samples.
+// and the gradient channels miss it (measured, the climate report: 16-21% gradient error on ridged bands, 2.5% plain). e = 0.1 is about how far n moves between two samples.
 inline constexpr float SMOOTH_ABS_E = 0.1f;
 // sabs of a dual n (gradient per lattice spacing): (n.g n / r, (n^2 + e^2) r - e), r = det_rsqrt(n^2 + e^2), from n^2
 // (dmul(n, n)). Products flushed.
@@ -297,7 +294,6 @@ inline constexpr int MAX_MODS = MAX_GROUPS + MAX_LEVEL_NOTES - 1;
 struct BandMod {
     uint32_t features = 0;
     ExactNoise::Float4 amp[3] = {}; // on n, |n| - NOISE_ABS_MEAN, n^2 - NOISE_SQ_MEAN
-    ExactNoise::Float4 state[4] = {}; // the state group's new channels, on 1, n, |n|, n^2 (MOD_STATE, the ground only)
     ExactNoise::Float4 warp[3] = {}; // displacement per axis, LOD0 voxels (MOD_WARP)
 };
 
@@ -365,8 +361,6 @@ struct Modulation {
         (void)p_p;
         (void)r_slots;
     }
-    // The field group the ground's MOD_STATE band overwrites, or -1 (a band-less group: nothing else writes it).
-    virtual int state_group() const { return -1; }
     // The features group p_group's bands use at some level (the union): its GLSL insert has the code for them only.
     virtual uint32_t group_features(int p_group) const {
         (void)p_group;
@@ -403,7 +397,7 @@ struct Spec {
 
     int insert_level(const Band &p_band) const { return p_band.k - insert_shift; }
     // Some band of group p_group (any group: -1) is stretched along y (Band::stretch): its GLSL inserts go through
-    // the base's base_stretched.
+    // the base's base_stretched. Generic on a flat base: every group (a stretch is a value).
     bool stretched(int p_group = -1) const;
     int top_level(bool p_all_fields = false) const;
     // The top lattice of a run down to p_lod: top_level, at least p_lod, and above p_lod where its last level reads the
@@ -468,7 +462,7 @@ void count_points(const Spec &p_spec, const Box &p_box, int p_lod, Stats &r_stat
 // amp * 2^(-insert_shift |S|).
 void band_channels(const Spec &p_spec, const Band &p_band, const Vector3i64 &p_p, float r_ch[CHANNELS]);
 // Adds the bands of the ground and of p_fields field groups (-1: every one r_level carries) on r_level.m (modulated where
-// the spec says) to its channels. Without its field groups' bands a level writes no state group either.
+// the spec says) to its channels.
 // A level holding carry is its run's last (the level above gets its carry after its insertions, derived from its channels
 // before them): its modulated bands
 // read it (Modulation::modulate).

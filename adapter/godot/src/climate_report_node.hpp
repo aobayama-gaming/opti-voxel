@@ -33,9 +33,9 @@ public:
     // A biome graph's node kinds (Climate::graph_kinds): [{ kind, inputs, params: [{ name, type, required, default (null:
     // none), options }] }], what the biome mixer builds its nodes from.
     static Array graph_kinds();
-    // A shape node's phi at p_ns (Climate::parse_shape, shape_phi; p_multifractal: a multifractal reads it): { error,
+    // A shape node's phi at p_ns as a note's (Climate::parse_shape, shape_phi): { error,
     // phi }, the biome mixer's plot.
-    static Dictionary shape(const Dictionary &p_node, bool p_multifractal, const PackedFloat32Array &p_ns);
+    static Dictionary shape(const Dictionary &p_node, const PackedFloat32Array &p_ns);
     // The template biome named p_name at a voxel size (Climate::template_biome): a new biome's graph.
     static Dictionary template_biome(double p_voxel_m, const String &p_name);
     // A biome's debug colour without its own: its name's hash (the parser's).

@@ -120,7 +120,11 @@ inline int configure_variant(SDFCascade &p_sdf, SpikeSet p_v, const ov::str &p_w
                 if (nodes[n]["kind"].as_str() == "curve") {
                     ov::Value curve = nodes[n];
                     curve["in"] = "ground";
-                    graph["nodes"].at(1)["height"] = curve["id"];
+                    for (size_t o = 0; o < graph["nodes"].size(); o++) {
+                        if (graph["nodes"][o]["kind"].as_str() == "output") {
+                            graph["nodes"].at(o)["height"] = curve["id"];
+                        }
+                    }
                     graph["nodes"].push_back(curve);
                 }
             }

@@ -23,13 +23,13 @@ const KINDS := {
 	},
 	"shape": {
 		"title": "Shape",
-		"hint": "phi(n) on a note: plain a n + o, billow 2|a n| - 1 + o, ridged (o - |a n|)^2, square (a n)^2 + o, or coeffs on (1, n, |n|, n^2). A band goes in without its mean: an offset only counts in a multifractal (or ridged).",
+		"hint": "phi(n) on a note: plain a n + o, billow 2|a n| - 1 + o, ridged (o - |a n|)^2, square (a n)^2 + o, or coeffs on (1, n, |n|, n^2). A band goes in without its mean: an offset only counts at the samples (or ridged).",
 		"ranges": {"scale": [0.0, 4.0, 0.01], "offset": [-2.0, 2.0, 0.01]},
 	},
 	"multifractal": {
 		"title": "Multifractal",
-		"hint": "Weights its note by clamp(gain (1 - c)), c from the next coarser multifractal note's signal: detail where the coarser one was high (Musgrave).",
-		"ranges": {"gain": [0.0, 4.0, 0.01]},
+		"hint": "Weights its note (in) by its parent's height, a coarser note read on its own (not played, no warp): 0 at or under low_m, 1 at or over high_m, linear between. low_m above high_m inverts it: detail in the parent's valleys.",
+		"ranges": {"low_m": [-2000.0, 2000.0, 0.1], "high_m": [-2000.0, 2000.0, 0.1]},
 	},
 	"mix": {
 		"title": "Mix",

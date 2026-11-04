@@ -10,6 +10,10 @@
 
 namespace Climate {
 
+int note_stretch(const NoteNode &p_note, int p_k) {
+    return ov::max(0, ov::min(p_note.stretch, p_k - ExactNoise::BAND_SHIFT));
+}
+
 bool note_plays(const NoteNode &p_note, const Ground &p_ground) {
     return p_note.k >= ExactNoise::BAND_SHIFT && p_note.k <= p_ground.k_max;
 }
@@ -22,7 +26,7 @@ namespace {
 
 // Whether two amplitude entries play a note the same way (a constant note: every biome's alike and plain).
 bool plain(const Amp &p_a) {
-    return !p_a.has_shape && p_a.gain == 0.0f && p_a.warps.empty();
+    return !p_a.has_shape && p_a.multifractal.field < 0 && p_a.warps.empty();
 }
 
 // One compiled note: its node's seed, its band, its cascade group (0 the ground, else 1 + its channel field's index), per
@@ -36,11 +40,6 @@ struct Note {
     bool constant = false;
     float top = 0.0f;
 };
-
-// A row's octave k's stretch (Band::stretch: octave k takes at most k - BAND_SHIFT of it).
-int octave_stretch(const GraphRow &p_row, int p_k) {
-    return ov::max(0, ov::min(p_row.note.stretch, p_k - ExactNoise::BAND_SHIFT));
-}
 
 // Each biome's sub-mixes onto channel fields (Field::channel, after the table's own, at least p_ground.caps.channels of
 // them in a generic table): the first whose notes take none of the sub-mix's octaves with another note (a field group
@@ -58,7 +57,7 @@ ov::str channels(const std::vector<BiomeGraph> &p_graphs, const Ground &p_ground
             std::vector<NoteId> ids;
             for (const GraphRow &row : p_graphs[b].rows) {
                 if (row.channel == c && note_plays(row.note, p_ground)) {
-                    ids.push_back(NoteId{ row.note.k, row.note.seed, octave_stretch(row, row.note.k), 0 });
+                    ids.push_back(NoteId{ row.note.k, row.note.seed, note_stretch(row.note, row.note.k), 0 });
                 }
             }
             auto fits = [&](const std::vector<NoteId> &p_taken) {
@@ -80,7 +79,7 @@ ov::str channels(const std::vector<BiomeGraph> &p_graphs, const Ground &p_ground
     const size_t count = ov::max(taken.size(), r_table.generic ? size_t(ov::max(0, p_ground.caps.channels)) : size_t(0));
     if (own + count > size_t(MAX_FIELDS)) {
         const int64_t warps = std::count_if(r_table.fields.begin(), r_table.fields.end(), [](const Field &p_f) { return p_f.warp; });
-        return ov::format("%d fields, %d warp fields (3 per warp octave) and %d sub-mix fields, at most %d in all.", int64_t(own) - warps, warps, int64_t(count),
+        return ov::format("%d fields, %d warp and multifractal fields (3 per warp octave, 1 per parent note) and %d sub-mix fields, at most %d in all.", int64_t(own) - warps, warps, int64_t(count),
                 MAX_FIELDS);
     }
     for (size_t f = 0; f < count; f++) {
@@ -104,7 +103,7 @@ ov::str gather(const std::vector<BiomeGraph> &p_graphs, const Ground &p_ground, 
                 continue;
             }
             const int k = row.note.k;
-            const int stretch = octave_stretch(row, k);
+            const int stretch = note_stretch(row.note, k);
             auto same = [&](const Note &p_c) { return p_c.band.k == k && p_c.seed == row.note.seed && p_c.band.stretch == stretch && p_c.group == group; };
             auto it = std::find_if(r_notes.begin(), r_notes.end(), same);
             if (it == r_notes.end()) {
@@ -127,7 +126,7 @@ ov::str gather(const std::vector<BiomeGraph> &p_graphs, const Ground &p_ground, 
             }
             a.has_shape = row.has_shape;
             a.shape = row.shape;
-            a.gain = row.gain;
+            a.multifractal = row.multifractal;
             a.warps = row.warps;
             it->entry[b] = int(r_amps[b].size());
             r_amps[b].push_back(a);
@@ -138,8 +137,7 @@ ov::str gather(const std::vector<BiomeGraph> &p_graphs, const Ground &p_ground, 
 
 // Each note's fold (constant: every biome plays it plain at one amplitude) and largest amplitude; an octave of the
 // ground is modulated or constant as a whole (the cascade's levels are: Cascade::MAX_LEVEL_NOTES), at most
-// MAX_LEVEL_NOTES notes and one multifractal note (the state group holds one octave's) on it; a sub-mix's, one note and
-// no multifractal (a field group). Empty, or the first error.
+// MAX_LEVEL_NOTES notes on it; a sub-mix's, one note (a field group). Empty, or the first error.
 ov::str fold(const std::vector<std::vector<Amp>> &p_amps, std::vector<Note> &r_notes) {
     for (Note &note : r_notes) {
         const Amp *first = note.entry[0] >= 0 ? &p_amps[0][size_t(note.entry[0])] : nullptr;
@@ -151,27 +149,19 @@ ov::str fold(const std::vector<std::vector<Amp>> &p_amps, std::vector<Note> &r_n
         }
     }
     for (Note &note : r_notes) {
-        int count = 0, multifractal = 0;
+        int count = 0;
         bool modulated = false;
         for (const Note &o : r_notes) {
             if (o.band.k == note.band.k && o.group == note.group && o.top > 0.0f) {
                 count++;
                 modulated = modulated || !o.constant;
-                for (size_t b = 0; b < o.entry.size(); b++) {
-                    if (o.entry[b] >= 0 && p_amps[b][size_t(o.entry[b])].gain > 0.0f) {
-                        multifractal++;
-                        break;
-                    }
-                }
             }
         }
-        if (note.group > 0 && (count > 1 || multifractal > 0)) {
-            return ov::format("octave k = %d of a sub-mix has %d notes, %d of them multifractal: a sub-mix plays one note per octave, none multifractal.", note.band.k,
-                    count, multifractal);
+        if (note.group > 0 && count > 1) {
+            return ov::format("octave k = %d of a sub-mix has %d notes: a sub-mix plays one note per octave.", note.band.k, count);
         }
-        if (count > Cascade::MAX_LEVEL_NOTES || multifractal > 1) {
-            return ov::format("octave k = %d has %d notes, %d of them multifractal: at most %d, one multifractal (its state).", note.band.k, count, multifractal,
-                    Cascade::MAX_LEVEL_NOTES);
+        if (count > Cascade::MAX_LEVEL_NOTES) {
+            return ov::format("octave k = %d has %d notes: at most %d.", note.band.k, count, Cascade::MAX_LEVEL_NOTES);
         }
         note.constant = note.constant && !modulated;
     }

@@ -62,7 +62,7 @@
       "kind": "note",
       "wavelength_m": 409.6,
       "seed": 59943,
-      "amp_m": 15
+      "amp_m": 40
      },
      {
       "id": "n5",
@@ -79,6 +79,14 @@
       "amp_m": 1
      },
      {
+      "id": "rough",
+      "kind": "multifractal",
+      "in": "n4",
+      "parent": "n2",
+      "low_m": 0,
+      "high_m": 150
+     },
+     {
       "id": "mix",
       "kind": "mix",
       "rows": [
@@ -92,7 +100,7 @@
         "in": "n3"
        },
        {
-        "in": "n4"
+        "in": "rough"
        },
        {
         "in": "n5"

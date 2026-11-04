@@ -21,7 +21,7 @@ void ClimateReportNode::_bind_methods() {
     ClassDB::bind_static_method("ClimateReportNode", D_METHOD("check", "json", "voxel_size", "lods"), &ClimateReportNode::check);
     ClassDB::bind_static_method("ClimateReportNode", D_METHOD("curve", "points", "xs", "voxel_m"), &ClimateReportNode::curve);
     ClassDB::bind_static_method("ClimateReportNode", D_METHOD("graph_kinds"), &ClimateReportNode::graph_kinds);
-    ClassDB::bind_static_method("ClimateReportNode", D_METHOD("shape", "node", "multifractal", "ns"), &ClimateReportNode::shape);
+    ClassDB::bind_static_method("ClimateReportNode", D_METHOD("shape", "node", "ns"), &ClimateReportNode::shape);
     ClassDB::bind_static_method("ClimateReportNode", D_METHOD("template_biome", "voxel_m", "name"), &ClimateReportNode::template_biome);
     ClassDB::bind_static_method("ClimateReportNode", D_METHOD("debug_color", "name"), &ClimateReportNode::debug_color);
     ClassDB::bind_static_method("ClimateReportNode", D_METHOD("kernel_core"), &ClimateReportNode::kernel_core);
@@ -116,10 +116,10 @@ Array ClimateReportNode::graph_kinds() {
     return out;
 }
 
-Dictionary ClimateReportNode::shape(const Dictionary &p_node, bool p_multifractal, const PackedFloat32Array &p_ns) {
+Dictionary ClimateReportNode::shape(const Dictionary &p_node, const PackedFloat32Array &p_ns) {
     Dictionary d;
     Climate::Shape s;
-    d["error"] = godot_str(Climate::parse_shape(ov_value(p_node), p_multifractal, s));
+    d["error"] = godot_str(Climate::parse_shape(ov_value(p_node), false, s));
     PackedFloat32Array phi;
     phi.resize(p_ns.size());
     for (int64_t i = 0; i < p_ns.size(); i++) {
