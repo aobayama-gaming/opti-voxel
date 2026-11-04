@@ -15,7 +15,6 @@
 #include "godot_cpp/classes/viewport.hpp"
 
 #include "dig_tool.hpp"
-#include "godot_mesh_host.hpp"
 #include "godot_page_host.hpp"
 #include "gpu_profiler.hpp"
 #include "rd_device.hpp"
@@ -24,16 +23,10 @@
 using namespace godot;
 
 // The terrain node: Godot's host of an ov::World. Its properties are the world's settings (set before the node enters
-// the tree); it lends the world the main RenderingDevice (RDDevice) and draws its output (GodotPageHost: GPU Direct's
-// pages; GodotMeshHost: the legacy meshes), and each frame hands it the camera.
+// the tree); it lends the world the main RenderingDevice (RDDevice) and draws its output (GodotPageHost: the mesher's
+// quad pages), and each frame hands it the camera.
 class VoxelTerrain : public Node3D {
     GDCLASS(VoxelTerrain, Node3D)
-
-public:
-    enum PipelineMode {
-        PIPELINE_GPU_LEGACY = ov::World::PIPELINE_GPU_LEGACY,
-        PIPELINE_GPU_DIRECT = ov::World::PIPELINE_GPU_DIRECT,
-    };
 
 protected:
     static void _bind_methods();
@@ -50,10 +43,9 @@ private:
     ov::World::Settings &cfg() { return world->settings(); }
     const ov::World::Settings &cfg() const { return world->settings(); }
 
-    // The main RenderingDevice as the world's device (used on the render thread), and the hosts drawing its output.
+    // The main RenderingDevice as the world's device (used on the render thread), and the host drawing its output.
     RDDevice *main_device = nullptr;
-    GodotPageHost *page_host = nullptr; // GPU Direct's pages
-    GodotMeshHost *mesh_host = nullptr; // the legacy meshes
+    GodotPageHost *page_host = nullptr; // the mesher's pages
     ov::World::Hosts hosts; // the above as the world's
 
     GPUProfiler *gpu_profiler = nullptr;
@@ -94,9 +86,6 @@ public:
     void _process(double delta) override;
     void _exit_tree() override;
 
-    void set_pipeline_mode(int p_mode);
-    int get_pipeline_mode() const;
-
     // Terrain: 1 the Hermite cascade terrain (SDFCascade, default), 4 its flat preset under
     // the shapes gallery (SDFTable::Scene::SHAPES, --terrain=shapes, res://shapes_scene.tscn). 0 was SDFDummy and 3
     // the archetype demo on an fBm ground (SDFArchetype), both removed: saved scenes keep their numbers.
@@ -113,9 +102,6 @@ public:
     void restart_world(const String &p_json, const String &p_dir);
     void set_terrain_mode(int p_mode);
     int get_terrain_mode() const;
-
-    void set_legacy_batch_size(int p_size);
-    int get_legacy_batch_size() const;
 
     // Edge length of a LOD 0 voxel in metres (each LOD level doubles it).
     float get_voxel_size() const;
@@ -246,10 +232,7 @@ public:
     // had before any rebase (a float: for reports and replayable poses, not exact far away).
     Vector3 get_render_offset_m() const;
 
-    void set_legacy_trim_indices(bool p_trim);
-    bool get_legacy_trim_indices() const;
-
-    // Dual contouring of Hermite data (DC-lite, both meshers): sharp UNION / SUBTRACT creases are
+    // Dual contouring of Hermite data (DC-lite): sharp UNION / SUBTRACT creases are
     // placed on the crease instead of the Surface Nets mass point. Off by default (Surface Nets).
     void set_dual_contouring(bool p_enable);
     bool get_dual_contouring() const;
@@ -324,10 +307,10 @@ public:
     void set_walk_batch(int p_keys);
     int get_walk_batch() const;
 
-    // GPU Direct only: 0 shaded, 1 normals, 2 lod, 3 page, 4 wireframe, 5 chunk, 6 group, 7 quad index.
+    // 0 shaded, 1 normals, 2 lod, 3 page, 4 wireframe, 5 chunk, 6 group, 7 quad index.
     void set_debug_view(int p_view);
     int get_debug_view() const;
-    // GPU Direct: page shader uniforms by name (VoxelSky hands the cloud layer's over), kept across the pool's creation.
+    // The page shader uniforms by name (VoxelSky hands the cloud layer's over), kept across the pool's creation.
     void set_page_params(const Dictionary &p_params);
 
     void set_log_level(int p_level);
@@ -354,23 +337,17 @@ public:
 
     // True once every scanned chunk is meshed and the mesher has nothing in flight.
     bool is_load_complete();
-    // The instance edits made so far are meshed (the legacy mesher: idle).
+    // The instance edits made so far are meshed.
     bool is_edit_settled();
 
     Dictionary get_debug_stats();
 
-    // GPU Direct only: re-mesh `count` loaded chunks with the legacy mesher and compare triangle by
-    // triangle. Asynchronous: poll get_validation_report() (empty until done). OBJ files of the first
-    // mismatching chunk are written to `dump_dir` when it is not empty.
-    bool debug_validate(int p_count, const String &p_dump_dir);
-    Dictionary get_validation_report() const;
-
-    // GPU Direct only: read back every page holding loaded chunks and classify all drawn quad slots
+    // Read back every page holding loaded chunks and classify all drawn quad slots
     // (live / dead / stale / partial). Asynchronous: poll get_audit_report().
     bool debug_audit_pages();
     Dictionary get_audit_report() const;
 
-    // GPU Direct only: rebuild the current scan without culling and count the quads of every chunk
+    // Rebuild the current scan without culling and count the quads of every chunk
     // the cull dropped (GPU, nothing loaded). A culled chunk with quads is a miss: a hole. Asynchronous:
     // poll get_discovery_audit_report(). Run it with the camera still and the load complete.
     bool debug_audit_discovery();
@@ -379,5 +356,3 @@ public:
     VoxelTerrain() = default;
     ~VoxelTerrain() override;
 };
-
-VARIANT_ENUM_CAST(VoxelTerrain::PipelineMode);

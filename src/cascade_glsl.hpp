@@ -6,7 +6,7 @@
 #include "ov/bytes.hpp"
 #include "ov/str.hpp"
 
-// The Hermite cascade on the GPU (shared by GPUDirectMesher, GPUMesher and CascadeSpike), bit for bit what
+// The Hermite cascade on the GPU (shared by GPUDirectMesher and CascadeSpike), bit for bit what
 // Cascade::run computes on the CPU.
 //
 // One compute dispatch per level, every chunk of the batch in the same dispatch: level m = L + j of each
@@ -108,7 +108,7 @@ ChunkParam point_param(const ChunkParam &p_param);
 // writeonly): the cascade writes it, the meshers' vertex passes read it.
 ov::str glsl_material_buffer(int p_binding, const char *p_access);
 
-// Fills /*GLSL_VERTEX_GRADIENT*/ and /*GLSL_ALGORITHM_PASS*/ of a mesher shader (both meshers): the vertex
+// Fills /*GLSL_VERTEX_GRADIENT*/ and /*GLSL_ALGORITHM_PASS*/ of the mesher shader: the vertex
 // passes take their normal from cascade_vertex_gradient, since the cascade has no off-lattice evaluation, and
 // their material from cascade_vertex_material (the mesher declares sdf_material).
 ov::str fill_mesher_pass(const ov::str &p_shader, const ov::str &p_pass);

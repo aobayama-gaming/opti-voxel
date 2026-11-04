@@ -209,7 +209,6 @@ func _restart_terrain() -> void:
 		_terrain.restart_world(_view_world(_json), _dir)
 	else:
 		_terrain = ClassDB.instantiate("VoxelTerrain")
-		_terrain.pipeline_mode = 2
 		_terrain.lod_pixel_error = LOD_PIXEL_ERROR
 		_terrain.lod_far_limit = true
 		_terrain.lod_view_max = LOD_VIEW_MAX

@@ -198,7 +198,7 @@ uint32_t GpuTable::build_lists(const std::vector<ChunkId> &p_chunks, const Chunk
             OV_ERR_PRINT(ov::format("GpuTable: a LOD %d chunk's list of %d instances is over the %d words of the buffer: truncated (wrong surface there).",
                     lod, int64_t(indices.size()), int64_t(budget)));
             indices.resize(budget);
-            // Its palette came from the whole list: it draws as its base (on the ground block; both meshers read a record's
+            // Its palette came from the whole list: it draws as its base (on the ground block; the mesher reads a record's
             // index past the base as ground, and without a climate read none).
             palettes[i] = base;
         }

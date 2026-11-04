@@ -7,7 +7,7 @@ No float ever holds an absolute coordinate. Read before touching `world_coord`, 
   voxels); LOD0 ids are odd, a LOD-L id has its lowest set bit at L.
 - The SDF takes a `WorldPos` (LOD0 voxel + float fraction in [0, 1)) and the chunk's LOD:
   `SDFBase::evaluate(const WorldPos &, int lod)`, GLSL `cascade_sample_sdf(c0, WorldPos p, int lod, chunk)` (the
-  meshers pass `ChunkFrame::lod`, the discoverer and validator `ChunkMath::get_lod`). The same point
+  mesher passes `ChunkFrame::lod`, the discoverer `ChunkMath::get_lod`). The same point
   reached from two chunks gives a bit-identical `WorldPos`.
 - GPU (`src/gpu_frame.hpp`): low 32 bits with wrapping arithmetic (exact for differences under 2^31),
   plus high words where absolute identity matters. `ChunkParam` UBO is 48 B (origin low/high
@@ -25,10 +25,9 @@ No float ever holds an absolute coordinate. Read before touching `world_coord`, 
   (bench.gd's paths); the Dawn viewer moves its camera and carries FSR's last projection over
   (`DawnUpscaler::shift_history`; Godot's TAA / FSR see a one-frame camera jump). Nothing is re-meshed: page rows are
   chunk-local under absolute ids, so the direct mesher re-sends the page decode (`origin_chunk_lo`) and recomputes
-  every page's culling box (in-flight batches' pages too); the legacy meshes are placed again from their chunk ids (`MeshHost::place_mesh`, under a
-  lock the legacy worker holds while it creates meshes). Only render-space code reads the origin: the discoverer takes
+  every page's culling box (in-flight batches' pages too). Only render-space code reads the origin: the discoverer takes
   the camera's absolute chunk (`set_camera(ChunkId)`), digs and instances are absolute voxels. A rebase waits while the
-  validator, the page auditor or the discovery audit run (they hold render positions). Render floats then stay within
+  page auditor or the discovery audit run (they hold render positions). Render floats then stay within
   the rebase distance plus the view: the camera at 1,000 km jitters no more than at spawn. Scripts read the render
   origin with `get_render_origin_x/y/z` (int64 voxels) and `get_render_offset_m()` (metres from the world origin,
   float: player.gd's marks add it to `cam_pos`); `get_debug_stats()["world_origin"]` has `render_voxel`,
@@ -41,9 +40,7 @@ No float ever holds an absolute coordinate. Read before touching `world_coord`, 
   its altitude (`Presets.clip_planes`, every frame in the player and the bench; |SDF| at the camera,
   `VoxelTerrain.get_sdf_at`): near = altitude / 1000 (at least the scene's), far = min(near * 2^21,
   `VoxelTerrain.get_load_radius()`), so the ground stays in view from 13 km up. Past far/near ~2^24 Godot's float
-  projection loses its far plane and the light culler ERRORs every frame. The validator doesn't compare
-  the normals of sliver triangles (all edges within 2 * tol): around a lone near-zero corner a whole
-  closed sheet fits inside the tolerance and the vertex pairing is arbitrary (frequent at far LODs).
+  projection loses its far plane and the light culler ERRORs every frame.
 - Exact noise (`src/exact_noise.hpp`, CPU + `GLSL_EXACT_NOISE` in `exact_noise_glsl.hpp`): `hash_cell` = PCG3D of the cell's low
   words salted by a PCG3D of its high words and the seed (cells 2^32 apart don't collide);
   `perlin3` / `perlin2` = one octave of gradient noise with wavelength exactly 2^k LOD0 voxels

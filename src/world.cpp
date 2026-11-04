@@ -89,12 +89,10 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
     // One chunk-id unit is half a LOD0 chunk, a whole number of voxels.
     OV_ERR_FAIL_COND_V_MSG(chunk_param.chunk_voxel_dimension() % 2 != 0, false, "World: chunk_size - 2 * skirt_size must be even.");
     OV_ERR_FAIL_COND_V_MSG(lod_numbers < 1 || lod_numbers > ChunkMath::MAX_LOD_NUMBERS, false, "World: lod_numbers out of range.");
-    // Both meshers need a device (GPU Direct the main one, Legacy a local one, which needs it too). Without one
-    // (headless, the Compatibility renderer) the page pool would dereference null on the device's thread: the terrain
-    // stays empty instead.
+    // The mesher needs the main device. Without one (headless, the Compatibility renderer) the page pool would
+    // dereference null on the device's thread: the terrain stays empty instead.
     OV_ERR_FAIL_COND_V_MSG(p_hosts.device == nullptr, false, "World: no GPU device (headless or the Compatibility renderer): the terrain is disabled.");
-    OV_ERR_FAIL_COND_V_MSG(config.pipeline_mode == PIPELINE_GPU_DIRECT ? p_hosts.pages == nullptr : p_hosts.meshes == nullptr, false,
-            "World: no host to draw the mesher's output.");
+    OV_ERR_FAIL_COND_V_MSG(p_hosts.pages == nullptr, false, "World: no host to draw the mesher's output.");
     hosts = p_hosts;
 
     started = true;
@@ -170,17 +168,12 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
     far_reach = 1.0 / std::cos(double(ChunkMath::view_cone_half_angle(fov_rad, p_projection.aspect, 0.0f)));
     chunk_discoverer->start();
 
-    if (config.pipeline_mode == PIPELINE_GPU_DIRECT) {
+    {
         OV_TRACE("world", "start_mesher");
         direct_mesher = new GPUDirectMesher();
         direct_mesher->set_dual_contouring(config.dual_contouring);
         direct_mesher->initialize(sdf.get(), chunk_param, lod_numbers, hosts.device, hosts.pages, config.direct, std::exchange(reused_pages, nullptr));
         direct_mesher->set_debug_view(config.debug_view);
-    } else {
-        gpu_mesher = new GPUMesher();
-        gpu_mesher->set_dual_contouring(config.dual_contouring);
-        gpu_mesher->initialize(sdf.get(), chunk_param, uint32_t(config.legacy_batch_size), lod_numbers, hosts.meshes);
-        gpu_mesher->set_trim_indices(config.legacy_trim_indices);
     }
     last_dispatch_times = DispatchTimes(); // the new mesher's start from 0
     // Only for a host that draws them (binds their textures).
@@ -209,7 +202,7 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
         last_load_centre = *p_camera_pos;
         has_camera = true;
     }
-    VLOG(1, "World: started, pipeline_mode=", int(config.pipeline_mode));
+    VLOG(1, "World: started");
     return true;
 }
 
@@ -253,8 +246,6 @@ void World::_apply_instance_edit() {
     }
     if (direct_mesher) {
         direct_mesher->remesh_chunks(remesh);
-    } else if (gpu_mesher) {
-        gpu_mesher->remesh_chunks(remesh);
     }
     if (chunk_discoverer) {
         chunk_discoverer->invalidate(box);
@@ -311,11 +302,7 @@ void World::frame(const Float3 *p_camera_pos, const Float3 *p_camera_forward, do
                 Section apply(process_stats.scan_apply, "scan_apply");
                 state.add_scan_chunk(std::move(new_scanned_chunk), *scan_delta);
             }
-            if (direct_mesher) {
-                direct_mesher->send_chunk(state.dirty_chunk, scan_view);
-            } else {
-                gpu_mesher->send_chunk(state.dirty_chunk, scan_view);
-            }
+            direct_mesher->send_chunk(state.dirty_chunk, scan_view);
         }
     }
 
@@ -341,17 +328,13 @@ void World::frame(const Float3 *p_camera_pos, const Float3 *p_camera_forward, do
 
     {
         Section section(process_stats.mesher_dispatch, "mesher_dispatch");
-        if (direct_mesher) {
-            direct_mesher->process_queue();
-        } else {
-            gpu_mesher->process_queue();
-        }
+        direct_mesher->process_queue();
     }
-    _record_dispatch_times(direct_mesher ? direct_mesher->get_dispatch_times() : gpu_mesher->get_dispatch_times());
+    _record_dispatch_times(direct_mesher->get_dispatch_times());
 
     {
         Section section(process_stats.mesher_collect, "mesher_collect");
-        const bool results = direct_mesher ? direct_mesher->get_results(state) : gpu_mesher->get_results(state);
+        const bool results = direct_mesher->get_results(state);
         destroy_dirty = destroy_dirty || results;
     }
 
@@ -361,10 +344,10 @@ void World::frame(const Float3 *p_camera_pos, const Float3 *p_camera_forward, do
     }
 
     // After destruction (to_destroy_chunk holds copies of the outputs it moves), and never while the
-    // validator or auditor hold page ranges.
+    // auditor holds page ranges.
     {
         Section section(process_stats.compact, "compact");
-        if (direct_mesher && !validator && !auditor) {
+        if (!auditor) {
             direct_mesher->compact(state);
         }
     }
@@ -386,12 +369,6 @@ void World::frame(const Float3 *p_camera_pos, const Float3 *p_camera_forward, do
         _poll_discovery_audit();
     }
 
-    if (validator && validator->step()) {
-        validation = validator->get_report();
-        _free_validator();
-        VLOG(1, "World: validation report: ", to_json(validation));
-    }
-
     exec_time++;
 
     if (frames_until_loaded < 0 && is_load_complete(has_camera ? &last_load_centre : nullptr)) {
@@ -401,41 +378,8 @@ void World::frame(const Float3 *p_camera_pos, const Float3 *p_camera_forward, do
     }
 }
 
-void World::_free_validator() {
-    validator->destroy(); // its legacy mesher stops now (its meshes freed), the object goes on the device's thread
-    validator = nullptr;
-    validator_host.reset();
-}
-
-bool World::debug_validate(int p_count, const str &p_dump_dir) {
-    OV_ERR_FAIL_COND_V_MSG(!direct_mesher, false, "debug_validate needs pipeline_mode = GPU Direct.");
-    OV_ERR_FAIL_COND_V_MSG(validator, false, "A validation is already running.");
-    OV_ERR_FAIL_COND_V_MSG(!hosts.hidden_meshes, false, "debug_validate needs a host for the legacy meshes.");
-    std::vector<MeshValidator::Target> candidates;
-    for (const auto &kv : state.loaded_chunk) {
-        if (kv.second.page >= 0) {
-            MeshValidator::Target t;
-            t.chunk_id = kv.first;
-            t.page = kv.second.page;
-            t.offset = kv.second.quad_offset;
-            t.count = kv.second.quad_count;
-            t.palette = kv.second.palette;
-            candidates.push_back(t);
-        }
-    }
-    OV_ERR_FAIL_COND_V_MSG(candidates.empty(), false, "No non-empty loaded chunk to validate.");
-    // (hash map order is arbitrary but stable enough for a spread of LODs)
-    const std::vector<MeshValidator::Target> targets = MeshValidator::pick_targets(candidates, p_count);
-    validation = ov::Value::object();
-    validator_host = hosts.hidden_meshes();
-    validator = new MeshValidator();
-    validator->start(targets, sdf.get(), config.chunk_param, content.lods, direct_mesher->get_pool(), validator_host.get(), p_dump_dir,
-            config.dual_contouring);
-    return true;
-}
-
 bool World::debug_audit_pages() {
-    OV_ERR_FAIL_COND_V_MSG(!direct_mesher, false, "debug_audit_pages needs pipeline_mode = GPU Direct.");
+    OV_ERR_FAIL_COND_V_MSG(!direct_mesher, false, "debug_audit_pages needs a started world.");
     OV_ERR_FAIL_COND_V_MSG(auditor, false, "An audit is already running.");
     std::map<int, size_t> index_of_page;
     std::vector<PageAuditor::PageInfo> pages;
@@ -458,7 +402,7 @@ bool World::debug_audit_pages() {
 }
 
 bool World::debug_audit_discovery() {
-    OV_ERR_FAIL_COND_V_MSG(!direct_mesher, false, "debug_audit_discovery needs pipeline_mode = GPU Direct.");
+    OV_ERR_FAIL_COND_V_MSG(!direct_mesher, false, "debug_audit_discovery needs a started world.");
     OV_ERR_FAIL_COND_V_MSG(discovery_audit.running, false, "A discovery audit is already running.");
     OV_ERR_FAIL_COND_V_MSG(!scan_received, false, "No scan received yet.");
 
@@ -569,20 +513,14 @@ bool World::is_load_complete(const Float3 *p_load_centre) {
     if (p_load_centre != nullptr && (ChunkDiscoverer::view_changed(scan_view, chunk_discoverer->get_view()) || ChunkMath::chunk_at_render(*p_load_centre, config.chunk_param) != scan_view.camera_chunk)) {
         return false;
     }
-    if (direct_mesher) {
-        return direct_mesher->is_idle();
-    }
-    return gpu_mesher->is_idle();
+    return direct_mesher->is_idle();
 }
 
 bool World::is_edit_settled() {
     if (!started) {
         return false;
     }
-    if (direct_mesher) {
-        return direct_mesher->is_edit_settled();
-    }
-    return gpu_mesher->is_idle();
+    return direct_mesher->is_edit_settled();
 }
 
 double World::load_radius() const {
@@ -678,18 +616,14 @@ bool World::recenter(const Float3 &p_camera_pos, Float3 &r_shift) {
 bool World::rebase(const ChunkId &p_origin, Float3 &r_shift) {
     OV_ERR_FAIL_COND_V_MSG(!started, false, "World: rebase before start.");
     OV_ERR_FAIL_COND_V_MSG(!ChunkMath::is_render_origin(p_origin), false, "World: a render origin is an even chunk id.");
-    // The validator, the auditor and the discovery audit hold render positions and page ranges from their start.
-    if (validator || auditor || discovery_audit.running) {
+    // The auditor and the discovery audit hold render positions and page ranges from their start.
+    if (auditor || discovery_audit.running) {
         return false;
     }
     ChunkParam &chunk_param = config.chunk_param;
     r_shift = ChunkMath::origin_shift_m(chunk_param.origin_chunk, p_origin, chunk_param);
     chunk_param.origin_chunk = p_origin;
-    if (direct_mesher) {
-        direct_mesher->set_render_origin(p_origin);
-    } else {
-        gpu_mesher->set_render_origin(p_origin);
-    }
+    direct_mesher->set_render_origin(p_origin);
     last_load_centre = last_load_centre - r_shift;
     if (clouds) {
         clouds->shift(r_shift);
@@ -721,7 +655,6 @@ ov::Value World::debug_stats() {
         return d;
     }
     const ChunkParam &chunk_param = config.chunk_param;
-    d["pipeline_mode"] = int(config.pipeline_mode);
     d["terrain_mode"] = config.terrain_mode;
     d["lods"] = content.lods;
     ov::Value origin = ov::Value::object();
@@ -808,7 +741,7 @@ ov::Value World::debug_stats() {
 
     d["chunk_rids_alive"] = DebugLog::chunk_rids_created.load() - DebugLog::chunk_rids_freed.load();
     d["discoverer"] = chunk_discoverer->get_stats();
-    d["mesher"] = direct_mesher ? direct_mesher->get_stats() : gpu_mesher->get_stats();
+    d["mesher"] = direct_mesher->get_stats();
 
     ov::Value edits = ov::Value::object();
     edits["edits"] = edit_stats.edits;
@@ -835,15 +768,12 @@ void World::stop(Kept *r_kept) {
         return;
     }
     if (pages != nullptr) {
-        pages->destroy(); // the legacy mesher's world: none taken
+        pages->destroy(); // handed to reuse after start: no mesher takes them
     }
     started = false;
 
-    // Debug tools first: the validator owns a legacy mesher, and both hold pages of the direct one.
-    // A run may be in flight: they delete themselves once their readbacks have arrived.
-    if (validator) {
-        _free_validator();
-    }
+    // Debug tools first: the auditor holds pages of the mesher. A run may be in flight: it deletes itself once its
+    // readbacks have arrived.
     if (auditor) {
         auditor->destroy();
         auditor = nullptr;
@@ -878,20 +808,11 @@ void World::stop(Kept *r_kept) {
         atmosphere->destroy(); // deletes itself on the device's thread
         atmosphere = nullptr;
     }
-    if (direct_mesher) {
-        QuadPagePool *kept = direct_mesher->destroy(r_kept != nullptr); // deletes itself on the device's thread
-        if (r_kept != nullptr) {
-            r_kept->pages = kept;
-        }
-        direct_mesher = nullptr;
-    } else if (r_kept != nullptr) {
-        r_kept->pages = nullptr;
+    QuadPagePool *kept = direct_mesher->destroy(r_kept != nullptr); // deletes itself on the device's thread
+    if (r_kept != nullptr) {
+        r_kept->pages = kept;
     }
-    if (gpu_mesher) {
-        gpu_mesher->stop();
-        delete gpu_mesher;
-        gpu_mesher = nullptr;
-    }
+    direct_mesher = nullptr;
 
     VLOG(1, "World: teardown, chunk instances created=", DebugLog::chunk_rids_created.load(), " freed=", DebugLog::chunk_rids_freed.load());
     state.clear();

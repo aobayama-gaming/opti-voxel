@@ -3,8 +3,8 @@
 #include "ov/on_error.hpp"
 #include "ov/str.hpp"
 
-// GLSL snippets shared by the compute meshers (GPU_mesher legacy path and GPU_direct_mesher).
-// They are stitched together at runtime by each mesher's compile step.
+// GLSL snippets of the compute mesher (GPU_direct_mesher), stitched together at runtime by its
+// compile step.
 
 inline constexpr const char GLSL_STRUCT_DEFINITION[] = R"glsl(
 
@@ -122,9 +122,8 @@ vec4 sdf_softmax(vec4 a, vec4 b, float intensity) {
 
 )glsl";
 
-// Dual contouring of Hermite data. Both meshers' vertex pass replaces its mass point with a call to
-// qef_vertex (GPU_mesher / GPU_direct_mesher), so the placement is one function: the two meshers
-// compute the same vertex, which is what MeshValidator's direct == legacy comparison relies on.
+// Dual contouring of Hermite data. The mesher's vertex pass replaces its mass point with a call to
+// qef_vertex.
 //
 // The QEF
 //
@@ -145,10 +144,9 @@ inline constexpr const char GLSL_QEF_VERTEX[] = R"glsl(
 // r_fallback_normal: the mean of the Hermite normals, the vertex normal where the pass's gradient at
 // the placed vertex vanishes (vertex_normal). NaN when they cancel: vertex_normal then points up.
 vec3 qef_vertex(uvec3 gid, vec3 mass_point, float edge_t[12], out vec3 r_fallback_normal) {
-    // Every float here is `precise`: the two meshers compile this same text into two different
-    // shaders (different pipelines, and the legacy one on its own RenderingDevice), and without
-    // `precise` the compilers may reassociate or fuse multiply-adds differently, which the
-    // near-singular solve below would then amplify past the validator's tolerance.
+    // Every float here is `precise`: without it the compilers may reassociate or fuse multiply-adds
+    // differently from one pipeline (or device) to the next, which the near-singular solve below
+    // would then amplify into different vertices.
     // The cell's 8 corner gradients, corner index c = x + 2 y + 4 z (the sample grid).
     precise vec3 corner_gradient[8] = vec3[8](
             sdf_sample[get_flat_index_z(gid + uvec3(0u, 0u, 0u))].xyz,
@@ -255,7 +253,7 @@ vec3 qef_vertex(uvec3 gid, vec3 mass_point, float edge_t[12], out vec3 r_fallbac
 
 )glsl";
 
-// Both meshers' vertex normal, with or without dual contouring (spliced before GLSL_QEF_VERTEX).
+// The vertex pass's normal, with or without dual contouring (spliced before GLSL_QEF_VERTEX).
 inline constexpr const char GLSL_VERTEX_NORMAL[] = R"glsl(
 
 // The vertex normal: the SDF gradient at the vertex, else p_fallback (dual contouring: the mean of the
@@ -275,7 +273,7 @@ vec3 vertex_normal(vec3 p_fallback, vec3 p_gradient) {
 
 )glsl";
 
-// The two lines of a vertex pass dual contouring rewrites; both meshers spell them alike. The
+// The two lines of the vertex pass dual contouring rewrites. The
 // mass-point line is the division that turns the sum of the crossings into their mean, so the call
 // divides: handed the sum, qef_vertex clamped the vertex onto the cell's far faces (terraces).
 inline constexpr const char GLSL_MASS_POINT_VERTEX[] = "local_vertex /= float(active_edge_count);";
@@ -286,7 +284,7 @@ inline constexpr const char GLSL_QEF_VERTEX_CALL[] =
 inline constexpr const char GLSL_SURFACE_NORMAL[] = "vec3 surface_normal = vertex_normal(vec3(0.0), ";
 inline constexpr const char GLSL_QEF_SURFACE_NORMAL[] = "vec3 surface_normal = vertex_normal(qef_fallback_normal, ";
 
-// A mesher's vertex pass with dual contouring (GLSL_QEF_VERTEX must be in the shader). A pass that
+// The vertex pass with dual contouring (GLSL_QEF_VERTEX must be in the shader). A pass that
 // doesn't spell each line exactly once is returned unchanged, with an error: it meshes Surface Nets.
 inline ov::str dual_contouring_pass(const ov::str &p_pass) {
     OV_ERR_FAIL_COND_V_MSG(ov::count(p_pass, GLSL_MASS_POINT_VERTEX) != 1 || ov::count(p_pass, GLSL_SURFACE_NORMAL) != 1, p_pass,

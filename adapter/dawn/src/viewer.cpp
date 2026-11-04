@@ -234,7 +234,6 @@ int run_viewer(DawnContext &p_context, const ViewerOptions &p_options) {
 
     World world;
     World::Settings &s = world.settings();
-    s.pipeline_mode = World::PIPELINE_GPU_DIRECT;
     s.world_path = p_options.world;
     s.lod_pixel_error = p_options.lod_error;
     s.lod_pixel_error_back = p_options.lod_error_back;

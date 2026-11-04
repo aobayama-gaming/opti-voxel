@@ -2,11 +2,11 @@
 # Build the extension, run the scripted bench scene, check the log for problems, print a summary.
 #
 #   tools/bench.sh [--no-build] [--cool=1] [--tag=name] [bench.gd args...]
-#   e.g. tools/bench.sh --mode=legacy --scenario=load --shot=loaded:loaded.png
+#   e.g. tools/bench.sh --scenario=load --shot=loaded:loaded.png
 #
 # --cool=1 lets the GPU cool down before the run (perf comparisons only: bench_ab.sh / bench_compare.sh).
 # It stops at BENCH_COOL_C (65 C), when the temperature stops falling, or after BENCH_COOLDOWN_MAX_S (30 s).
-# Correctness runs (validate, audit, parity) don't need it and start immediately.
+# Correctness runs (audit, parity) don't need it and start immediately.
 #
 # --profile=1 (passed on to bench.gd) attaches tools/debug_sink.py as Godot's remote debugger, so that the
 # renderer times every pass, and writes <run>/profile.json + profile.md (tools/profile_report.py). With a
@@ -22,7 +22,7 @@
 # Relative --shot paths are written into the run directory. Outputs land in
 # bench/results/<timestamp>-<tag>/ : stats.json, godot.log, screenshots.
 # Exit code: 0 ok, 1 build failed, 2 godot crashed/timed out, 3 errors found in log,
-# 4 a requested --validate / --audit / --discovery_audit reported ok=false, or a loaded run did not
+# 4 a requested --audit / --discovery_audit reported ok=false, or a loaded run did not
 # settle (loaded chunks != scanned chunks), or a --destroy_verify=1 run found a mismatch.
 set -uo pipefail
 
@@ -44,9 +44,9 @@ for a in "$@"; do
     esac
 done
 
-MODE="legacy"
-for a in "${PASS[@]}"; do [[ "$a" == --mode=* ]] && MODE="${a#--mode=}"; done
-RUN_DIR="$ROOT/bench/results/$(date +%Y%m%d-%H%M%S)-${TAG:-$MODE}"
+SCENARIO="load"
+for a in "${PASS[@]}"; do [[ "$a" == --scenario=* ]] && SCENARIO="${a#--scenario=}"; done
+RUN_DIR="$ROOT/bench/results/$(date +%Y%m%d-%H%M%S)-${TAG:-$SCENARIO}"
 mkdir -p "$RUN_DIR"
 
 # Make relative screenshot paths land in the run dir.
@@ -178,7 +178,7 @@ p = sys.argv[1]
 if not os.path.exists(p):
     print(">> no stats.json produced"); sys.exit(0)
 d = json.load(open(p))
-print(f">> mode={d['args'].get('mode','legacy')} timed_out={d['timed_out']} frames={d['total_frames']}")
+print(f">> scenario={d['args'].get('scenario','load')} timed_out={d['timed_out']} frames={d['total_frames']}")
 tel = d.get("telemetry", {})
 if tel:
     print(f">> GPU: profile={tel.get('platform_profile')} clock median={tel.get('gpu_clock_mhz_median')} min={tel.get('gpu_clock_mhz_min')} MHz"
@@ -189,13 +189,6 @@ for name, ph in d["phases"].items():
     print(f"   [{name:9}] frames={ph['frames']:5} wall={ph['wall_ms']:8.0f}ms  frame p50={f['p50']:.2f} p99={f['p99']:.2f} max={f['max']:.2f}"
           f"  gpu p50={g['p50']:.2f}  loaded={ch.get('loaded')} pending={ch.get('pending')} tris={ch.get('live_triangles')} drawn_tris={ch.get('drawn_triangles')}"
           f"  rss={ph['memory']['rss_mb']:.0f}MB vram={ph['memory']['video_mem_mb']:.0f}MB")
-v = d.get("validation") or {}
-if v:
-    print(f">> VALIDATION ok={v.get('ok')} chunks_exact={v.get('chunks_exact')}/{v.get('chunks')} matched={v.get('matched_tris')}/{v.get('legacy_tris')}"
-          f" unexplained={v.get('unexplained_anomalies')} legacy_unmatched={v.get('legacy_unmatched_tris')} direct_unmatched={v.get('direct_unmatched_tris')} flipped={v.get('winding_flipped_tris')}"
-          f" max_pos={v.get('max_position_error_cells', 0):.4f} cells normal max={v.get('max_normal_error_deg', 0):.2f} mean={v.get('mean_normal_error_deg', 0):.3f} deg >5deg={v.get('normals_over_5deg')}")
-    if v.get("error"):
-        print(">> VALIDATION ERROR:", v["error"])
 a = d.get("audit") or {}
 if a:
     print(f">> AUDIT ok={a.get('ok')} live={a.get('live')} dead_zero={a.get('dead_zero')} stale={a.get('stale')}"
@@ -264,19 +257,19 @@ fi
 echo "$RUN_DIR" > "$ROOT/bench/results/LAST"
 [[ $CODE -ne 0 ]] && exit 2
 [[ $ERRORS -gt 0 ]] && exit 3
-# A validation or audit that ran must have passed (empty dicts: not requested).
+# An audit that ran must have passed (empty dicts: not requested).
 CHECKS_OK=$(python3 -c "
 import json, sys
 try:
     d = json.load(open(sys.argv[1]))
 except Exception:
     print(1); sys.exit()
-v, a, da = d.get('validation') or {}, d.get('audit') or {}, d.get('discovery_audit') or {}
+a, da = d.get('audit') or {}, d.get('discovery_audit') or {}
 ft = d.get('final_terrain', {})
 ch = ft.get('chunks', {})
 settled = not ft.get('load_complete') or (ch.get('loaded_not_scanned', 0) == 0 and ch.get('scanned_not_loaded', 0) == 0)
 dv = ft.get('destroy') or {}
 destroy_ok = not dv.get('verify') or (dv.get('verify_mismatches', 0) == 0 and dv.get('delta_mismatches', 0) == 0 and dv.get('octree_violations', 0) == 0)
-print(int((not v or bool(v.get('ok'))) and (not a or bool(a.get('ok'))) and (not da or bool(da.get('ok'))) and settled and destroy_ok))" "$RUN_DIR/stats.json")
-[[ "$CHECKS_OK" != "1" ]] && { echo ">> VALIDATION/AUDIT/DISCOVERY/SETTLE/DESTROY CHECK FAILED"; exit 4; }
+print(int((not a or bool(a.get('ok'))) and (not da or bool(da.get('ok'))) and settled and destroy_ok))" "$RUN_DIR/stats.json")
+[[ "$CHECKS_OK" != "1" ]] && { echo ">> AUDIT/DISCOVERY/SETTLE/DESTROY CHECK FAILED"; exit 4; }
 exit 0

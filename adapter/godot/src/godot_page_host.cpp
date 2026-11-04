@@ -293,7 +293,7 @@ GodotPageHost::GodotPageHost(RID p_scenario, RDDevice *p_device) :
         scenario(p_scenario), device(p_device) {
     RenderingServer *rs = RenderingServer::get_singleton();
     // Shared base mesh: QUAD_GROUP quads, corners A B C D = vertices 4q+0..3, triangles A,B,D / A,D,C
-    // (== the legacy emit_quad positive winding). Positions are placeholders: the shader ignores them.
+    // (the emit pass's positive winding). Positions are placeholders: the shader ignores them.
     PackedVector3Array vertices;
     PackedInt32Array indices;
     for (uint32_t q = 0; q < QuadPagePool::QUAD_GROUP; q++) {

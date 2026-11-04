@@ -42,7 +42,7 @@ Engine, GPU and float traps that already cost a debugging session each.
   read the last contents (measured: the coverage masks of a multi-round flush went to the wrong rows, the hidden quads
   mostly never showed). One staging texture per upload within a frame (`QuadPagePool::rt_set_hidden`).
 - Many MB of `texture_get_data_async` in one frame crashes 4.6.3 (download staging overflow):
-  throttle readbacks (validator/auditor do 2 pages per frame).
+  throttle readbacks (the auditor does 2 pages per frame).
 - An interrupted scons (session moved, killed shell) can leave 0-byte `.os` files that scons later
   treats as up to date: the `.so` links but fails to load (`undefined symbol: _ZTV15GPUDirectMesher`)
   and the bench loops on script errors. `find src -name "*.os" -size 0 -delete`, then rebuild.
@@ -54,7 +54,7 @@ Engine, GPU and float traps that already cost a debugging session each.
 - SDF samples of exactly 0.0 happen (float heights hit the 0.5 m grid ~1 in 16k vertical crossings).
   Every pass uses the same side rule, solid = `!(w > 0)`, and a crossing's `t` is clamped above 0
   because `t > 0` is what marks a crossing downstream. Mixing `< 0` and `> 0`, or letting t reach 0,
-  drops or flips quads: small diamond/hexagon holes, in both pipelines (the validator can't see it).
+  drops or flips quads: small diamond/hexagon holes.
 - `RenderingServer::shader_set_code` does not run the shader preprocessor: no `#define`.
 - A Godot material's uniforms live in one uniform buffer, 16 bytes per element of a uniform array: past 64 KB the
   draw hangs the NVIDIA GPU (Xid 109, CTX SWITCH TIMEOUT, the device lost), with no error before. The biome mixer's
@@ -75,8 +75,8 @@ Engine, GPU and float traps that already cost a debugging session each.
   of the fbm and perlin probes (open); everything else matches.
 - `texture_rd_create` only wraps RD formats that have an `Image` equivalent: RG32UI / RGBA32UI fail
   ("Unsupported image format"), 16-bit integer formats (RGBA16UI) work.
-- Compaction moves chunks between pages: anything that holds page ranges across frames (validator,
-  auditor) must run with compaction paused (`VoxelTerrain::_process` skips it while they run), and
+- Compaction moves chunks between pages: anything that holds page ranges across frames (the
+  auditor) must run with compaction paused (`World::frame` skips it while it runs), and
   `to_destroy_chunk` holds stale copies until `_destroy_chunk`, so compact after it.
 - `Array` is shared by reference (Packed*Array are copy-on-write): don't clear an Array after
   binding it into a deferred callable.
@@ -112,7 +112,7 @@ Engine, GPU and float traps that already cost a debugging session each.
   themselves there (`destroy()` -> `_rt_destroy()`), after the render-thread work already queued
   for them (FIFO).
 - Async readback callbacks (`texture_get_data_async`, `buffer_get_data_async`) are NOT skipped when
-  their object is freed: they arrive frames later and run on freed memory (segfault in
-  `MeshValidator::_rt_on_page` when quitting mid-validation). An object with readbacks in flight
-  counts them and deletes itself when the last one lands (`MeshValidator` / `PageAuditor::destroy`,
+  their object is freed: they arrive frames later and run on freed memory (a segfault in the
+  removed mesh validator's page callback when quitting mid-validation). An object with readbacks in flight
+  counts them and deletes itself when the last one lands (`PageAuditor::destroy`,
   `GPUDirectMesher::_rt_destroy`, which frees its RIDs at once and only defers the delete).

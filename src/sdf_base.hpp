@@ -18,8 +18,8 @@
 #include <vector>
 
 // The instance table of an SDF (archetype instances): the fixed-size DefRecord array and the per-batch
-// list of instance indices. The SDF hands out the data; each mesher owns the buffers on its own
-// RenderingDevice (the legacy mesher runs on a local one), splices glsl_buffers() at the given bindings
+// list of instance indices. The SDF hands out the data; each user owns the buffers on its own
+// device, splices glsl_buffers() at the given bindings
 // and creates/frees two storage buffers. glsl_set_chunk() is spliced into main() to fill the ChunkInput
 // global g_sdf_chunk. The generated arch_fold (archetype_table.hpp) reads sdf_records / sdf_list.
 class SDFGpuTable {
@@ -76,7 +76,7 @@ public:
             uint32_t p_capacity_words, std::vector<std::vector<uint32_t>> *r_palettes = nullptr, std::vector<uint32_t> *r_streamed = nullptr) const = 0;
     // The entries every chunk palette starts with (ChunkPalette::build): {GROUND}, or with a climate GROUND then each
     // biome's material, a ground sample's palette index being 1 + its biome (SDFCascade::ground_material). Longer than
-    // one: every chunk's samples carry a material (the cascade writes it, both meshers read it), and the palette pool's
+    // one: every chunk's samples carry a material (the cascade writes it, the mesher reads it), and the palette pool's
     // ground block holds these entries.
     virtual const std::vector<uint32_t> &base_palette() const = 0;
 

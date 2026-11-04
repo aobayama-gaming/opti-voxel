@@ -1,10 +1,9 @@
 extends Node3D
 ## Scripted benchmark / debug driver. Run from the CLI, e.g.:
 ##   godot --path project --resolution 1280x720 res://debug/bench.tscn -- \
-##       --mode=legacy --scenario=load --out=/tmp/stats.json --shot=loaded:/tmp/a.png
+##       --scenario=load --out=/tmp/stats.json --shot=loaded:/tmp/a.png
 ##
 ## Args (all optional):
-##   --mode=legacy|direct         pipeline (default legacy)
 ##   --preset=NAME                a named argument set (debug/presets.gd; forest5cm = the perf target),
 ##                                explicit arguments override it
 ##   --scenario=load|fly|turn|turn_walk|edit|dig|rise|approach load: load + steady phase. fly: load, fly out and back, settle, steady.
@@ -56,16 +55,13 @@ extends Node3D
 ##                                thread's spans and hand-offs, the GPU's passes; ui.perfetto.dev) and the phases'
 ##                                start times in trace_phases.json; tools/engine_map.py <run> draws the map
 ##   --trace_max=N                the trace's event cap (default 2000000, ~120 B of JSON each), the rest dropped
-##   --audit=1                   direct: after steady, classify every drawn quad slot of every page;
+##   --audit=1                    after steady, classify every drawn quad slot of every page;
 ##                                writes per-chunk mesh digests to chunks.json next to --out
-##   --validate=N                 direct: after steady, compare N chunks against the legacy mesher
-##   --batch=N                    legacy batch size
-##   --trim=1                     legacy: trim the zero-padded index buffers (pre-existing bug)
-##   --dual_contouring=1          both meshers: DC-lite vertex placement (sharp UNION/SUBTRACT creases)
-##   --batch=N --pages=N --cap=N  direct: batch size, pages per batch, page capacity (quads)
-##   --batches_per_frame=N        direct: mesher batches dispatched per frame at most (default 4, at most 16)
-##   --mesher_budget=MS           direct: estimated GPU ms of mesh batches per frame (default 0 = whole batches)
-##   --max_in_flight=N            direct: mesher batches waiting for their directory at most (default 3 per batch per frame)
+##   --dual_contouring=1          DC-lite vertex placement (sharp UNION/SUBTRACT creases)
+##   --batch=N --pages=N --cap=N  mesher batch size, pages per batch, page capacity (quads)
+##   --batches_per_frame=N        mesher batches dispatched per frame at most (default 4, at most 16)
+##   --mesher_budget=MS           estimated GPU ms of mesh batches per frame (default 0 = whole batches)
+##   --max_in_flight=N            mesher batches waiting for their directory at most (default 3 per batch per frame)
 ##   --world=PATH                 the world file (VoxelTerrain.world_path, src/world_file.hpp): voxel size, LODs, trees,
 ##                                planet, climate, look (default: the scene's, res://worlds/default.world.json)
 ##   --terrain=cascade|shapes
@@ -89,11 +85,11 @@ extends Node3D
 ##   --lod_far_limit=0            scan past the camera's far plane too (VoxelTerrain.lod_far_limit, default 1)
 ##   --skirt=F                    skirt depth in voxels of each chunk's LOD (default 1.0, 0 = off)
 ##   --origin=X,Y,Z               integer world origin in LOD0 voxels (int64, snapped to the root chunk)
-##   --compact=0|1                direct: page compaction (default 1)
-##   --compact_extent=F           direct: max width of a re-packed page, in its smallest chunks (default 8)
-##   --view=N                     direct: debug view (0 shaded 1 normals 2 lod 3 page 4 wire 5 chunk ... 8 faceted 9 material 12 biome)
+##   --compact=0|1                page compaction (default 1)
+##   --compact_extent=F           max width of a re-packed page, in its smallest chunks (default 8)
+##   --view=N                     debug view (0 shaded 1 normals 2 lod 3 page 4 wire 5 chunk ... 8 faceted 9 material 12 biome)
 ##   --grade=0                    no colour grading (the scene's LUT, res://grade_lut.png, tools/make_lut.py)
-##   --probe=PREFIX               direct: once loaded, PREFIX_shaded.png, then the bark seam probe views 10 and 11
+##   --probe=PREFIX               once loaded, PREFIX_shaded.png, then the bark seam probe views 10 and 11
 ##                                as PREFIX_10.png and PREFIX_11.png, raw (tools/bark_seams.sh)
 ##   --cam_pos=X,Y,Z              camera start position in metres (Godot space; default: the scene's)
 ##   --above_ground=M             move the camera along the terrain's up to M metres above the terrain under it
@@ -113,18 +109,17 @@ extends Node3D
 ##   --walk_gpu=0|1               VoxelTerrain.walk_gpu: the streamed sources' site walks read the ground on the GPU (default 1)
 ##   --walk_batch=N               site walks: walk keys a drain task walks together on the GPU field (default 64)
 ##   --walk_verify=1              site walks: every batch of the GPU's readings read again on the CPU, ERROR on a difference
-##   --discovery_audit=1          direct: after steady, rebuild the scan without culling and count the
+##   --discovery_audit=1          after steady, rebuild the scan without culling and count the
 ##                                quads of every culled chunk on the GPU (any quad = a miss = a hole)
 ##   --depth_grab=1               after steady, read one frame's scene depth and its camera back to depth.f32 +
 ##                                depth.json next to --out (DepthGrab); with --audit=1, tools/occlusion_census.py
 ##                                <run> tells which loaded chunks that depth hides
 ##
-## Checks after steady run in this order: discovery_audit, depth_grab, audit, validate.
+## Checks after steady run in this order: discovery_audit, depth_grab, audit.
 ##
 ## Render GPU/CPU time is only read during the "steady" phase: reading it forces a
 ## render-thread sync, which would distort the load/fly frame timings.
 
-const MODES := {"legacy": 1, "direct": 2}
 const Presets = preload("res://debug/presets.gd")
 
 var args := {}
@@ -153,7 +148,6 @@ var phase_start_usec := 0
 var samples := {}  # phase -> {frame_ms: [], gpu_ms: [], cpu_render_ms: [], pending: []}
 var phase_results := {}
 var timed_out := false
-var validation_report := {}
 var audit_report := {}
 var discovery_audit_report := {}
 const DepthGrabScript := preload("res://debug/depth_grab.gd")
@@ -206,15 +200,7 @@ func _ready() -> void:
 			push_warning("BENCH: --profile=1 without a debugger: the renderer only times the viewport (use bench.sh --profile=1)")
 	if args.get("trace", "0") == "1":
 		terrain.debug_trace_start(int(args.get("trace_max", "2000000")))
-	var mode: String = args.get("mode", "legacy")
-	if not MODES.has(mode):
-		push_error("BENCH: unknown --mode=%s (expected legacy or direct)" % mode)
-		set_process(false)
-		get_tree().quit(1)
-		return
-	terrain.pipeline_mode = MODES[mode]
 	if args.has("batch"):
-		terrain.legacy_batch_size = int(args["batch"])
 		terrain.direct_batch_size = int(args["batch"])
 	if args.has("pages"):
 		terrain.direct_pages_per_batch = int(args["pages"])
@@ -229,7 +215,6 @@ func _ready() -> void:
 	terrain.debug_view = int(args.get("view", "0"))
 	if args.get("grade", "1") == "0":
 		Presets.ungrade(self)
-	terrain.legacy_trim_indices = args.get("trim", "0") == "1"
 	terrain.dual_contouring = args.get("dual_contouring", "0") == "1"
 	if not Presets.removed_args().is_empty():
 		set_process(false)
@@ -337,7 +322,7 @@ func _ready() -> void:
 
 
 	_begin_phase("load")
-	print("BENCH: start mode=%s scenario=%s" % [args.get("mode", "legacy"), args.get("scenario", "load")])
+	print("BENCH: start scenario=%s" % args.get("scenario", "load"))
 
 
 func _parse_args() -> void:
@@ -662,7 +647,7 @@ func _process(delta: float) -> void:
 		"steady":
 			if phase_frame >= steady:
 				_end_phase()
-				for c in ["discovery_audit", "depth_grab", "audit", "validate"]:
+				for c in ["discovery_audit", "depth_grab", "audit"]:
 					if args.has(c):
 						checks.append(c)
 				_next_check()
@@ -687,16 +672,6 @@ func _process(delta: float) -> void:
 				print("BENCH: audit ", JSON.stringify(shown))
 				_next_check()
 				return
-		"validate":
-			var report: Dictionary = terrain.get_validation_report()
-			if not report.is_empty():
-				validation_report = report
-				print("BENCH: validation ok=%s matched=%s/%s legacy_unmatched=%s direct_unmatched=%s flipped=%s max_pos=%s cells max_normal=%s deg" % [
-					report.get("ok"), report.get("matched_tris"), report.get("legacy_tris"), report.get("legacy_unmatched_tris"),
-					report.get("direct_unmatched_tris"), report.get("winding_flipped_tris"),
-					report.get("max_position_error_cells"), report.get("max_normal_error_deg")])
-				_next_check()
-				return
 
 	if frame >= int(args.get("max_frames", "20000")):
 		timed_out = true
@@ -717,8 +692,6 @@ func _next_check() -> void:
 			depth_grab.request()
 		"audit":
 			terrain.debug_audit_pages()
-		"validate":
-			terrain.debug_validate(int(args["validate"]), args["out"].get_base_dir() if args.has("out") else "")
 
 
 func _take_shots(when: String) -> void:
@@ -811,7 +784,6 @@ func _finish() -> void:
 		"timed_out": timed_out,
 		"total_frames": frame,
 		"phases": phase_results,
-		"validation": validation_report,
 		"audit": audit_report,
 		"discovery_audit": discovery_audit_report,
 		"final_terrain": final_terrain,

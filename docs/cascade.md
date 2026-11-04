@@ -34,8 +34,8 @@ CPU reference (`src/cascade.hpp`) and GPU passes (`src/cascade_glsl.*`), bit-ide
   tests its value where the CPU does, so a value reaching 0, a shape's type or notes turning constant keep the text.
   The same code generates both: the specialised text is the generic one with those tests folded, and the bits are the
   same (`docs/climate.md`). An edit of a value compiles nothing (the Godot device keeps the SPIR-V of every text by
-  text, `RDDevice`). Engine constants (the kernel's fade, the noise's means) stay literals. `CascadePasses` owns the passes per device (`ov::gpu::Device`); the direct mesher runs
-  them in place of its sdf pass (and in the discovery audit), the legacy one in sub-batches of 128.
+  text, `RDDevice`). Engine constants (the kernel's fade, the noise's means) stay literals. `CascadePasses` owns the passes per device (`ov::gpu::Device`); the mesher runs
+  them in place of its sdf pass (and in the discovery audit).
 - **Carry groups** (`Cascade::carry_slot`, `Modulation::derive`): 4 slots each after the field groups that a run's
   level above its last derives from its channels before its insertions (the climate its own bands read: one climate per
   point) and holds after its flush, and H carries to the last level like a field (the
@@ -51,7 +51,7 @@ CPU reference (`src/cascade.hpp`) and GPU passes (`src/cascade_glsl.*`), bit-ide
   (no formula retyped). A run whose last level reads the carry starts at least one level above it, empty above the
   highest band (`Spec::run_top`, `checked_top`, the GPU's `top`).
 - **The cascade only exists on lattice points.** `SDFCascade::evaluate(p, lod)` takes `frac == 0` and a voxel
-  multiple of 2^lod only (ERR and 0 otherwise); the discoverer's corners and the validator's cell corners are
+  multiple of 2^lod only (ERR and 0 otherwise); the discoverer's corners and the mesher's cell corners are
   such points, `get_sdf_at` snaps to the LOD0 voxel. There is no off-lattice evaluation and no GLSL
   `terrain_sdf`: vertex normals are the trilinear blend of the cell's 8 sample gradients
-  (`CascadeGLSL::GLSL_VERTEX_GRADIENT`), in both meshers. A new cascade terrain keeps this rule.
+  (`CascadeGLSL::GLSL_VERTEX_GRADIENT`). A new cascade terrain keeps this rule.

@@ -41,17 +41,16 @@ def main():
     digests = {k: load(f"{d}/chunks.json") for k, d in runs.items()}
     ok = True
 
-    lines = ["# Origin parity", "", "| run | origin (voxels) | " + " | ".join(n for n, _ in COUNTS) + " | nan | validation | audit |",
-             "|" + "---|" * (len(COUNTS) + 5)]
+    lines = ["# Origin parity", "", "| run | origin (voxels) | " + " | ".join(n for n, _ in COUNTS) + " | nan | audit |",
+             "|" + "---|" * (len(COUNTS) + 4)]
     for k, s in stats.items():
         t = s["final_terrain"]
         nan = t["mesher"].get("nan_vertices", 0)
-        val = (s.get("validation") or {}).get("ok", "-")
         aud = (s.get("audit") or {}).get("ok", "-")
-        run_ok = not nan and val in (True, "-") and aud is True
+        run_ok = not nan and aud is True
         ok &= run_ok
         lines.append(f"| {k} | {t['world_origin']['voxel']} | " + " | ".join(str(f(t)) for _, f in COUNTS) +
-                     f" | {nan} | {val} | {aud} |" + ("" if run_ok else " **failed**"))
+                     f" | {nan} | {aud} |" + ("" if run_ok else " **failed**"))
 
     lines += ["", "Same world point, different origins: per-chunk mesh digests.", "",
               "| pair | chunks a | chunks b | shared | identical | differing | " + " | ".join(SHOTS) + " |",

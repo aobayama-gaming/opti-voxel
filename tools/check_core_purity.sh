@@ -11,7 +11,7 @@
 #
 #   tools/check_core_purity.sh
 #
-# Exit code: 0 the core is clean, 1 a core file needs godot. Grow core_files, never shrink it.
+# Exit code: 0 the core is clean, 1 a core file needs godot. core_files only shrinks by deleting a file.
 
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

@@ -1,13 +1,13 @@
-# Meshing pipelines (`VoxelTerrain.pipeline_mode`)
+# Meshing pipeline (GPU Direct)
 
-The two meshers, the GPU budget and dual contouring.
+The mesher, the GPU budget and dual contouring.
 
-Both are core code on `ov::gpu::Device` (`gpu_device.hpp`); what draws their output is the adapter's (`PageHost`,
-`MeshHost`: Godot's in `adapter/godot/src/godot_page_host.*` and `godot_mesh_host.*`).
+The mesher is core code on `ov::gpu::Device` (`gpu_device.hpp`); what draws its output is the adapter's (`PageHost`:
+Godot's in `adapter/godot/src/godot_page_host.*`). The legacy mesher (CPU triangulation of a full readback, one mesh
+per chunk) and its triangle-by-triangle validator (`--validate=N`) are gone: correctness rests on the page audit, the
+origin parity and the GPU checks (`docs/testing.md`).
 
-- `1` GPU Legacy (`GPUMesher`): compute on a local device, full readback, CPU
-  triangulation, one mesh + instance per chunk (`MeshHost`). Kept as the correctness oracle and perf baseline.
-- `2` GPU Direct (`GPUDirectMesher`, default in `main_scene`): compute on the main device (Godot's main
+- GPU Direct (`GPUDirectMesher`): compute on the main device (Godot's main
   RenderingDevice: its work posted to the render thread, `Device::post`), quads written straight into `QuadPagePool`
   pages, which the host draws (Godot: MultiMesh instances of 64-quad groups, the page shader in
   `godot_page_host.cpp`) pulling their corners from a GPU-written RGBA16UI
@@ -35,8 +35,8 @@ Both are core code on `ov::gpu::Device` (`gpu_device.hpp`); what draws their out
   device and host hands its pool to the next (`World::stop(&kept)`, `World::reuse`: every page released, the
   in-flight batches' copies landing first): the next mesher draws on the same pages, none freed or made.
 - Dual contouring (`VoxelTerrain.dual_contouring`, `--dual_contouring=1` in `bench.gd` and the main scene;
-  off by default): both meshers' vertex pass places its vertex at a regularised QEF of the cell's Hermite
-  data instead of the mass point (`qef_vertex` in `gpu_glsl.hpp`, rewritten into both passes by
+  off by default): the vertex pass places its vertex at a regularised QEF of the cell's Hermite
+  data instead of the mass point (`qef_vertex` in `gpu_glsl.hpp`, rewritten into the pass by
   `dual_contouring_pass`). The Hermite normal at a crossing is the lerp of the edge's two corner gradients
   (no SDF evaluation, the same code on every terrain); tau = 0.15 * trace(A) / 3; the move is capped at
   0.5 cells from the mass point, then clamped to the cell; where the gradient at the placed vertex

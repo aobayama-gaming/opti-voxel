@@ -11,7 +11,7 @@
 using namespace ov::gpu;
 
 // The pages' textures: sampled by the host's page shader, copied into (batches, compaction, kills) and out of
-// (compaction, the validator's and auditor's readbacks).
+// (compaction, the auditor's readbacks).
 static constexpr uint32_t PAGE_USAGE = TEXTURE_SAMPLED | TEXTURE_COPY_DST | TEXTURE_COPY_SRC | TEXTURE_UPDATE;
 
 void QuadPagePool::initialize(Device *p_device, PageHost *p_host, uint32_t p_page_capacity, uint32_t p_initial_pages) {

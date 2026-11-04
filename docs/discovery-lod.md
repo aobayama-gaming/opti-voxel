@@ -48,7 +48,7 @@ Which chunks are scanned, loaded and dropped. Run `tools/discovery_audit.sh` aft
   first turn, then no rescan and no re-mesh. Walking on: the views fade with distance (no timer). `bench.gd
   --scenario=turn --turns=N` and `--scenario=turn_walk --walk=M`; `discoverer.delta_entered_total /
   delta_left_total` in each phase's stats count the churn.
-  Both meshers' queues are indexed by `ChunkMath::load_queue`: in the cone first, then by LOD, Morton order
+  The mesher's queues are indexed by `ChunkMath::load_queue`: in the cone first, then by LOD, Morton order
   inside (batches stay compact for page culling). `--scenario=turn` (bench.gd) turns the camera 360 degrees after the load.
   Cost with memory 0 (measured in PR 34): a turn re-meshes the cone's edges, and that churn fragments pages like a fly does (on dev, a fly out and
   back already leaves +64% draw calls): after one full turn at error 1 | 4, the steady state is +26% render GPU

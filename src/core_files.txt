@@ -1,5 +1,5 @@
 # The engine-free core: every file here compiles with no engine include path (tools/check_core_purity.sh).
-# Both adapters build it: SConstruct (all of src/) and adapter/dawn/CMakeLists.txt (these .cpp files). Grow it, never shrink it.
+# Both adapters build it: SConstruct (all of src/) and adapter/dawn/CMakeLists.txt (these .cpp files). It only shrinks by deleting a file.
 src/ov/types.hpp
 src/ov/format.hpp
 src/ov/containers.hpp
@@ -60,8 +60,6 @@ src/gpu_device_check.hpp
 src/gpu_device_check.cpp
 src/GPU_direct_mesher.cpp
 src/GPU_direct_mesher.hpp
-src/GPU_mesher.cpp
-src/GPU_mesher.hpp
 src/archetype_build.cpp
 src/archetype_gpu_table.cpp
 src/archetype_gpu_table.hpp
@@ -109,16 +107,12 @@ src/instance_stream.cpp
 src/instance_stream.hpp
 src/instance_stream_stats.cpp
 src/instance_stream_walks.cpp
-src/legacy_mesher_glsl.hpp
 src/local_gpu_thread.cpp
 src/local_gpu_thread.hpp
 src/local_points_gpu.cpp
 src/local_points_gpu.hpp
 src/material_library.cpp
 src/material_library.hpp
-src/mesh_host.hpp
-src/mesh_validator.cpp
-src/mesh_validator.hpp
 src/moment_layers.cpp
 src/moment_layers.hpp
 src/ov/color.hpp

@@ -106,7 +106,7 @@ public:
     bool is_edit_settled() const;
     // Re-packs sparse pages and frees spare ones. Rewrites page/offset of the moved chunks in
     // r_state.loaded_chunk, so call it after the frame's chunk destruction (to_destroy_chunk holds
-    // copies) and not while something holds page ranges (validator, auditor).
+    // copies) and not while something holds page ranges (the auditor).
     void compact(VoxelState &r_state);
 
     void release_chunk(const ChunkOutput &p_chunk) override;

@@ -74,7 +74,7 @@ for c in "${CASES[@]}"; do
     fi
     echo ">> $label: $args ${EXTRA[*]:-}"
     # shellcheck disable=SC2086
-    "$ROOT/tools/bench.sh" --no-build --tag="disc-$label" --mode=direct --scenario=load --steady=10 \
+    "$ROOT/tools/bench.sh" --no-build --tag="disc-$label" --scenario=load --steady=10 \
         --discovery_audit=1 $args "${EXTRA[@]}" > /dev/null 2>&1
     code=$?
     dir=$(cat "$ROOT/bench/results/LAST")

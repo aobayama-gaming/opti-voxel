@@ -4,8 +4,8 @@
 #
 #   tools/check.sh [--no-build] [--spike] [--discovery] [--keep-going]
 #
-# Steps: build, C++ unit tests (seconds, first so they fail fast), direct load run with validation +
-# page audit + discovery audit, origin parity (7 runs), integer-frame test, the QuadPagePool spike
+# Steps: build, C++ unit tests (seconds, first so they fail fast), load run with page audit +
+# discovery audit, origin parity (7 runs), integer-frame test, the QuadPagePool spike
 # when --spike is given or src/quad_page_pool* differs from dev, the discovery miss audit over 9
 # poses (tools/discovery_audit.sh) when --discovery is given or the discoverer / SDF sources differ
 # from dev.
@@ -80,9 +80,9 @@ spike() {
 
 [[ $BUILD == 1 ]] && step build build
 step unit "$ROOT/tools/unit_test.sh" --no-build
-step direct "$ROOT/tools/bench.sh" --no-build --tag=check --mode=direct --scenario=load --steady=60 \
-    --validate=64 --audit=1 --discovery_audit=1
-step parity "$ROOT/tools/origin_parity.sh" -- --mode=direct --validate=64 --audit=1
+step load "$ROOT/tools/bench.sh" --no-build --tag=check --scenario=load --steady=60 \
+    --audit=1 --discovery_audit=1
+step parity "$ROOT/tools/origin_parity.sh" -- --audit=1
 step frame "$ROOT/tools/frame_test.sh" --no-build
 [[ $SPIKE == 1 ]] && step spike spike
 [[ $DISCOVERY == 1 ]] && step discovery "$ROOT/tools/discovery_audit.sh"

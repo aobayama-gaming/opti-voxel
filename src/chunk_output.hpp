@@ -8,8 +8,7 @@
 struct ChunkOutput;
 
 // The owner of a chunk's render resources: the mesher that made it (GPUDirectMesher: a quad range inside a shared
-// MultiMesh page; GPUMesher: its own mesh and instance, held under the chunk's handle). The core holds outputs and
-// hands them back to their owner to free.
+// MultiMesh page). The core holds outputs and hands them back to their owner to free.
 struct ChunkReleaser {
     virtual ~ChunkReleaser() = default;
     virtual void release_chunk(const ChunkOutput &p_chunk) = 0;
