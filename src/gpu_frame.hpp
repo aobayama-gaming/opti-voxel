@@ -5,7 +5,7 @@
 
 #include "ov/format.hpp"
 
-// The integer frame (world_coord.hpp) on the GPU, shared by both meshers and the FrameSpike harness.
+// The integer frame (world_coord.hpp) on the GPU, shared by the mesher and the FrameSpike harness.
 //
 // ChunkParam UBO (std140, 48 B): chunk_size, voxel_size, skirt_size, skirt_depth, then the world origin
 // in LOD0 voxels: low words (uvec4 at offset 16) and high words (ivec4 at offset 32).

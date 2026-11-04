@@ -1,10 +1,9 @@
 #pragma once
 
-// Compute passes of the direct mesher. Same front end as the legacy GPUMesher (SDF sample and
-// edge passes), then the triangulation the legacy path did on the CPU is done on the GPU:
+// Compute passes of the direct mesher, the triangulation included:
 //
-//   1 sdf       per vertex sample            (legacy pass 1, unchanged)
-//   2 edges     per axis edge crossing t     (legacy pass 2, but always writes -> no clear needed)
+//   1 sdf       per vertex sample
+//   2 edges     per axis edge crossing t     (always written -> no clear needed)
 //   3 vertices  dense per-cell vertex (chunk-local) + normal, per-chunk quad count (workgroup-reduced
 //               atomics)
 //   4 reserve   one thread packs chunks into the batch's pages, each chunk starting on a group
@@ -13,8 +12,7 @@
 //               of 8 bytes, plus the group header for the first quad of each group, into the staging
 //               image (layout: page_format.hpp); staging rows are then copied into the page textures
 //
-// The quad topology, corner order and winding mirror GPUMesher's CPU triangulation exactly
-// (see emit pass), so the two paths can be compared triangle for triangle.
+// The quad topology, corner order and winding: see the emit pass.
 
 inline constexpr const char GLSL_DIRECT_BINDINGS[] = R"glsl(
 
@@ -98,8 +96,8 @@ uint get_edge_index(uint chunk_idx, uint axis, uvec3 local_c) {
 
 )glsl";
 
-// Same as legacy pass 2, except it writes 0.0 for edges without a crossing: every entry the
-// later passes read is rewritten each batch, so the 48 MB clear of the legacy path is not needed.
+// Writes 0.0 for edges without a crossing: every entry the later passes read is rewritten each
+// batch, so the buffer needs no clear.
 inline constexpr const char GLSL_DIRECT_PASS_EDGES[] = R"glsl(
 
 uint axis = gl_GlobalInvocationID.y / chunk_param.chunk_size;
@@ -125,9 +123,9 @@ if (cell_chunk_coordinate[axis] < chunk_param.chunk_size - 1) {
 
 )glsl";
 
-// Vertex placement identical to legacy pass 3 (mass point of edge crossings, normal from the SDF
-// gradient at the vertex), stored densely per cell in chunk-local vertex coordinates; quantised
-// only when written to the page (1/256 cell, legacy uses a coarser grid).
+// Vertex placement (mass point of edge crossings, normal from the SDF gradient at the vertex),
+// stored densely per cell in chunk-local vertex coordinates; quantised only when written to the
+// page (1/256 cell).
 inline constexpr const char GLSL_DIRECT_PASS_VERTICES[] = R"glsl(
 
 uint chunk_idx = gl_GlobalInvocationID.z / chunk_param.chunk_size;
@@ -251,9 +249,9 @@ if (gl_GlobalInvocationID == uvec3(0)) {
 
 )glsl";
 
-// Corner order mirrors GPUMesher::_execute_gpu_pipeline's emit_quad(a, b, c, d, positive):
-// positive -> triangles (a,b,d),(a,d,c) == base quad A,B,D / A,D,C with A=a B=b C=c D=d;
-// negative -> triangles (a,d,b),(a,c,d) == the same with b and c swapped.
+// Corner order of a quad (a, b, c, d), the page shader's triangles A,B,D / A,D,C: a = this cell's
+// vertex, d = the diagonal neighbour's, b and c the two others (per axis below); a solid origin
+// (positive winding) keeps them, a negative one swaps b and c.
 inline constexpr const char GLSL_DIRECT_PASS_EMIT[] = R"glsl(
 
 uint chunk_idx = gl_GlobalInvocationID.z / chunk_param.chunk_size;
@@ -276,9 +274,9 @@ if (v0.w > 0u && (dir.w & CHUNK_FLAG_OVERFLOW) == 0u && all(lessThan(cell_chunk_
         if (!(t > 0.0)) continue;
         // The two other axes, and the neighbour cells sharing this edge.
         uint s1; uint s2; bool ok; bool a_first;
-        if (axis == 0u) { ok = c.y > 0 && c.z > 0; s1 = sy; s2 = sz; a_first = false; } // legacy: emit_quad(p0, p2, p1, p3)
-        else if (axis == 1u) { ok = c.x > 0 && c.z > 0; s1 = sx; s2 = sz; a_first = true; } // legacy: emit_quad(p0, p1, p2, p3)
-        else { ok = c.x > 0 && c.y > 0; s1 = sx; s2 = sy; a_first = false; } // legacy: emit_quad(p0, p2, p1, p3)
+        if (axis == 0u) { ok = c.y > 0 && c.z > 0; s1 = sy; s2 = sz; a_first = false; } // (p0, p2, p1, p3)
+        else if (axis == 1u) { ok = c.x > 0 && c.z > 0; s1 = sx; s2 = sz; a_first = true; } // (p0, p1, p2, p3)
+        else { ok = c.x > 0 && c.y > 0; s1 = sx; s2 = sy; a_first = false; } // (p0, p2, p1, p3)
         if (!ok) continue;
 
         uvec4 v1 = cell_vertex[flat_idx - s1];
@@ -288,7 +286,7 @@ if (v0.w > 0u && (dir.w & CHUNK_FLAG_OVERFLOW) == 0u && all(lessThan(cell_chunk_
             atomicAdd(status[STATUS_MISSING_NEIGHBOR], 1u);
             continue;
         }
-        // emit_quad arguments (a, b, c, d)
+        // The quad's corners (a, b, c, d)
         uvec4 qa = v0;
         uvec4 qb = a_first ? v1 : v2;
         uvec4 qc = a_first ? v2 : v1;

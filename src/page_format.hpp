@@ -8,7 +8,7 @@
 #include <cstdint>
 
 // Page texture layout (8 bytes per corner), shared by the compute passes (PageFormat::glsl_encode), the
-// page shader (PageFormat::glsl_decode, quad_page_pool.cpp) and the CPU-side readers (validator, auditor, spike).
+// page shader (PageFormat::glsl_decode, quad_page_pool.cpp) and the CPU-side readers (auditor, spike).
 //
 // One RGBA16UI texture per page (RenderingServer cannot wrap 32-bit integer RD textures), one row
 // per group of QUAD_GROUP quads:

@@ -21,8 +21,7 @@ Per-chunk palettes and per-biome ground materials.
   carved face takes the cutter's material unless it inherits; CPU `fold_onto` == GPU `arch_fold`, FrameSpike's table probe), the cascade's
   fold variant's level 0 writes it per sample for chunks with a list (`sdf_material`, cascade binding 9), and the vertex
   takes the material of its cell's solid corner closest to the surface (`cascade_vertex_material`, ties in x + 2y +
-  4z order; both meshers), except in a chunk on the ground block (direct) or without a list (legacy): material 0, no
-  reads.
+  4z order), except in a chunk on the ground block: material 0, no reads.
   `PalettePool` (`src/palette_pool.*`, a buddy allocator of 16-512-entry blocks in one RGBA16UI texture, 2 ids per
   texel, `GPUDirectMesher::Settings::palette_capacity` = 2M entries, 8 MB) holds the loaded chunks' palettes: placed
   at dispatch, its texels written by the emit pass (a texel per thread, `PalettePool::glsl_batch`), the block offset
@@ -40,10 +39,8 @@ Per-chunk palettes and per-biome ground materials.
   material costs ~1.3 ms of opaque pass and ~0.4 of pre-pass in the forest at 1080p (+6% render GPU), whatever its
   form (select, branch, two shadings, mix) and even when no quad holds two materials: it is the shader's compiled form,
   not executed work (feature/material-blend's bisection; 2 smooth vec4 of per-vertex parameters cost more, +2.2 ms).
-  `--view=9` shows the ids, blended (V reaches it in the player). Legacy
-  carries the id in `ARRAY_CUSTOM0`; the validator (half its sample from chunks with materials,
-  `MeshValidator::pick_targets`) requires `material_mismatch == 0` on paired vertices, the auditor
-  `bad_material == 0` (index past the palette) and the headers' blocks. Stats: `stats.json` `palettes` (direct) and
+  `--view=9` shows the ids, blended (V reaches it in the player). The auditor requires
+  `bad_material == 0` (index past the palette) and checks the headers' blocks. Stats: `stats.json` `palettes` and
   `table.list_len_per_lod.*.palette_avg / palette_max`. **Bark** (`PATTERN_BARK`, `bark_grain` / `bark_plate` in the page
   shader): a 3D noise with no surface frame: a smooth grain stretched along world up (plates, V grooves ~11 cm apart), a
   sparse cell field of knots (2 x 2 x 2 nearest cells) bending it; colour only (a bump and a roughness following the
@@ -69,7 +66,7 @@ Per-chunk palettes and per-biome ground materials.
   vertex reads its cell's solid corners) `cascade_ground_material` = 1 + `Climate::pick` of the sample's fields
   (`Climate::pick_glsl`, `climate_glsl.cpp`, generated from the table op for op, ties by
   `hash_cell`; CPU `SDFCascade::ground_material`), so the chunk passes carry the fields at every level of every LOD
-  (`CascadeGLSL::field_range`: point items keep the spec's FieldRange, the ground bits are the same). Both meshers read
+  (`CascadeGLSL::field_range`: point items keep the spec's FieldRange, the ground bits are the same). The mesher reads
   every chunk's materials when the base is longer than one (`ChunkPalette::glsl_base`); on the ground block a record's
   index past the base reads as ground. Unit-tested (box run == point query per sample); CascadeSpike G10
   (`--biomes`): GPU == CPU on every sample of every LOD (58.7 M, all 7 example biomes seen). Cost (128-chunk

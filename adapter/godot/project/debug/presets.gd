@@ -55,6 +55,8 @@ static func clip_planes(p_camera: Camera3D, p_terrain: Node, p_base_near: float)
 # The flags a world file replaced (src/world_file.hpp): a run given one would quietly load another world.
 const REMOVED_FLAGS := ["--voxel=", "--lods=", "--trees=", "--tree_area=", "--instances=", "--instance_area=", "--biomes=", "--climate=",
 	"--planet_radius_km=", "--planet_ring_km=", "--atmosphere=", "--atmosphere_scale=", "--clouds=", "--terrain=continents"]
+# The flags of the legacy mesher, removed with it: GPU Direct is the only pipeline.
+const MESHER_FLAGS := ["--mode=", "--validate=", "--trim="]
 
 
 # The command line's removed flags, each an error.
@@ -65,6 +67,10 @@ static func removed_args() -> PackedStringArray:
 			if a.begins_with(flag):
 				out.append(a)
 				push_error("%s is gone: use --world=PATH (src/world_file.hpp)" % a)
+		for flag in MESHER_FLAGS:
+			if a.begins_with(flag):
+				out.append(a)
+				push_error("%s is gone with the legacy mesher: GPU Direct is the only pipeline" % a)
 	return out
 
 

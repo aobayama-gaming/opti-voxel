@@ -18,16 +18,12 @@
 #include <map>
 
 void VoxelTerrain::_bind_methods() {
-    ClassDB::bind_method(D_METHOD("set_pipeline_mode", "mode"), &VoxelTerrain::set_pipeline_mode);
-    ClassDB::bind_method(D_METHOD("get_pipeline_mode"), &VoxelTerrain::get_pipeline_mode);
     ClassDB::bind_method(D_METHOD("set_world_path", "path"), &VoxelTerrain::set_world_path);
     ClassDB::bind_method(D_METHOD("get_world_path"), &VoxelTerrain::get_world_path);
     ClassDB::bind_method(D_METHOD("set_world_json", "json", "dir"), &VoxelTerrain::set_world_json);
     ClassDB::bind_method(D_METHOD("restart_world", "json", "dir"), &VoxelTerrain::restart_world);
     ClassDB::bind_method(D_METHOD("set_terrain_mode", "mode"), &VoxelTerrain::set_terrain_mode);
     ClassDB::bind_method(D_METHOD("get_terrain_mode"), &VoxelTerrain::get_terrain_mode);
-    ClassDB::bind_method(D_METHOD("set_legacy_batch_size", "size"), &VoxelTerrain::set_legacy_batch_size);
-    ClassDB::bind_method(D_METHOD("get_legacy_batch_size"), &VoxelTerrain::get_legacy_batch_size);
     ClassDB::bind_method(D_METHOD("get_voxel_size"), &VoxelTerrain::get_voxel_size);
     ClassDB::bind_method(D_METHOD("set_world_origin_x", "voxel"), &VoxelTerrain::set_world_origin_x);
     ClassDB::bind_method(D_METHOD("get_world_origin_x"), &VoxelTerrain::get_world_origin_x);
@@ -85,8 +81,6 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_render_offset_m"), &VoxelTerrain::get_render_offset_m);
     ClassDB::bind_method(D_METHOD("set_skirt_depth", "depth"), &VoxelTerrain::set_skirt_depth);
     ClassDB::bind_method(D_METHOD("get_skirt_depth"), &VoxelTerrain::get_skirt_depth);
-    ClassDB::bind_method(D_METHOD("set_legacy_trim_indices", "trim"), &VoxelTerrain::set_legacy_trim_indices);
-    ClassDB::bind_method(D_METHOD("get_legacy_trim_indices"), &VoxelTerrain::get_legacy_trim_indices);
     ClassDB::bind_method(D_METHOD("set_dual_contouring", "enable"), &VoxelTerrain::set_dual_contouring);
     ClassDB::bind_method(D_METHOD("get_dual_contouring"), &VoxelTerrain::get_dual_contouring);
     ClassDB::bind_method(D_METHOD("get_pending_chunk_count"), &VoxelTerrain::get_pending_chunk_count);
@@ -131,8 +125,6 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_dig_edits"), &VoxelTerrain::get_dig_edits);
     ClassDB::bind_method(D_METHOD("set_dig_settings", "settings"), &VoxelTerrain::set_dig_settings);
     ClassDB::bind_method(D_METHOD("get_debug_stats"), &VoxelTerrain::get_debug_stats);
-    ClassDB::bind_method(D_METHOD("debug_validate", "count", "dump_dir"), &VoxelTerrain::debug_validate, DEFVAL(String()));
-    ClassDB::bind_method(D_METHOD("get_validation_report"), &VoxelTerrain::get_validation_report);
     ClassDB::bind_method(D_METHOD("debug_audit_pages"), &VoxelTerrain::debug_audit_pages);
     ClassDB::bind_method(D_METHOD("get_audit_report"), &VoxelTerrain::get_audit_report);
     ClassDB::bind_method(D_METHOD("debug_audit_discovery"), &VoxelTerrain::debug_audit_discovery);
@@ -162,14 +154,12 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("remove_instance", "id"), &VoxelTerrain::remove_instance);
     ClassDB::bind_method(D_METHOD("move_instance", "id", "x", "y", "z", "rotation"), &VoxelTerrain::move_instance, DEFVAL(PackedFloat32Array()));
 
-    ADD_PROPERTY(PropertyInfo(Variant::INT, "pipeline_mode", PROPERTY_HINT_ENUM, "GPU Legacy:1,GPU Direct:2"), "set_pipeline_mode", "get_pipeline_mode");
     ADD_PROPERTY(PropertyInfo(Variant::STRING, "world_path", PROPERTY_HINT_FILE, "*.json"), "set_world_path", "get_world_path");
     // Read-only, from the world file.
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "voxel_size", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_NONE), "", "get_voxel_size");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "lod_numbers", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_NONE), "", "get_lod_numbers");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "planet_radius", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_NONE), "", "get_planet_radius");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "terrain_mode", PROPERTY_HINT_ENUM, "Cascade:1,Shapes:4"), "set_terrain_mode", "get_terrain_mode");
-    ADD_PROPERTY(PropertyInfo(Variant::INT, "legacy_batch_size", PROPERTY_HINT_RANGE, "1,4096"), "set_legacy_batch_size", "get_legacy_batch_size");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "archetype_band"), "set_archetype_band", "get_archetype_band");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "archetype_stream"), "set_archetype_stream", "get_archetype_stream");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "archetype_stream_part_sides", PROPERTY_HINT_RANGE,
@@ -188,7 +178,6 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::INT, "lod_view_min", PROPERTY_HINT_RANGE, "0,63,1"), "set_lod_view_min", "get_lod_view_min");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "lod_far_limit"), "set_lod_far_limit", "get_lod_far_limit");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "skirt_depth", PROPERTY_HINT_RANGE, "0,4,0.05,suffix:voxels"), "set_skirt_depth", "get_skirt_depth");
-    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "legacy_trim_indices"), "set_legacy_trim_indices", "get_legacy_trim_indices");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "dual_contouring"), "set_dual_contouring", "get_dual_contouring");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "discovery_cull_mode", PROPERTY_HINT_ENUM, "None:0,Legacy:1"), "set_discovery_cull_mode", "get_discovery_cull_mode");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "discovery_cache"), "set_discovery_cache", "get_discovery_cache");
@@ -222,20 +211,6 @@ void VoxelTerrain::_bind_methods() {
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "discovery_verify"), "set_discovery_verify", "get_discovery_verify");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "destroy_verify"), "set_destroy_verify", "get_destroy_verify");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "discovery_compare"), "set_discovery_compare", "get_discovery_compare");
-
-    BIND_ENUM_CONSTANT(PIPELINE_GPU_LEGACY);
-    BIND_ENUM_CONSTANT(PIPELINE_GPU_DIRECT);
-}
-
-void VoxelTerrain::set_pipeline_mode(int p_mode) {
-    ERR_FAIL_COND_MSG(world->is_started(), "pipeline_mode must be set before the terrain enters the tree.");
-    ERR_FAIL_COND_MSG(p_mode != PIPELINE_GPU_LEGACY && p_mode != PIPELINE_GPU_DIRECT,
-            "pipeline_mode must be 1 (GPU Legacy) or 2 (GPU Direct).");
-    cfg().pipeline_mode = ov::World::PipelineMode(p_mode);
-}
-
-int VoxelTerrain::get_pipeline_mode() const {
-    return cfg().pipeline_mode;
 }
 
 void VoxelTerrain::set_world_path(const String &p_path) {
@@ -265,15 +240,6 @@ void VoxelTerrain::set_terrain_mode(int p_mode) {
 
 int VoxelTerrain::get_terrain_mode() const {
     return cfg().terrain_mode;
-}
-
-void VoxelTerrain::set_legacy_batch_size(int p_size) {
-    ERR_FAIL_COND_MSG(world->is_started(), "legacy_batch_size must be set before the terrain enters the tree.");
-    cfg().legacy_batch_size = p_size;
-}
-
-int VoxelTerrain::get_legacy_batch_size() const {
-    return cfg().legacy_batch_size;
 }
 
 float VoxelTerrain::get_voxel_size() const {
@@ -590,15 +556,6 @@ bool VoxelTerrain::get_lod_far_limit() const {
 
 int VoxelTerrain::get_lod_numbers() const {
     return world->world_file().lods;
-}
-
-void VoxelTerrain::set_legacy_trim_indices(bool p_trim) {
-    ERR_FAIL_COND_MSG(world->is_started(), "legacy_trim_indices must be set before the terrain enters the tree.");
-    cfg().legacy_trim_indices = p_trim;
-}
-
-bool VoxelTerrain::get_legacy_trim_indices() const {
-    return cfg().legacy_trim_indices;
 }
 
 void VoxelTerrain::set_dual_contouring(bool p_enable) {
@@ -952,14 +909,8 @@ void VoxelTerrain::_ready() {
     main_device = new RDDevice(rd);
     VoxelSky::add_atmosphere_globals(); // before the page shader compiles
     hosts.device = main_device;
-    if (cfg().pipeline_mode == ov::World::PIPELINE_GPU_DIRECT) {
-        page_host = new GodotPageHost(get_world_3d()->get_scenario(), main_device);
-        hosts.pages = page_host;
-    } else {
-        mesh_host = new GodotMeshHost(get_world_3d()->get_scenario());
-        hosts.meshes = mesh_host;
-    }
-    hosts.hidden_meshes = []() -> std::unique_ptr<MeshHost> { return std::make_unique<GodotMeshHost>(); };
+    page_host = new GodotPageHost(get_world_3d()->get_scenario(), main_device);
+    hosts.pages = page_host;
     hosts.atmosphere_textures = [device = main_device, rids = std::make_shared<std::vector<RID>>(), id = ObjectID(get_instance_id())](
                                         ov::gpu::Texture p_volume, ov::gpu::Texture p_multiscatter) {
         _rt_share_textures(device, rids, id, "atmo_enabled", { "atmo_volume", "atmo_multiscatter" }, { p_volume, p_multiscatter });
@@ -1144,14 +1095,6 @@ void VoxelTerrain::_process(double) {
     }
 }
 
-bool VoxelTerrain::debug_validate(int p_count, const String &p_dump_dir) {
-    return world->debug_validate(p_count, ov_str(p_dump_dir));
-}
-
-Dictionary VoxelTerrain::get_validation_report() const {
-    return godot_dict(world->validation_report());
-}
-
 bool VoxelTerrain::debug_audit_pages() {
     return world->debug_audit_pages();
 }
@@ -1214,8 +1157,6 @@ void VoxelTerrain::_teardown() {
         page_host->destroy(); // after the mesher's teardown, on the render thread too
         page_host = nullptr;
     }
-    delete mesh_host;
-    mesh_host = nullptr;
     if (main_device) {
         // Last on the render thread: everything posted before still uses it.
         main_device->post([device = main_device]() { delete device; });

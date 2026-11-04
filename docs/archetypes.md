@@ -41,8 +41,8 @@ The SDF program IR, the GPU table, the locality and band rules, the index and ru
   samples included, CPU mirror `in_influence_cube`): the bits don't change. The template's early returns become an
   `sample_live` flag in the fold variant, so every invocation reaches the barriers.
   `SDFBase::get_gpu_table()` hands the mesher the `DefRecord` bytes (`record_bytes`, re-uploaded when the
-  snapshot version changes) and the per-batch lists (`build_lists`); each mesher owns the buffers on its
-  own RenderingDevice (direct bindings 8/9, legacy 6/7). **Locality rule:** an instance's influence box
+  snapshot version changes) and the per-batch lists (`build_lists`); the mesher owns the buffers on its
+  device (bindings 8/9). **Locality rule:** an instance's influence box
   is its world box grown by `M(lod) = ceil(k + margin_c * 2^lod) + 2` voxels, `margin_c = 2 L +
   skirt_depth`; outside it the value is >= M, so folding it in or out only changes F where `|F| > 2 L
   2^lod` (the mesh and normals are unchanged). The test is integer (`sat_diff` vs an int32 box), so the
@@ -114,7 +114,7 @@ The SDF program IR, the GPU table, the locality and band rules, the index and ru
   pending `to_destroy_chunk` entry so a re-meshed chunk is not freed twice. The GPU buffers are sized for
   `instance_capacity()` records up front: the table's `table_capacity()` (default 16384 or the scene + 4096, removed ones
   count; an add past it is refused), then the streamed slots. The bench's
-  `--scenario=edit --edits=N` scripts add / move / remove edits, then settles; validate / audit /
+  `--scenario=edit --edits=N` scripts add / move / remove edits, then settles; audit /
   discovery_audit should stay `ok`. The world file's rock entries (`instances`, a biome's or the world's: a
   `boulder` or a `pillar` species, its `cell_m`) scatter rocks and pillars over its `zone` (a square of `side_m` metres
   around `centre_m`, default (-50, -150) m: `SDFTable::Zone`), one per cell site (`SCATTER_SITE_SALT` for a kind's finest

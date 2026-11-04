@@ -1,7 +1,6 @@
 #pragma once
 
 #include "GPU_direct_mesher.hpp"
-#include "GPU_mesher.hpp"
 #include "atmosphere.hpp"
 #include "chunk_discoverer.hpp"
 #include "chunk_memory.hpp"
@@ -9,8 +8,6 @@
 #include "debug_log.hpp"
 #include "gpu_device.hpp"
 #include "local_gpu_thread.hpp"
-#include "mesh_host.hpp"
-#include "mesh_validator.hpp"
 #include "page_auditor.hpp"
 #include "page_host.hpp"
 #include "sdf_cascade.hpp"
@@ -18,7 +15,6 @@
 
 #include "ov/value.hpp"
 
-#include <functional>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -26,18 +22,12 @@
 namespace ov {
 
 // The engine: one terrain world, driven frame by frame by its host (Godot's VoxelTerrain, the Dawn adapter). It owns
-// the terrain (SDFCascade), the discoverer, a mesher and the loaded chunks (VoxelState); the host lends it a GPU device
-// and draws the meshers' output (PageHost / MeshHost). Main thread only, like the host's frame loop.
+// the terrain (SDFCascade), the discoverer, the mesher (GPUDirectMesher) and the loaded chunks (VoxelState); the host
+// lends it a GPU device and draws the mesher's quad pages (PageHost). Main thread only, like the host's frame loop.
 class World {
 public:
-    enum PipelineMode {
-        PIPELINE_GPU_LEGACY = 1,
-        PIPELINE_GPU_DIRECT = 2,
-    };
-
     // How the engine runs, set before start(); what the terrain is lives in the world file.
     struct Settings {
-        PipelineMode pipeline_mode = PIPELINE_GPU_LEGACY;
         // The world file (WorldFile, a host path), empty for WorldFile's defaults.
         str world_path;
         // Or the world itself, a world file's text whose relative paths start from world_dir (an editor's world, never
@@ -46,7 +36,6 @@ public:
         str world_dir;
         // 1 the world's Hermite cascade terrain, 4 the flat preset under the shapes gallery.
         int terrain_mode = 1;
-        int legacy_batch_size = 1024;
         ChunkParam chunk_param; // skirt_depth set by the host, voxel_size by load_world; the render origin by start() and recenter()
         VoxelPos world_origin_request; // LOD0 voxels, snapped down to the root chunk span by start()
         // recenter() moves the render origin to the camera once it is farther than this from it (metres, on any axis):
@@ -58,7 +47,6 @@ public:
         bool archetype_moments = true;
         float archetype_erode = Archetype::ERODE_CELLS;
         float archetype_resolve = Archetype::ErodeRule().resolve;
-        bool legacy_trim_indices = false;
         bool dual_contouring = false;
         float lod_pixel_error = 2.0f;
         float lod_pixel_error_back = 0.0f; // 0: lod_pixel_error everywhere
@@ -88,13 +76,10 @@ public:
         float aspect = 16.0f / 9.0f;
     };
 
-    // What the host lends: the main device (its thread runs the meshers' GPU work, Device::post) and the drawers.
+    // What the host lends: the main device (its thread runs the mesher's GPU work, Device::post) and the drawer.
     struct Hosts {
         gpu::Device *device = nullptr;
-        PageHost *pages = nullptr; // GPU Direct's pages
-        MeshHost *meshes = nullptr; // the legacy meshes
-        // The validator's legacy meshes: a MeshHost that draws nothing (debug_validate).
-        std::function<std::unique_ptr<MeshHost>()> hidden_meshes;
+        PageHost *pages = nullptr; // the mesher's pages
         // The atmosphere's textures for the host's shaders, on the device's thread (Atmosphere::TexturesFn).
         Atmosphere::TexturesFn atmosphere_textures;
         // The clouds' textures, the same way (Clouds::TexturesFn).
@@ -160,7 +145,7 @@ public:
     // True once every scanned chunk is meshed and the mesher has nothing in flight; p_load_centre (the camera now, or
     // frame's p_load_centre; null: none) must still be in the scanned centre chunk.
     bool is_load_complete(const Float3 *p_load_centre);
-    // The instance edits made so far are meshed (the legacy mesher: idle).
+    // The instance edits made so far are meshed.
     bool is_edit_settled();
     int64_t pending_chunk_count() const { return int64_t(state.dirty_chunk.size()); }
     // Distance from the camera (metres) that bounds every chunk the discoverer can load (0 before start).
@@ -187,10 +172,10 @@ public:
     // which starts at the world origin. Called by the host before frame(): when the camera is farther than
     // rebase_distance_m from the render origin, moves it under the camera (ChunkMath::recentered_origin) and returns
     // true with r_shift, the metres the host subtracts from every render position it holds (its camera, nodes, paths)
-    // in the same frame. Deferred (false) while a validation or an audit holds render positions.
+    // in the same frame. Deferred (false) while an audit holds render positions.
     bool recenter(const Float3 &p_camera_pos, Float3 &r_shift);
     // Moves the render origin to p_origin (even: ChunkMath::is_render_origin), r_shift as recenter's. The meshes
-    // follow (the pages' bounds and decode, the legacy meshes' transforms); nothing is re-meshed.
+    // follow (the pages' bounds and decode); nothing is re-meshed.
     bool rebase(const ChunkId &p_origin, Float3 &r_shift);
     const ChunkId &render_origin() const { return config.chunk_param.origin_chunk; }
     // The world origin start() snapped (the render origin it started at).
@@ -208,14 +193,10 @@ public:
     // { section: total ms since start } of frame(), cheap enough to read every frame.
     ov::Value process_times_ms() const;
 
-    // GPU Direct only: re-mesh p_count loaded chunks with the legacy mesher and compare triangle by triangle (the report
-    // once done, empty until then). OBJ files of the first mismatching chunk go to p_dump_dir when it is not empty.
-    bool debug_validate(int p_count, const str &p_dump_dir);
-    const ov::Value &validation_report() const { return validation; }
-    // GPU Direct only: read back every page holding loaded chunks and classify all drawn quad slots.
+    // Read back every page holding loaded chunks and classify all drawn quad slots.
     bool debug_audit_pages();
     const ov::Value &audit_report() const { return audit; }
-    // GPU Direct only: rebuild the current scan without culling and count the quads of every chunk the cull dropped (a
+    // Rebuild the current scan without culling and count the quads of every chunk the cull dropped (a
     // culled chunk with quads is a hole). Run it with the camera still and the load complete.
     bool debug_audit_discovery();
     const ov::Value &discovery_audit_report() const { return discovery_audit_result; }
@@ -229,7 +210,6 @@ private:
     Hosts hosts;
     std::unique_ptr<SDFCascade> sdf;
     ChunkDiscoverer *chunk_discoverer = nullptr;
-    GPUMesher *gpu_mesher = nullptr;
     GPUDirectMesher *direct_mesher = nullptr;
     QuadPagePool *reused_pages = nullptr; // reuse's, until start's mesher takes it
     Climate::Caps reused_caps; // reuse's: the climate's capacities at least these
@@ -239,10 +219,7 @@ private:
     float cloud_cover = 0.5f;
     Float3 cloud_wind;
     Float3 sun{ 0.0f, 1.0f, 0.0f };
-    MeshValidator *validator = nullptr;
-    std::unique_ptr<MeshHost> validator_host;
     PageAuditor *auditor = nullptr;
-    ov::Value validation = ov::Value::object();
     ov::Value audit = ov::Value::object();
     VoxelState state;
 
@@ -281,7 +258,6 @@ private:
     void _poll_discovery_audit();
 
     void _apply_instance_edit();
-    void _free_validator();
     struct EditStats {
         int64_t edits = 0;
         int64_t remesh_total = 0;

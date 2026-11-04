@@ -37,21 +37,21 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
 - CI (`.github/workflows/ci.yml`) runs format, the `-Werror` build and the unit tests on every PR.
   Everything that needs a GPU stays local.
 - `tools/check.sh [--no-build] [--spike] [--discovery] [--keep-going]`: the correctness gate, ~2 min.
-  One build, the unit tests, then a direct load run with `--validate=64 --audit=1 --discovery_audit=1`,
+  One build, the unit tests, then a load run with `--audit=1 --discovery_audit=1`,
   `origin_parity.sh`, `frame_test.sh`, the QuadPagePool spike (with `--spike`, or automatically when
   `src/quad_page_pool*` differs from `dev`) and `discovery_audit.sh` (with `--discovery`, or
   automatically when `src/chunk_discoverer*`, `src/sdf*` or `src/chunk_math*` differ from `dev`, ~2 min).
   Prints PASS/FAIL per step. Perf numbers come from `bench_ab.sh` instead.
-- `tools/bench.sh [--no-build] --mode=direct|legacy --scenario=load|fly [--shot=loaded:x.png]
-  [--view=0..7] [--validate=64] [--audit=1] [--cool=1]`: builds, runs `adapter/godot/project/debug/bench.tscn` with a fixed
+- `tools/bench.sh [--no-build] --scenario=load|fly [--shot=loaded:x.png]
+  [--view=0..7] [--audit=1] [--cool=1]`: builds, runs `adapter/godot/project/debug/bench.tscn` with a fixed
   camera, writes `bench/results/<run>/stats.json` + `godot.log` + screenshots, prints a summary.
   Exits non-zero on build failure, crashes, `ERROR` lines, leaked RIDs, and (exit 4) a requested
-  validation or audit that failed. `bench/results/LAST` holds the latest run dir.
+  audit that failed (or a load that did not settle, a `--destroy_verify` mismatch). `bench/results/LAST` holds the latest run dir.
   A load is complete once the received scan is the camera's current one and the mesher is idle
   (`VoxelTerrain::is_load_complete`).
   `--origin=X,Y,Z` sets the world origin (voxels). `--rebase_m=M` the render origin's rebase distance (default
   1024, 0 off); `--still=1` stops the clouds' drift and the leaves' sway, so shots of one pose taken at different times
-  match. Render-origin check: `bench.sh --mode=direct --scenario=fly --fly_dist=20000 --still=1 --validate=64 --audit=1
+  match. Render-origin check: `bench.sh --scenario=fly --fly_dist=20000 --still=1 --audit=1
   --shot=loaded:a.png --shot=steady_end:b.png`, then `tools/shot_diff.py <run>/a.png <run>/b.png` (rebases on the
   way out and back; `world_origin.rebases` in stats.json). `--cool=1` waits for the GPU to cool first (perf
   runs only; `bench_ab.sh` / `bench_compare.sh` pass it): until 65 C, a plateau, or 30 s at most.
@@ -90,15 +90,9 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
 - `bench.gd --scenario=approach`: loads 1,500 m above and 2 km behind the start (`--approach_from`, `--approach_out`,
   along -X), flies straight to it in `--approach_seconds=20` without waiting, then settle / steady;
   `--approach_shots=DIR` saves a shot per second in the run's `--view` (run it twice for shaded | LOD).
-- `--validate=N` (direct): re-meshes N loaded chunks with the legacy mesher and compares
-  triangle by triangle. `ok` requires identical triangle counts and 0 *unexplained* anomalies.
-  The terrain SDF is bit-exact, so both meshers see the same signs (no winding flips at |SDF| ~ 0).
-  Vertex positions differ by up to ~0.02 cells between
-  the two meshers, so a quad smaller than the 0.02-cell tolerance can't be matched one to one; a
-  leftover sliver near a same-size triangle of the other side counts as `ambiguous_slivers`, not an anomaly.
-  The legacy triangulation takes each point's cell from the index the GPU wrote, never from its quantised
-  position (a vertex on its cell's upper face, a crossing at t = 1.0, would floor into the next cell).
-- `--audit=1` (direct): reads every page back and classifies all drawn slots
+- The legacy mesher and its `--validate=N` triangle-by-triangle comparison are gone; `--mode=`, `--validate=` and
+  `--trim=` are errors (`presets.gd`'s `MESHER_FLAGS`).
+- `--audit=1`: reads every page back and classifies all drawn slots
   (live / dead_zero / stale / partial / broken). Anything but live/dead_zero is a bug. Also writes a
   per-chunk mesh digest (quad count + order-independent hash of the chunk-local corners) to
   `<run>/chunks.json`.
@@ -109,7 +103,7 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
   visible, per LOD, and estimates the cut a "hidden nodes stop splitting" rule would load
   (`docs/discovery-lod.md`, Occlusion). Its first line checks the depth convention: the share of depth pixels
   that land inside a chunk box (100% expected).
-- `--discovery_audit=1` (direct): rebuilds the current scan without culling (`--discovery_cull=0`) and
+- `--discovery_audit=1`: rebuilds the current scan without culling (`--discovery_cull=0`) and
   counts the quads of every chunk the cull dropped on the GPU (passes sdf/edges/vertices, count only).
   A dropped chunk with quads is a miss, i.e. a hole; `ok` needs 0 misses and a max LOD jump of 1
   between face neighbours. `bench.sh` also fails a load-complete run whose loaded set != scanned set
@@ -123,14 +117,14 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
 - Hole hunting: run the main scene with `godot --path adapter/godot/project -- --marks=DIR`; H saves the camera
   pose, a screenshot, the chunk counts and a discovery audit to `DIR/marks.jsonl` (closing the window
   saves a last pose). Replay a mark with `bench.sh --cam_pos=... --pitch=... --yaw=... --lod_error=4`.
-- `--view=N` debug views (direct): 1 normals, 2 LOD, 3 page, 4 wireframe, 5 chunk, 6 group, 7 quad index,
+- `--view=N` debug views: 1 normals, 2 LOD, 3 page, 4 wireframe, 5 chunk, 6 group, 7 quad index,
   8 faceted (clay, per-triangle normals: crisp creases; the shapes scene starts in it), 9 material (palette ids),
   10 / 11 the bark seam probe (raw bytes, `bench.gd --probe`), 12 biome (each material's debug colour: a climate's
   biomes; B toggles it in the player), 13 coverage (hidden quads magenta, see Coverage). The player's `--spawn=U,V`
   (metres along the base's tangent plane, `VoxelTerrain.get_tangent_position`) starts it above that point.
 - `res://debug/spike.tscn` (`QuadPoolSpike` over the core's `QuadPoolCheck`): isolated test of the GPU -> page path (write, indirect
   count, kills) with CPU verification; run it after touching `QuadPagePool`.
-- `tools/bench_compare.sh [--runs=2] "a:--mode=legacy" "b:--mode=direct"`: interleaved runs,
+- `tools/bench_compare.sh [--runs=2] "a:--lod_error=2" "b:--lod_error=4"`: interleaved runs,
   median table with spread and Δ%, written to `bench/results/<date>-compare.md`.
 - `tools/bark_seams.sh [--no-build] [--only=a,b]` (needs a window, ~2.5 min): the 5 cm forest at six close-up poses
   (marks where seams were seen), `bench.gd --probe` (page shader views 10 / 11: the bark's grain, chunk, LOD, depth,
@@ -149,7 +143,7 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
   (`atmosphere_check` in the report: the atmosphere's passes against their CPU reference, docs/look.md). Run it after
   touching `world_coord.hpp`, `gpu_frame.hpp`, `chunk_math`, `exact_noise.hpp`, the SDF or `atmosphere*`. A new noise or SDF
   term adds an entry (CPU fn + GLSL fn) to `make_probes()` in `src/frame_spike.cpp`.
-- `tools/origin_parity.sh [--world=PATH] -- --mode=direct --validate=64`: the same world point seen
+- `tools/origin_parity.sh [--world=PATH] [-- bench args]`: the same world point seen
   from different origins (`--camera_voxel`): runs zero, zero2 (determinism), then pairs one root span
   apart near 0, at ~1e15 m and at 2^48 (voxel and noise-cell low-word wraps). Each pair must load the
   same non-empty chunks with identical mesh digests (`chunks.json`); pair screenshots are informational

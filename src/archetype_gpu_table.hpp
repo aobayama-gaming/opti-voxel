@@ -32,7 +32,7 @@ void compose_list(const std::vector<uint32_t> &p_ids, uint32_t p_scene_end, Scen
 class GpuTable : public SDFGpuTable {
 public:
     // Main thread: the snapshot the GPU mirrors. Its version drives the record upload.
-    // Read from the render thread (direct mesher) and the legacy worker: atomic, and each reader works on
+    // Read from the render thread (the mesher) and other threads: atomic, and each reader works on
     // one copy.
     void set_snapshot(const std::shared_ptr<const InstanceSnapshot> &p_snapshot) { std::atomic_store(&snap, p_snapshot); }
     std::shared_ptr<const InstanceSnapshot> snapshot() const { return std::atomic_load(&snap); }

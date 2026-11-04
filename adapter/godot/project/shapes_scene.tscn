@@ -16,7 +16,6 @@ ssao_enabled = true
 [node name="ShapesScene" type="Node3D"]
 
 [node name="VoxelTerrain" type="VoxelTerrain" parent="."]
-pipeline_mode = 2
 terrain_mode = 4
 debug_view = 8
 lod_pixel_error = 4.0

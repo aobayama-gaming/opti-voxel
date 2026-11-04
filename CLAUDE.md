@@ -6,13 +6,13 @@ Engine binary: `~/.local/bin/godot`. Build: `scons platform=linux target=templat
 iterate past a warning, never to commit one.
 
 Layout: one engine, two adapters. `src/` is the engine, engine-free as a whole (`src/core_files.txt` lists every file,
-never shrunk): the GPU work goes through `ov::gpu::Device` (`gpu_device.hpp`: buffers, 2D textures, compute pipelines
+only shrunk by deleting one): the GPU work goes through `ov::gpu::Device` (`gpu_device.hpp`: buffers, 2D textures, compute pipelines
 from GLSL, readbacks, `post` onto the device's thread) and the drawing through the hosts the adapter implements
-(`PageHost`: the quad pages; `MeshHost`: the legacy meshes). The frame loop is `ov::World` (`world.hpp`: the settings, the world file (`world_file.hpp`: every terrain setting is data, `--world=`),
+(`PageHost`: the quad pages). The frame loop is `ov::World` (`world.hpp`: the settings, the world file (`world_file.hpp`: every terrain setting is data, `--world=`),
 `start` / `frame(camera)` / `stop`, edits, stats, the debug audits); the checks and reports are core too (`FrameCheck`,
 `CascadeCheck`, `QuadPoolCheck` on any device, `ClimateReport`). `adapter/godot/` is the GDExtension's
 Godot-only sources (`src/`: `VoxelTerrain`, a node that maps its properties onto `ov::World::Settings` and its camera
-onto `frame`; registration; `RDDevice` on a RenderingDevice; `GodotPageHost` with the page shader; `GodotMeshHost`;
+onto `frame`; registration; `RDDevice` on a RenderingDevice; `GodotPageHost` with the page shader;
 thin spike and report nodes over the core checks) and the Godot project (`project/`: player.gd, scenes, bench);
 `adapter/dawn/` is the native WebGPU adapter (CMake, `DawnDevice`, `ov_dawn --check | --frame-check | --cascade-check`,
 `adapter/dawn/README.md`). Adapters stay thin: engine logic goes in `src/`,
@@ -44,7 +44,7 @@ what you touch before changing it, and update it in the same PR.
 - When a feature is done and its checks pass, commit, push and open the PR into `dev` without waiting
   to be asked. Don't merge it: the user reviews and merges.
 - Perf PRs carry a measured before/after table and name the new bottlenecks.
-  `tools/bench_ab.sh <dev checkout> <worktree> -- --mode=direct` builds both trees, interleaves
+  `tools/bench_ab.sh <dev checkout> <worktree> [-- bench args]` builds both trees, interleaves
   the runs (2 per side by default, both through the worktree's `bench.sh`) and writes the table to paste
   into the PR. Comparing a tree against itself still shows load-time deltas of ~5%: that's the noise.
   **Perf target:** `--preset=forest5cm` with `--scenario=fly`, 60 fps while moving at error 2 (stretch: 1),
@@ -67,7 +67,7 @@ what you touch before changing it, and update it in the same PR.
 Most of this code is written with AI agents. These rules are what keeps it reviewable; they apply
 to every change, and a reviewer may reject a PR on any of them.
 - The core is engine-free (the liboptivoxel plan, `docs/liboptivoxel.md`). `tools/check_core_purity.sh`
-  (CI) compiles each of its `core_files` alone with no godot include path (the list only grows). A core
+  (CI) compiles each of its `core_files` alone with no godot include path (the list only shrinks by deleting a file). A core
   file uses only core types (`ov::ivec2|ivec3` / `Float3` / `ov::str` + `ov::format` + `ov/str.hpp` /
   `ov::bytes` / `ov::HashMap|HashSet` / `ov::Value` (stats, reports, JSON: a value, not shared like a Dictionary) /
   `ov::Color` / `OV_ERR_*` / `OV_LOG` / `ov::now_usec` / `ov::read_file`) and `std::` (no godot `MIN` / `ERR_*`:
@@ -83,14 +83,11 @@ to every change, and a reviewer may reject a PR on any of them.
   by substitution (`GPUFrame::glsl_functions()` shows how; no `#define` in shaders that go through
   `shader_set_code`).
 - Two copies that must stay in sync are one function. Before pasting a block, extract it (the two
-  `get_max_lod` copies had already drifted). Exception: the legacy mesher's GLSL stays separate
-  from GPU Direct's on purpose, it is the oracle.
-- No new `if (direct_mesher) ... else gpu_mesher` branch in `VoxelTerrain`: a mesher interface is
-  planned; until then, put new mesher behaviour behind the meshers' common methods.
+  `get_max_lod` copies had already drifted).
 - No commented-out code (git has it) and no debug prints left behind: use `VLOG` (`OV_LOG` in the core). A TODO says why
   and what would close it.
 - Functions over ~80 lines get split, files over ~800 lines need a reason. New debug tooling goes
-  in its own class (like `MeshValidator`, `PageAuditor`), not into `VoxelTerrain`.
+  in its own class (like `PageAuditor`), not into `VoxelTerrain`.
 - Logic in a pure module (`world_coord`, `chunk_math`, `page_format`, `lod_structures`,
   `chunk_memory`, `cascade`, anything without a GPU) ships with doctest cases in `src/tests/`. A bug fix ships
   with the test that would have caught it.
@@ -122,10 +119,11 @@ to every change, and a reviewer may reject a PR on any of them.
 ## Docs (read the one you touch)
 | Doc | Covers | Source |
 |---|---|---|
-| `docs/pipelines.md` | GPU Legacy (oracle) and GPU Direct meshers, page layout, GPU budget and cost model, compaction, dual contouring | `GPU_*mesher*`, `quad_page_pool*`, `page_format.hpp`, `gpu_cost_model.hpp`, `gpu_glsl.hpp` |
+| `docs/pipelines.md` | the GPU Direct mesher, page layout, GPU budget and cost model, compaction, dual contouring | `GPU_*mesher*`, `quad_page_pool*`, `page_format.hpp`, `gpu_cost_model.hpp`, `gpu_glsl.hpp` |
 | `docs/integer-frame.md` | int64 ids, `WorldPos`, GPU words, origin, LOD range and clip planes, exact noise, Morton keys | `world_coord.hpp`, `gpu_frame.hpp`, `chunk_math*`, `exact_noise*` |
 | `docs/terrain.md` | world files, presets and `--terrain`, the table folded into the cascade samples, the base surface (flat / sphere) | `world_file*`, `sdf_cascade*`, `sdf_table*`, `base_surface*` |
 | `docs/cascade.md` | Hermite cascade, CPU and GPU passes, lattice-only evaluation | `cascade*` |
+| `docs/cascade-v2.md` | design (not implemented): the ground as one graph coarse to fine, a node computed at its level, the warp the only gate; what v2 deletes, its PRs | |
 | `docs/archetypes.md` | archetype IR (adding an op), library types, locality and band rules, the index, runtime edits | `archetype_*`, `instance_table*` |
 | `docs/instance-stream.md` | scatter sources, keys, the stream and its wiring | `cell_scatter*`, `scatter_source*`, `instance_stream*` |
 | `docs/trees.md` | trees, moment blobs (far field), biome features (lava lakes, floating islands) | `tree_archetype*`, `moment_layers*`, `biome_features*` |
@@ -144,7 +142,7 @@ Details and flags: `docs/testing.md`.
 - `tools/unit_test.sh [--no-build] [filter]`: doctest unit tests in headless Godot, seconds, no GPU.
 - `tools/format.sh [--check] [files]`: clang-format on `src/`.
 - `tools/check.sh [--no-build] [--spike] [--discovery] [--keep-going]`: the correctness gate (~2 min),
-  run before every PR: build, unit tests, a direct load with `--validate=64 --audit=1
+  run before every PR: build, unit tests, a load with `--audit=1
   --discovery_audit=1`, origin parity, frame test, and the spike / discovery audit when their sources changed.
 - CI runs format, the `-Werror` build and the unit tests; everything that needs a GPU stays local.
 - `tools/bench.sh` runs the bench scene (`--scenario=load|fly|turn|edit|approach`, `--preset=`, `--profile=1`);

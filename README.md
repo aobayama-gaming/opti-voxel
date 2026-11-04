@@ -18,11 +18,8 @@ Before diving into the code, the big picture:
 - **Discovery.** A worker thread (`ChunkDiscoverer`) walks the octree down from the largest
   chunks around the camera, splits a chunk while its screen-space error is too big, and drops the
   ones the SDF says are empty.
-- **Meshing.** Two pipelines, picked by `VoxelTerrain.pipeline_mode`:
-  - `2` GPU Direct (default): compute passes write the quads straight into pooled pages that the
-    GPU draws indirectly. Only a ~2 KB directory per batch comes back to the CPU.
-  - `1` GPU Legacy: same passes on a local RenderingDevice, full readback, triangulation on the
-    CPU. Slow, but simple: it is kept as the correctness oracle of GPU Direct.
+- **Meshing.** GPU Direct: compute passes write the quads straight into pooled pages that the
+  GPU draws indirectly. Only a ~2 KB directory per batch comes back to the CPU.
 - **Integer frame.** No float ever holds an absolute coordinate: the GPU gets the low 32 bits of
   the ids, render positions are relative to the world origin.
 
@@ -50,13 +47,13 @@ Then open `adapter/godot/project/` in Godot 4.6 and run the main scene.
 | Command | What | Needs |
 |---|---|---|
 | `tools/unit_test.sh [filter]` | C++ unit tests (`src/tests/`, doctest) inside headless Godot | the one-time import, ~5 s after a build |
-| `tools/check.sh` | The correctness gate: build, unit tests, a validated + audited load run, origin parity, integer frame | GPU, unlocked session, ~2 min |
+| `tools/check.sh` | The correctness gate: build, unit tests, an audited load run, origin parity, integer frame | GPU, unlocked session, ~2 min |
 | `tools/format.sh [--check]` | clang-format (pinned, through `uvx`) on `src/` | `uv` |
 | `tools/bench_ab.sh <a> <b>` | Before/after perf table of two checkouts | GPU |
 
 The unit tests only cover the pure parts so far (integer frame, chunk math, page format, LOD
-lookups, load/unload rules). The GPU side is checked end to end by `check.sh`: the legacy mesher
-re-meshes chunks to compare triangle by triangle, and an auditor reads every page back.
+lookups, load/unload rules). The GPU side is checked end to end by `check.sh`: an auditor reads every page back, and the
+origin parity run compares the mesh digests of the same place seen from different origins.
 
 ## Contributing
 

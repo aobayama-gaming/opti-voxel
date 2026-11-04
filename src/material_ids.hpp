@@ -18,8 +18,8 @@ enum Builtin : uint32_t {
     BUILTIN_COUNT,
 };
 
-// Ids stay below 2^ID_BITS: the legacy mesher (the oracle) carries them through a float vertex channel, and the page
-// shader packs a 4-bit corner mask above one (v_materials).
+// Ids stay below 2^ID_BITS: the page shader packs a 4-bit corner mask above one (v_materials), and the material texture's
+// rows hold every id (material_library.hpp).
 static constexpr uint32_t ID_BITS = 24;
 static constexpr uint32_t MAX_MATERIALS = 1u << ID_BITS;
 static_assert(ID_BITS + 4 <= 31, "the page shader's id | corner mask << ID_BITS fits a positive int");

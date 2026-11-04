@@ -57,8 +57,8 @@ are explicit at engine call sites (`godot_conv.hpp`: `godot_str`, `godot_v3`, `o
   splits at the device: the text stays, `CascadePasses` moves to `cascade_passes`; the level shader reads the
   terrain through `CascadeSource` (the part of `SDFBase` it needs). The FNV text pins did not move (after a first
   commit making four GLSL comments ASCII: `String(const char *)` reads Latin-1, so their UTF-8 was double-encoded).
-- **The chains cut.** `ChunkOutput` holds no engine resource (the legacy mesher keeps its mesh and instance under the
-  output's handle, as a `ChunkReleaser`); the table's records are `archetype_record.hpp` and the index places a record
+- **The chains cut.** `ChunkOutput` holds no engine resource (its mesher frees what it made, as a
+  `ChunkReleaser`); the table's records are `archetype_record.hpp` and the index places a record
   by its finished box, without the library.
 - **One executor** (`ov/executor.hpp`): tasks (submit / done / wait, never on the caller), `parallel_for` (HIGH, or
   LOW behind every HIGH one: Godot's low-priority group), and
@@ -74,12 +74,12 @@ are explicit at engine call sites (`godot_conv.hpp`: `godot_str`, `godot_v3`, `o
 1. **The GPU seam** (done): `ov::gpu::Device` (`gpu_device.hpp`: buffers, compute pipelines from GLSL,
    2D and 3D textures, separate sampled textures and a linear sampler, bind sets, dispatch with push constants,
    timestamps, readbacks, `post`), Godot's `RDDevice` and Dawn's
-   `DawnDevice`; the drawing behind `PageHost` / `MeshHost`. Then (done) the frame loop into `ov::World`
+   `DawnDevice`; the drawing behind `PageHost` (and `MeshHost`, removed with the legacy mesher). Then (done) the frame loop into `ov::World`
    (`VoxelTerrain` is a property map over its settings) and the spikes into core checks any device runs
    (`FrameCheck`, `CascadeCheck`, `QuadPoolCheck`; `ov_dawn --frame-check | --cascade-check`).
 2. **The headless Dawn/WebGPU backend + the C ABI + a web demo**: the second consumer and the
    showcase. Readback is async on WebGPU (first call returns empty; poll across frames) — the
-   directory readback is already async-shaped, the legacy full readback goes. No COOP/COEP headers
+   directory readback is already async-shaped (the legacy mesher's full readback is gone). No COOP/COEP headers
    on GitHub Pages: thread + dlink support needs the coi-serviceworker trick.
 3. **The Bevy adapter**: bindings + the wgpu-device interop (Bevy's device handles into the vtable,
    zero-copy); no Rust written by us.

@@ -30,7 +30,6 @@ adjustment_color_correction = ExtResource("2_lut")
 
 [node name="VoxelTerrain" type="VoxelTerrain" parent="." unique_id=969557005]
 world_path = "res://worlds/default.world.json"
-pipeline_mode = 2
 lod_pixel_error = 4.0
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=2075181569]

@@ -168,7 +168,7 @@ private:
     struct KeyHash {
         size_t operator()(const SourceKey &p_k) const;
     };
-    // A parked chunk: the same chunk parked by two meshers is two of them.
+    // A parked chunk: the same chunk parked by two owners is two of them.
     struct ParkKey {
         ChunkId chunk;
         uint64_t owner = 0;

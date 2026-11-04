@@ -2,7 +2,7 @@
 # CPU sampling of a bench run: where each thread's time goes (main thread, render thread, worker pool).
 #
 #   tools/cpu_profile.sh [--no-build] [--sampler=perf|eu-stack|auto] -- <bench.sh args>
-#   e.g. tools/cpu_profile.sh -- --mode=direct --preset=forest5cm_1m --scenario=fly --profile=1
+#   e.g. tools/cpu_profile.sh -- --preset=forest5cm_1m --scenario=fly --profile=1
 #
 # Builds with symbols (debug_symbols=yes: unstripped, -fno-omit-frame-pointer in src/; the next plain build compiles
 # everything again), runs tools/bench.sh --no-build with the args, attaches the sampler to the Godot process once it

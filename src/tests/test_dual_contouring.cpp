@@ -7,7 +7,7 @@
 
 #include <godot_cpp/variant/string.hpp>
 
-// Both vertex passes sum the crossings into local_vertex and turn the sum into the mass point on the
+// The vertex pass sums the crossings into local_vertex and turn the sum into the mass point on the
 // line GLSL_MASS_POINT_VERTEX, which dual contouring rewrites into GLSL_QEF_VERTEX_CALL. The division
 // has to survive the rewrite: qef_vertex's prior and its move cap are relative to the mass point, and
 // handed the sum (up to 12 cells from the cell) it clamped the vertex onto the cell's far faces.

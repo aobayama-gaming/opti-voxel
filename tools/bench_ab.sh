@@ -2,7 +2,7 @@
 # Before/after comparison of two checkouts (e.g. dev vs a feature worktree), same bench args for both.
 #
 #   tools/bench_ab.sh [--runs=2] [--scenarios="load fly"] BEFORE_ROOT AFTER_ROOT [-- bench-args...]
-#   e.g. tools/bench_ab.sh ../opti-voxel . -- --mode=direct
+#   e.g. tools/bench_ab.sh ../opti-voxel . -- --preset=forest5cm
 # Each tree is built once (one after the other, never during a bench), then runs are interleaved
 # before/after so slow drift (thermals, background load) hits both. Each tree benches with its own
 # build and keeps its run dirs, both through AFTER's tools/bench.sh (same harness on both sides).

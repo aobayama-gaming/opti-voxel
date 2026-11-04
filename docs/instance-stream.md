@@ -81,7 +81,7 @@
   slot reuse with the log, slots full -> LATER with no deadlock, rank order, inherited and improved ranks, `set_tag` (kept, forgotten, dropped jobs), the gate's cap.
   **Wiring:** `SDFTable` owns the stream over its valid sources (`add_stream`; `~SDFCascade` stops it first: its tasks read
   `ground_field`). The meshers gate every chunk they pop through `SDFBase::admit / take_ready / parked_count`, called by
-  `ChunkGate` (`src/chunk_gate.hpp`, both meshers): one owner per mesher and queue kind (chunk, remesh, discovery audit),
+  `ChunkGate` (`src/chunk_gate.hpp`): one owner per mesher and queue kind (chunk, remesh, discovery audit),
   the scan generation as the tag (a first mesh parked before the last `send_chunk` is dropped: that scan queued again the
   ones it wants), a parked chunk keeps its mesher from idle. A chunk is meshed only once all its keys are placed, so its
   content never depends on what streamed when. `GpuTable` lists in `compose_list` order, the same for the CPU's points

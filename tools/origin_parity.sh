@@ -4,9 +4,9 @@
 # in two runs that look at the same place must have bit-identical page contents.
 #
 #   tools/origin_parity.sh [--world=PATH] [-- bench args...]
-#   e.g. tools/origin_parity.sh -- --mode=direct --validate=64 --audit=1
-#        tools/origin_parity.sh --world=res://worlds/cm.world.json -- --mode=direct
-#        tools/origin_parity.sh --world=res://worlds/tiny.world.json -- --mode=direct
+#   e.g. tools/origin_parity.sh -- --audit=1
+#        tools/origin_parity.sh --world=res://worlds/cm.world.json
+#        tools/origin_parity.sh --world=res://worlds/tiny.world.json
 #
 # Runs (no build, load scenario, 60 steady frames unless overridden, page audit always on):
 #   zero, zero2   origin 0 twice: determinism (identical digests and counts) and the screenshot noise floor

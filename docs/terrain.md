@@ -61,7 +61,7 @@ One terrain (the cascade), one instance path (its table), one world file. Read b
   radius form |p - centre| - R in float32 (`det_rsqrt`), the centre snapped to 2^31 voxels so (p - c) >> L is exact.
   On the GPU (`src/base_regions.{hpp,cpp}`) the cascade passes upload per batch the regions its items touch,
   deduplicated, and 8 region indices per item (`CascadePasses::upload_items`, with the batch's ChunkInput bytes,
-  both meshers, the point items, CascadeSpike), at bindings 10 / 11 of the level shader; the sphere's `base_at` picks
+  the mesher, the point items, CascadeSpike), at bindings 10 / 11 of the level shader; the sphere's `base_at` picks
   the slot from the parity of the point's region cell on each axis: a chunk's 32-point box meets at most two cells per
   axis, whose parities differ. A point item fills its own cell's slot; the radius form needs none. CascadeSpike's set
   `4g` (an Earth-sized sphere) checks the passes and the point items bit for bit. Everything placed,
