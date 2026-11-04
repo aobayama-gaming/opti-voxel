@@ -116,6 +116,19 @@ struct Checks {
             examples.push_back(p_text);
         }
     }
+    // A chunk's tally (its comparisons run in parallel, one tally per chunk, merged in chunk order).
+    void merge(const Checks &p_t) {
+        values += p_t.values;
+        differing += p_t.differing;
+        samples += p_t.samples;
+        samples_differing += p_t.samples_differing;
+        relation_points += p_t.relation_points;
+        relation_differing += p_t.relation_differing;
+        levels += p_t.levels;
+        for (size_t i = 0; i < p_t.examples.size(); i++) {
+            example(p_t.examples[i].as_str());
+        }
+    }
 };
 
 // One set: every batch through the GPU passes level by level, compared with Terrain::run (G1: every channel of every
@@ -292,16 +305,18 @@ private:
         const float *gpu = reinterpret_cast<const float *>(p_data.data());
         const uint64_t n = uint64_t(level_bound(cs, p_j));
         const uint64_t points = n * n * n;
-        for (uint32_t c = 0; c < uint32_t(chunks.size()); c++) {
+        std::vector<Checks> tally(chunks.size());
+        parallel_for(uint32_t(chunks.size()), "CascadeCheck::compare_level", [&](uint32_t c) {
+            Checks &t = tally[c];
             const int lod_c = chunks[c].lod;
             const int top_c = ov::max(sdf.program().top, lod_c);
             const int m = lod_c + p_j;
             if (m > top_c) {
-                continue;
+                return;
             }
             const Terrain::Values &level = cpu[c][size_t(top_c - m)];
-            OV_ERR_CONTINUE(level.m != m);
-            checks.levels++;
+            OV_ERR_FAIL_COND(level.m != m);
+            t.levels++;
             const Box &box = level.box;
             int64_t differing = 0;
             for_each_point(box, [&](const Vector3i64 &p_p, int64_t p_cpu_i) {
@@ -316,11 +331,11 @@ private:
                     level.channels(node, p_cpu_i, want);
                     const float *got = gpu_channel(gpu, slot, k, p_plane);
                     for (int ch = 0; ch < (p_j == 0 && k == 1 ? 1 : CHANNELS); ch++) {
-                        checks.values++;
+                        t.values++;
                         if (float_bits(want[ch]) != float_bits(got[ch])) {
                             differing++;
-                            if (checks.wants_example()) {
-                                checks.example(ov::format("set %s LOD %d chunk %s (%s) level m=%d point %s node %d channel %d: gpu %s cpu %s (bits %x / %x)", set_label(set), lod_c,
+                            if (t.wants_example()) {
+                                t.example(ov::format("set %s LOD %d chunk %s (%s) level m=%d point %s node %d channel %d: gpu %s cpu %s (bits %x / %x)", set_label(set), lod_c,
                                         WorldCoord::to_string(chunks[c].id), chunks[c].place, m, WorldCoord::to_string(p_p), node, ch, got[ch], want[ch], float_bits(got[ch]),
                                         float_bits(want[ch])));
                             }
@@ -328,26 +343,30 @@ private:
                     }
                 }
                 if (p_j == 0) {
-                    compare_sample(c, level, p_p, i, p_cpu_i, reinterpret_cast<const float *>(p_samples.data()) + slot * 4);
+                    compare_sample(c, level, p_p, i, p_cpu_i, reinterpret_cast<const float *>(p_samples.data()) + slot * 4, t);
                 }
             });
-            checks.differing += differing;
-            checks.differing_per_lod[size_t(lod_c)] += differing;
+            t.differing += differing;
+        });
+        for (size_t c = 0; c < tally.size(); c++) {
+            checks.merge(tally[c]);
+            checks.differing_per_lod[size_t(chunks[c].lod)] += tally[c].differing;
         }
     }
 
-    void compare_sample(uint32_t p_chunk, const Terrain::Values &p_level, const Vector3i64 &p_p, const Vector3i64 &p_grid, int64_t p_cpu_i, const float *p_got) {
+    void compare_sample(uint32_t p_chunk, const Terrain::Values &p_level, const Vector3i64 &p_p, const Vector3i64 &p_grid, int64_t p_cpu_i, const float *p_got,
+            Checks &r_t) const {
         float ch[CHANNELS];
         p_level.channels(sdf.program().output, p_cpu_i, ch);
         const int lod = chunks[p_chunk].lod;
         const ExactNoise::Float4 want = sdf.with_skirt(sdf.sdf(ch, p_p * (int64_t(1) << lod), lod), lod, Float3{ float(p_grid.x), float(p_grid.y), float(p_grid.z) });
         const float w[4] = { want.x, want.y, want.z, want.w };
-        checks.samples++;
+        r_t.samples++;
         for (int k = 0; k < 4; k++) {
             if (float_bits(w[k]) != float_bits(p_got[k])) {
-                checks.samples_differing++;
-                if (checks.wants_example()) {
-                    checks.example(ov::format("set %s LOD %d chunk %s sample %s: gpu (%s %s %s %s) cpu (%s %s %s %s)", set_label(set), lod,
+                r_t.samples_differing++;
+                if (r_t.wants_example()) {
+                    r_t.example(ov::format("set %s LOD %d chunk %s sample %s: gpu (%s %s %s %s) cpu (%s %s %s %s)", set_label(set), lod,
                             WorldCoord::to_string(chunks[p_chunk].id), WorldCoord::to_string(p_grid), p_got[0], p_got[1], p_got[2], p_got[3], w[0], w[1], w[2], w[3]));
                 }
                 return;
@@ -364,11 +383,13 @@ private:
         const float *last = reinterpret_cast<const float *>(p_final.data());
         const uint64_t plane = uint64_t(p_above.size()) / 16 / nv;
         const uint64_t n1 = uint64_t(level_bound(cs, 1));
-        std::vector<ExactNoise::Float4> v(prog.nodes.size());
-        for (uint32_t c = 0; c < uint32_t(chunks.size()); c++) {
+        std::vector<Checks> tally(chunks.size());
+        parallel_for(uint32_t(chunks.size()), "CascadeCheck::check_relation", [&](uint32_t c) {
+            Checks &t = tally[c];
+            std::vector<ExactNoise::Float4> v(prog.nodes.size());
             const int lod = chunks[c].lod;
             if (lod >= prog.top) {
-                continue; // no level above it
+                return; // no level above it
             }
             const std::vector<int> code = prog.last_code(lod);
             const Box &cb = boxes[c];
@@ -399,16 +420,19 @@ private:
                 const uint64_t slot = c * cells + uint64_t(i.x) + uint64_t(cs) * (uint64_t(i.y) + uint64_t(cs) * uint64_t(i.z));
                 const float *out = gpu_channel(last, slot, 0, 0);
                 const ExactNoise::Float4 &o = v[size_t(prog.output)];
-                checks.relation_points++;
+                t.relation_points++;
                 const bool same = float_bits(o.w) == float_bits(out[VALUE]) && float_bits(o.x) == float_bits(out[DX]) && float_bits(o.y) == float_bits(out[DY]) &&
                         float_bits(o.z) == float_bits(out[DZ]) && float_bits(v[size_t(prog.pick)].w) == float_bits(gpu_channel(last, slot, 1, 0)[VALUE]);
                 if (!same) {
-                    checks.relation_differing++;
-                    if (checks.wants_example()) {
-                        checks.example(ov::format("set %s G3 LOD %d chunk %s point %s", set_label(set), lod, WorldCoord::to_string(chunks[c].id), WorldCoord::to_string(p_p)));
+                    t.relation_differing++;
+                    if (t.wants_example()) {
+                        t.example(ov::format("set %s G3 LOD %d chunk %s point %s", set_label(set), lod, WorldCoord::to_string(chunks[c].id), WorldCoord::to_string(p_p)));
                     }
                 }
             });
+        });
+        for (const Checks &t : tally) {
+            checks.merge(t);
         }
     }
 };
