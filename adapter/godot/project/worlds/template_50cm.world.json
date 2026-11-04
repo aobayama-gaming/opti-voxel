@@ -1,0 +1,35 @@
+{
+ "comment": "The template ground at 0.5 m: the ground of a world without biomes (SDFCascade::template_path) and the one a new biome starts from (the biome mixer). One note of seed 59943 per octave from 8 voxels up to the first whose amplitude, 1/8 of its wavelength, reaches 3276.8 m, every one at that steepness.",
+ "engine": {
+  "voxel_m": 0.5,
+  "lods": 15
+ },
+ "climate": {
+  "fields": []
+ },
+ "biomes": [
+  {
+   "name": "ground",
+   "graph": {
+    "nodes": [
+     {"id": "ground_16", "kind": "note", "wavelength_m": 32768.0, "seed": 59943, "amp_m": 3276.8},
+     {"id": "ground_15", "kind": "note", "wavelength_m": 16384.0, "seed": 59943, "amp_m": 2048.0},
+     {"id": "ground_14", "kind": "note", "wavelength_m": 8192.0, "seed": 59943, "amp_m": 1024.0},
+     {"id": "ground_13", "kind": "note", "wavelength_m": 4096.0, "seed": 59943, "amp_m": 512.0},
+     {"id": "ground_12", "kind": "note", "wavelength_m": 2048.0, "seed": 59943, "amp_m": 256.0},
+     {"id": "ground_11", "kind": "note", "wavelength_m": 1024.0, "seed": 59943, "amp_m": 128.0},
+     {"id": "ground_10", "kind": "note", "wavelength_m": 512.0, "seed": 59943, "amp_m": 64.0},
+     {"id": "ground_9", "kind": "note", "wavelength_m": 256.0, "seed": 59943, "amp_m": 32.0},
+     {"id": "ground_8", "kind": "note", "wavelength_m": 128.0, "seed": 59943, "amp_m": 16.0},
+     {"id": "ground_7", "kind": "note", "wavelength_m": 64.0, "seed": 59943, "amp_m": 8.0},
+     {"id": "ground_6", "kind": "note", "wavelength_m": 32.0, "seed": 59943, "amp_m": 4.0},
+     {"id": "ground_5", "kind": "note", "wavelength_m": 16.0, "seed": 59943, "amp_m": 2.0},
+     {"id": "ground_4", "kind": "note", "wavelength_m": 8.0, "seed": 59943, "amp_m": 1.0},
+     {"id": "ground_3", "kind": "note", "wavelength_m": 4.0, "seed": 59943, "amp_m": 0.5},
+     {"id": "ground", "kind": "mix", "rows": [{"in": "ground_16"}, {"in": "ground_15"}, {"in": "ground_14"}, {"in": "ground_13"}, {"in": "ground_12"}, {"in": "ground_11"}, {"in": "ground_10"}, {"in": "ground_9"}, {"in": "ground_8"}, {"in": "ground_7"}, {"in": "ground_6"}, {"in": "ground_5"}, {"in": "ground_4"}, {"in": "ground_3"}]},
+     {"id": "out", "kind": "output", "height": "ground"}
+    ]
+   }
+  }
+ ]
+}

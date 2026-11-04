@@ -7,16 +7,20 @@ One terrain (the cascade), one instance path (its table), one world file. Read b
   `engine` (a path or inline: `voxel_m`, `lods`, the master variables) and `climate` (a path or inline: the fields, none for no
   biomes) sit beside `planet`, `look`, `zone`, `instances`, `species`, `features` and `biomes`; every key is optional. A
   variant is another file: `adapter/godot/project/worlds/` holds the presets' and the tools' (`default`, `cm`, `lods25`, `biomes`,
-  `forest5cm*`, `earth`, `earth25`, `tiny`), `climate/world.json` the game's (`--preset=video`). `--preset=` names keep working. The
-  ground is the biomes' graphs, compiled (`docs/climate.md`); a world without biomes has the template biome's. Engine
-  tuning and debug flags stay flags.
+  `forest5cm*`, `earth`, `earth25`, `tiny`, and the template grounds `template_5cm` / `template_50cm`), `climate/world.json`
+  the game's (`--preset=video`). `--preset=` names keep working. The ground is the biomes' graphs, compiled into one
+  `Terrain::LevelProgram` (`docs/climate.md`, `docs/cascade-v2.md`); a world without biomes has the template ground's,
+  itself a world file (`SDFCascade::template_path`: the one of the run's voxel size; a voxel size without one, or a
+  template its run refuses, falls back to a flat ground with an ERR). Engine tuning and debug flags stay flags.
 - **One terrain, one instance path.** The ground is always the cascade (`SDFCascade`, `src/sdf_cascade.hpp`: 3D
-  height field, the notes the biome compiler keeps; without biomes the template biome's, octaves k = 3 up to the first
-  whose amplitude reaches the 3.3 km cap, k = 19 at 5 cm, at most lods + 4, octave k seeded make_octave(seed, k) so the
-  same octaves and bits at any LOD count past it, steepness 1/8; datum at 300 m,
+  height field, the program the compiler makes of the biomes; without biomes the template ground's, octaves k = 3 up to
+  the first whose amplitude reaches the 3.3 km cap, k = 19 at 5 cm (16 at 0.5 m), the notes past lods + 4 playing
+  nothing, octave k seeded make_octave(seed, k) so the same octaves and bits at any LOD count past it, steepness 1/8;
+  a 2 km planet's own world (`tiny.world.json`) stops them under its relief; datum at 300 m,
   absolute position only) and instances always go through its table (`SDFTable`, below). Don't add a second way to
   make either: a new terrain is a cascade preset (parameters), a new feature a library type. `VoxelTerrain.terrain_mode`
-  picks a preset: 1 the default, 4 flat (`SDFCascade::Preset::FLAT`: no band, the ground at `FLAT_GROUND_M` = 250 m, off
+  picks a preset: 1 the default, 4 flat (`SDFCascade::Preset::FLAT`: the flat table, a constant output, the ground at
+  `FLAT_GROUND_M` = 250 m, off
   the page shader's 100 m contours) under the shapes gallery (`SDFTable::Scene::SHAPES`, `--terrain=shapes`,
   `res://shapes_scene.tscn` with a 60 km far plane: hard-CSG cubes holed through every face, each twice the size and
   distance of the last, i.e. one per LOD, plus a die, stairs and a tunnelled cube, for dual contouring's creases; the
@@ -52,9 +56,10 @@ One terrain (the cascade), one instance path (its table), one world file. Read b
   (0, 0, 0), its +y pole at y = R, standing for the flat datum in the default world origin request ((0, 0, 0); any other
   is absolute) and in the hosts' scenes (`World::scene_shift`); `SDFCascade::planet_base` takes the switch LOD
   `SWITCH_MARGIN` (2) over the radius form's float bound: 12 at Earth / 5 cm, 16 for Jupiter, 1 for a 2 km planet, 0
-  under ~0.5 km; a planet's climate (its biomes' multiplied octaves, their curves) is capped at `PLANET_RELIEF`
-  (1/32) of its radius, so a small planet stays a ball, and its octaves start at an eighth of that (`PLANET_HEADROOM`:
-  a biome may multiply them by up to 8, the shipped climates go to 4.5)):
+  under ~0.5 km; a planet's climate (its program's output bound) is capped at `PLANET_RELIEF` (1/32) of its radius, so
+  a small planet stays a ball, and each note's amplitude at an eighth of that (`PLANET_HEADROOM`: a biome may multiply
+  them by up to 8, the shipped climates go to 4.5); a world over its cap is refused, the template's 3.3 km octaves
+  included, so a small planet's world brings its own ground, as `tiny.world.json` does):
   below `switch_lod` the curvature form d(c) + n.δ + 1/2 δ^T H δ around the centre of the point's region
   (the cell of 2^(L+6) voxels holding it, from the point and the LOD only), d(c), n, H from the CPU in double
   (`make_region` takes any base's exact value, gradient and Hessian: the unit test runs a torus); from it the

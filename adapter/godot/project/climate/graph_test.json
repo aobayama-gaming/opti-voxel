@@ -1,5 +1,5 @@
 {
- "comment": "Free graphs, for the tests (test_climate_shape.cpp, CascadeSpike set 4r): the relaxer's placements. chained warps its ground notes (their warp input) and shapes each and shapes its hills twice (the second shape reads the hills' sum at the samples: a sub-mix); shaped_mix shapes its whole mix (two notes) at the samples; caved mixes its ground with a ridged sub-mix of two notes, shaped at the samples, at volume 0.5 (a mix row past the notes: a sum at the samples). Not a world to look at: project/climate/world.json is.",
+ "comment": "Free graphs, for the tests (test_climate_shape.cpp, CascadeSpike set 4r): nodes off the notes' own levels. chained warps its ground notes (their warp input) and shapes each and shapes its hills twice (the second shape reads the hills' sum at the samples: a sub-mix); shaped_mix shapes its whole mix (two notes) at the samples; caved mixes its ground with a ridged sub-mix of two notes, shaped at the samples, at volume 0.5 (a mix row past the notes: a sum at the samples). Not a world to look at: project/climate/world.json is.",
  "engine": {"voxel_m": 0.05, "lods": 25},
  "climate": {
   "fields": [{"name": "t", "bands": [{"from_m": 800, "to_m": 26000, "amp": 0.5, "persistence": 0.7}]}]

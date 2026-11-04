@@ -1,14 +1,19 @@
 #include "climate.hpp"
+
 #include "ov/math.hpp"
+#include "ov/str.hpp"
 
 #include <algorithm>
 #include <cmath>
 
+// The climate's math, on the CPU and in GLSL op for op (every product flushed under 2^-64: climate.hpp's exactness
+// note): the weights' steps, the pick, the curves, the smooth min, and the biomes' materials.
 namespace Climate {
 
 using Cascade::dadd;
 using Cascade::dflush;
 using Cascade::dmul;
+using Cascade::dscale;
 using Cascade::dsub;
 using Cascade::flush_value;
 
@@ -50,19 +55,6 @@ Float4 blend_rcp(const Float4 &p_s) {
     return dflush(Float4{ -(p_s.x * inv) * inv, -(p_s.y * inv) * inv, -(p_s.z * inv) * inv, inv });
 }
 
-namespace {
-
-// Biome p_biome's kernel at the field channels p_fields: its axes' factors multiplied in order.
-Float4 kernel(const Biome &p_biome, const Float4 p_fields[MAX_FIELDS]) {
-    Float4 k{ 0.0f, 0.0f, 0.0f, 1.0f };
-    for (const Axis &a : p_biome.at) {
-        k = dmul(k, axis_factor(a, p_fields[a.field]));
-    }
-    return k;
-}
-
-} // namespace
-
 int Table::field_index(const ov::str &p_name) const {
     for (size_t i = 0; i < fields.size(); i++) {
         if (fields[i].name == p_name) {
@@ -71,148 +63,6 @@ int Table::field_index(const ov::str &p_name) const {
     }
     return -1;
 }
-
-void apply_terms(const Table &p_table, const float p_slots[Cascade::SLOTS], Float4 r_fields[MAX_FIELDS]) {
-    const Float4 ground = to_float4(p_slots);
-    for (size_t i = 0; i < p_table.fields.size(); i++) {
-        Float4 f = to_float4(p_slots + Cascade::field_slot(int(i)));
-        for (const Term &t : p_table.fields[i].terms) {
-            const Float4 s = t.source == GROUND ? ground : r_fields[t.source];
-            f = dflush(Float4{ f.x + s.x * t.coef, f.y + s.y * t.coef, f.z + s.z * t.coef, f.w + s.w * t.coef });
-        }
-        r_fields[i] = f;
-    }
-}
-
-bool plays(const Amp &p_amp, const Cascade::Band &p_band, int p_group) {
-    return note_id(p_amp) == note_id(p_band, p_group);
-}
-
-const Amp *find_amp(const Biome &p_biome, const Cascade::Band &p_band, int p_group) {
-    for (const Amp &a : p_biome.amps) {
-        if (plays(a, p_band, p_group)) {
-            return &a;
-        }
-    }
-    return nullptr;
-}
-
-float biome_amp(const Biome &p_biome, const Cascade::Band &p_band, int p_group) {
-    const Amp *a = find_amp(p_biome, p_band, p_group);
-    return a ? a->amp : p_band.amp;
-}
-
-double ground_reach(const Table &p_table) {
-    double h = 0.0;
-    for (const Cascade::Band &band : p_table.notes) {
-        h += double(max_amp(p_table, band));
-    }
-    return h;
-}
-
-bool Table::has_stretch() const {
-    return std::any_of(notes.begin(), notes.end(), [](const Cascade::Band &p_b) { return p_b.stretch > 0; });
-}
-
-Shape band_shape(const Biome &p_biome, const Cascade::Band &p_band, int p_group) {
-    const Amp *a = find_amp(p_biome, p_band, p_group);
-    return a && a->has_shape ? a->shape : Shape();
-}
-
-float max_amp(const Table &p_table, const Cascade::Band &p_band, int p_group) {
-    float m = p_table.biomes.empty() ? p_band.amp : 0.0f;
-    for (const Climate::Biome &b : p_table.biomes) {
-        m = ov::max(m, biome_amp(b, p_band, p_group) * shape_bound(band_shape(b, p_band, p_group)));
-    }
-    return m;
-}
-
-namespace {
-
-// Field p_field's step at a LOD-L chunk's seams: its largest octave inserted on Λ_{L+1} or Λ_{L+2}, plus each term's
-// |coef| times its source's step (the ground's p_ground_amp, or an earlier field's). A LOD-L chunk's samples read the
-// climate of Λ_{L+1} before its insertions, the fields down to the octave inserted on Λ_{L+2}: a coarser neighbour
-// lacks that one, a finer neighbour adds the one on Λ_{L+1} (octave_step's two, one level higher).
-double field_step(const Table &p_table, int p_field, int p_lod, double p_ground_amp) {
-    const Field &f = p_table.fields[size_t(p_field)];
-    double amp = 0.0;
-    for (const Cascade::Band &b : f.bands) {
-        if (b.k - ExactNoise::BAND_SHIFT == p_lod + 1 || b.k - ExactNoise::BAND_SHIFT == p_lod + 2) { // inserted on Λ_{L+1} / Λ_{L+2}
-            amp = ov::max(amp, band_bound(p_table, p_field, b));
-        }
-    }
-    for (const Term &t : f.terms) {
-        amp += std::fabs(double(t.coef)) * (t.source == GROUND ? p_ground_amp : field_step(p_table, t.source, p_lod, p_ground_amp));
-    }
-    return amp;
-}
-
-} // namespace
-
-double band_bound(const Table &p_table, int p_field, const Cascade::Band &p_b) {
-    return p_table.fields[size_t(p_field)].channel ? double(max_amp(p_table, p_b, 1 + p_field)) : std::fabs(double(p_b.amp));
-}
-
-double ground_step(const Table &p_table, int p_lod, double p_ground_amp) {
-    // ground = h + sum_b w_b D_b(h, f). The weights sum to 1, so the h part moves by at most (1 + max |dD_b/dh|) times
-    // h's step, plus each field a program reads, |dD_b/df| times its step. The weights' own change moves it by |dw_b|
-    // |D_b|. A kernel's |dk/dq| <= 1.54 (4 q (1 - q^2) at q^2 = 1/3) and |dq| <= 2 sum |du| (|u| <= 1 where k > 0), so
-    // |dk_b| <= KERNEL_SLOPE sum |1 / span| field_step = K_b; the default's |dk_d| <= 2 sum K; w = k / S with S >= 3/4,
-    // w <= 1, |dS| <= 3 sum K: |dw| <= (4/3)(|dk| + |dS|) <= BLEND_SLOPE sum K for every biome, the default too.
-    double slope = 0.0, kernels = 0.0, terms = 0.0, fields = 0.0;
-    for (const Biome &b : p_table.biomes) {
-        for (const Axis &a : b.at) {
-            kernels += KERNEL_SLOPE * std::fabs(double(a.inv_span)) * field_step(p_table, a.field, p_lod, p_ground_amp);
-        }
-        if (!b.program.empty()) {
-            slope = std::max(slope, b.program.slope);
-            terms += b.program.bound;
-            for (int f = 0; f < int(p_table.fields.size()); f++) {
-                fields += b.program.field_slope[f] > 0.0 ? b.program.field_slope[f] * field_step(p_table, f, p_lod, p_ground_amp) : 0.0;
-            }
-        }
-    }
-    return (1.0 + slope) * p_ground_amp + BLEND_SLOPE * kernels * terms + fields;
-}
-
-void fields_at(const Table &p_table, const Cascade::Spec &p_combined, const Vector3i64 &p_p, int p_m, Float4 r_fields[MAX_FIELDS]) {
-    float slots[Cascade::SLOTS];
-    Cascade::point_slots(p_combined, p_p, p_m, slots, true);
-    apply_terms(p_table, slots, r_fields);
-}
-
-void weights(const Table &p_table, const Float4 p_fields[MAX_FIELDS], Float4 r_w[MAX_BIOMES]) {
-    for (int b = 0; b < MAX_BIOMES; b++) {
-        r_w[b] = Float4{ 0.0f, 0.0f, 0.0f, 0.0f };
-    }
-    const size_t n = p_table.biomes.size();
-    if (n == 1) {
-        r_w[0] = Float4{ 0.0f, 0.0f, 0.0f, 1.0f };
-        return;
-    }
-    Float4 sum{ 0.0f, 0.0f, 0.0f, 0.0f };
-    for (size_t b = 0; b + 1 < n; b++) {
-        r_w[b] = kernel(p_table.biomes[b], p_fields);
-        sum = dadd(sum, r_w[b]);
-    }
-    if (n > 0) {
-        r_w[n - 1] = fill(sum);
-        const Float4 rcp = blend_rcp(dadd(sum, r_w[n - 1]));
-        for (size_t b = 0; b < n; b++) {
-            r_w[b] = blend_weight(r_w[b], rcp);
-        }
-    }
-}
-
-void state(const Table &p_table, const float p_slots[Cascade::SLOTS], State &r_state) {
-    apply_terms(p_table, p_slots, r_state.fields);
-    weights(p_table, r_state.fields, r_state.w);
-}
-
-int pick(const Table &p_table, const Float4 p_w[MAX_BIOMES], const Vector3i64 &p_p, int p_m) {
-    return pick_of(int(p_table.biomes.size()), p_w, p_p, p_m);
-}
-
 int pick_of(int p_count, const Float4 *p_w, const Vector3i64 &p_p, int p_m) {
     int best[MAX_BIOMES];
     int count = 0;
@@ -233,40 +83,242 @@ int pick_of(int p_count, const Float4 *p_w, const Vector3i64 &p_p, int p_m) {
     return best[ExactNoise::hash_cell(voxel, PICK_SEED) % uint32_t(count)];
 }
 
-SampleCarry sample_carry(const Table &p_table) {
-    SampleCarry s;
-    std::fill(std::begin(s.weight), std::end(s.weight), -1);
-    std::fill(std::begin(s.field), std::end(s.field), -1);
-    for (size_t b = 0; b < p_table.biomes.size(); b++) {
-        if (p_table.generic || !p_table.biomes[b].program.empty()) {
-            s.weight[b] = s.count++;
-        }
-    }
-    // Without fields the weights are constant: the last biome takes everything.
-    if (!p_table.fields.empty() && !p_table.biomes.empty()) {
-        s.pick = s.count++;
-    }
-    // A warp field is no program's input: only notes read it.
-    for (int f = 0; f < int(p_table.fields.size()); f++) {
-        if (p_table.fields[size_t(f)].warp) {
-            continue;
-        }
-        if (p_table.generic || std::any_of(p_table.biomes.begin(), p_table.biomes.end(), [&](const Biome &p_b) { return p_b.program.reads_field(f); })) {
-            s.field[f] = s.count++;
-        }
-    }
-    return s;
+double shape_phi(const Shape &p_shape, double p_n) {
+    const double sabs = std::sqrt(p_n * p_n + double(Cascade::SMOOTH_ABS_E) * Cascade::SMOOTH_ABS_E) - Cascade::SMOOTH_ABS_E;
+    return double(p_shape.c[0]) + double(p_shape.c[1]) * p_n + double(p_shape.c[2]) * sabs + double(p_shape.c[3]) * p_n * p_n;
 }
 
-int pick_slots(const Table &p_table, const float p_slots[Cascade::SLOTS]) {
-    return pick_slots(p_table, sample_carry(p_table), p_slots);
+Curve make_curve(const std::vector<double> &p_x, const std::vector<double> &p_y) {
+    Curve c;
+    const int n = int(p_x.size());
+    auto y = [&](int p_i) { return p_y[size_t(ov::clamp(p_i, 0, n - 1))]; };
+    for (int i = 0; i < n; i++) {
+        c.x.push_back(float(p_x[size_t(i)]));
+    }
+    // libnoise's CubicInterp(n0, n1, n2, n3, a) on segment i: n0 .. n3 = y_{i-1} .. y_{i+2}, ends clamped.
+    for (int i = 0; i + 1 < n; i++) {
+        const double n0 = y(i - 1), n1 = y(i), n2 = y(i + 1), n3 = y(i + 2);
+        const double p = (n3 - n2) - (n0 - n1);
+        const double q = (n0 - n1) - p;
+        c.inv.push_back(float(1.0 / (p_x[size_t(i + 1)] - p_x[size_t(i)])));
+        c.p.push_back(float(p));
+        c.q.push_back(float(q));
+        c.r.push_back(float(n2 - n0));
+        c.s.push_back(float(n1));
+    }
+    c.y_last = float(p_y.back());
+    return c;
 }
 
-int pick_slots(const Table &p_table, const SampleCarry &p_carry, const float p_slots[Cascade::SLOTS]) {
-    const int c = p_carry.pick;
-    return c >= 0 ? int(p_slots[Cascade::carry_slot(c)]) : int(p_table.biomes.size()) - 1;
+float curve_slope_bound(const Curve &p_curve) {
+    double m = 0.0;
+    for (size_t i = 0; i < p_curve.p.size(); i++) {
+        for (int j = 0; j <= 64; j++) {
+            const double a = j / 64.0;
+            const double d = ((3.0 * p_curve.p[i] * a + 2.0 * p_curve.q[i]) * a + p_curve.r[i]) * p_curve.inv[i];
+            m = std::max(m, std::fabs(d));
+        }
+    }
+    return float(m);
 }
 
+float curve_bound(const Curve &p_curve) {
+    double m = std::fabs(double(p_curve.y_last));
+    for (size_t i = 0; i < p_curve.p.size(); i++) {
+        for (int j = 0; j <= 64; j++) {
+            const double a = j / 64.0;
+            m = std::max(m, std::fabs(((p_curve.p[i] * a + p_curve.q[i]) * a + p_curve.r[i]) * a + p_curve.s[i]));
+        }
+    }
+    return float(m);
+}
+
+// The curve's value and slope at x (constant past the ends), the slope applied to x's gradient.
+Float4 eval_curve(const Curve &p_c, const Float4 &p_x) {
+    const size_t n = p_c.x.size();
+    if (!(p_x.w > p_c.x[0])) {
+        return Float4{ 0.0f, 0.0f, 0.0f, p_c.s[0] };
+    }
+    if (p_x.w >= p_c.x[n - 1]) {
+        return Float4{ 0.0f, 0.0f, 0.0f, p_c.y_last };
+    }
+    size_t i = 0;
+    while (i + 2 < n && p_x.w >= p_c.x[i + 1]) {
+        i++;
+    }
+    const float a = flush_value((p_x.w - p_c.x[i]) * p_c.inv[i]);
+    float v = flush_value(p_c.p[i] * a) + p_c.q[i];
+    v = flush_value(v * a) + p_c.r[i];
+    v = flush_value(v * a) + p_c.s[i];
+    float d = flush_value((p_c.p[i] * 3.0f) * a) + p_c.q[i] * 2.0f;
+    d = flush_value(d * a) + p_c.r[i];
+    d = flush_value(d * p_c.inv[i]);
+    return dflush(Float4{ p_x.x * d, p_x.y * d, p_x.z * d, v });
+}
+
+// Quilez's polynomial smooth min of p_a and p_b over p_k voxels (p_inv = 0.5 / p_k): h = clamp(1/2 + (b - a) / (2k), 0,
+// 1), b + h (a - b) - k h (1 - h); outside the blend the smaller register itself. Not the archetype IR's smooth_min4: the
+// climate's products flush under 2^-64 (its exactness note). Its dip, k / 4 at a = b, is graph_bounds.cpp's bound.
+Float4 smooth_min(const Float4 &p_a, const Float4 &p_b, float p_k, float p_inv) {
+    const Float4 t = dscale(dsub(p_b, p_a), p_inv);
+    const float hw = 0.5f + t.w;
+    if (!(hw > 0.0f)) {
+        return p_b;
+    }
+    if (hw >= 1.0f) {
+        return p_a;
+    }
+    const Float4 h{ t.x, t.y, t.z, hw };
+    const Float4 one_h{ -t.x, -t.y, -t.z, 1.0f - hw };
+    const Float4 m = dadd(p_b, dmul(h, dsub(p_a, p_b)));
+    return dsub(m, dscale(dmul(h, one_h), p_k));
+}
+
+namespace {
+
+// smooth_min in GLSL (after the shared helpers).
+constexpr const char GLSL_SMOOTH_MIN[] = R"glsl(
+vec4 cl_smin(vec4 a, vec4 b, float k, float inv) {
+    vec4 t = cl_scale(cl_sub(b, a), inv);
+    precise float hw = 0.5 + t.w;
+    if (!(hw > 0.0)) {
+        return b;
+    }
+    if (hw >= 1.0) {
+        return a;
+    }
+    vec4 h = vec4(t.x, t.y, t.z, hw);
+    precise float omh = 1.0 - hw;
+    vec4 one_h = vec4(-t.x, -t.y, -t.z, omh);
+    vec4 m = cl_add(b, cl_mul(h, cl_sub(a, b)));
+    return cl_sub(m, cl_scale(cl_mul(h, one_h), k));
+}
+)glsl";
+
+// eval_curve's arithmetic once its segment is chosen (x0, inv, p, q, r, s declared), returning the curve at x.
+ov::str curve_tail() {
+    using Cascade::glsl_flush_of;
+    ov::str code = "    precise float a0 = (x.w - x0) * inv;\n    precise float a = (" + glsl_flush_of("a0") + ov::str(");\n");
+    code += "    precise float t0 = p * a;\n    precise float v = (" + glsl_flush_of("t0") + ov::str(") + q;\n");
+    code += "    precise float t1 = v * a;\n    v = (" + glsl_flush_of("t1") + ov::str(") + r;\n");
+    code += "    precise float t2 = v * a;\n    v = (" + glsl_flush_of("t2") + ov::str(") + s;\n");
+    code += "    precise float u0 = (p * 3.0) * a;\n    precise float d = (" + glsl_flush_of("u0") + ov::str(") + q * 2.0;\n");
+    code += "    precise float u1 = d * a;\n    d = (" + glsl_flush_of("u1") + ov::str(") + r;\n");
+    code += "    precise float u2 = d * inv;\n    d = (" + glsl_flush_of("u2") + ov::str(");\n");
+    return code + "    precise vec4 res = vec4(x.x * d, x.y * d, x.z * d, v);\n    return cl_flush(res);\n}\n";
+}
+
+// eval_curve over a curve's record in the params' heap (n, y_last, x[n], then inv, p, q, r, s per segment), the
+// segment chosen by eval_curve's compares in a loop.
+constexpr const char GLSL_CURVE_AT[] = R"glsl(
+vec4 cl_curve_at(int cb, vec4 x) {
+    int n = int(cl_heap(cb));
+    int xs = cb + 2;
+    int seg = xs + n;
+    if (!(x.w > cl_heap(xs))) {
+        return vec4(0.0, 0.0, 0.0, cl_heap(seg + 4));
+    }
+    if (x.w >= cl_heap(xs + n - 1)) {
+        return vec4(0.0, 0.0, 0.0, cl_heap(cb + 1));
+    }
+    int i = 0;
+    while (i + 2 < n && x.w >= cl_heap(xs + i + 1)) {
+        i++;
+    }
+    int k = seg + 5 * i;
+    float x0 = cl_heap(xs + i);
+    float inv = cl_heap(k);
+    float p = cl_heap(k + 1);
+    float q = cl_heap(k + 2);
+    float r = cl_heap(k + 3);
+    float s = cl_heap(k + 4);
+)glsl";
+
+// flushed, dmul, dsub, fill, axis_factor and the Newton reciprocal in GLSL, op for op.
+constexpr const char GLSL_CLIMATE_HELPERS[] = R"glsl(
+vec4 cl_flush(vec4 v) {
+    return vec4(abs(v.x) < FLUSH ? 0.0 : v.x, abs(v.y) < FLUSH ? 0.0 : v.y, abs(v.z) < FLUSH ? 0.0 : v.z, abs(v.w) < FLUSH ? 0.0 : v.w);
+}
+
+vec4 cl_mul(vec4 a, vec4 b) {
+    precise vec4 r;
+    r.x = a.w * b.x + b.w * a.x;
+    r.y = a.w * b.y + b.w * a.y;
+    r.z = a.w * b.z + b.w * a.z;
+    r.w = a.w * b.w;
+    return cl_flush(r);
+}
+
+vec4 cl_sub(vec4 a, vec4 b) {
+    precise vec4 r = a - b;
+    return cl_flush(r);
+}
+
+// Climate::fill: the default's (1 - x)^2 for x < 1, else 0.
+vec4 cl_fill(vec4 x) {
+    if (!(x.w < 1.0)) {
+        return vec4(0.0);
+    }
+    precise vec4 t = vec4(-x.x, -x.y, -x.z, 1.0 - x.w);
+    return cl_mul(t, t);
+}
+
+// Climate::axis_factor: the smoothstep of clamp((1 - u^2) fade, 0, 1), u = (x - centre) * inv_span.
+vec4 cl_axis(vec4 x, float centre, float inv_span, float fade) {
+    precise vec4 u0 = vec4(x.x * inv_span, x.y * inv_span, x.z * inv_span, (x.w - centre) * inv_span);
+    vec4 u = cl_flush(u0);
+    vec4 uu = cl_mul(u, u);
+    precise float raw0 = (1.0 - uu.w) * fade;
+    float raw = abs(raw0) < FLUSH ? 0.0 : raw0;
+    if (!(raw > 0.0)) {
+        return vec4(0.0);
+    }
+    if (raw >= 1.0) {
+        return vec4(0.0, 0.0, 0.0, 1.0);
+    }
+    precise vec4 s0 = vec4(-uu.x * fade, -uu.y * fade, -uu.z * fade, raw);
+    vec4 s = cl_flush(s0);
+    precise vec4 t = vec4(s.x * -2.0, s.y * -2.0, s.z * -2.0, 3.0 - s.w * 2.0);
+    return cl_mul(cl_mul(s, s), t);
+}
+
+// The weights' normalisation (blend_rcp): (-s' / s^2, 1 / s), 1 / s = det_rsqrt(s)^2 and one Newton step.
+vec4 cl_rcp(vec4 s) {
+    precise float r = det_rsqrt(s.w);
+    precise float inv0 = r * r;
+    precise float inv = inv0 * (2.0 - s.w * inv0);
+    precise vec4 v = vec4(-(s.x * inv) * inv, -(s.y * inv) * inv, -(s.z * inv) * inv, inv);
+    return cl_flush(v);
+}
+)glsl";
+
+} // namespace
+
+ov::str smooth_min_glsl() {
+    return GLSL_SMOOTH_MIN;
+}
+
+ov::str curve_at_glsl() {
+    return ov::replace_all(ov::str(GLSL_CURVE_AT) + curve_tail(), "FLUSH", Cascade::glsl_flush());
+}
+
+Float4 up_value(const Float4 &p_base, int p_lod) {
+    return Cascade::dscale(p_base, ExactNoise::exact_pow2(p_lod));
+}
+
+ov::str shared_helpers_glsl() {
+    return ov::replace_all(ov::str(GLSL_CLIMATE_HELPERS), "FLUSH", Cascade::glsl_flush()) + R"glsl(
+vec4 cl_add(vec4 a, vec4 b) {
+    precise vec4 r = a + b;
+    return cl_flush(r);
+}
+
+vec4 cl_scale(vec4 a, float k) {
+    precise vec4 r = a * k;
+    return cl_flush(r);
+}
+)glsl";
+}
 ov::Color srgb_to_linear(uint32_t p_rgb) {
     return ov::Color::hex((p_rgb << 8) | 0xFFu).srgb_to_linear();
 }

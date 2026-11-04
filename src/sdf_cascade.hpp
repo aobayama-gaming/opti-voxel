@@ -2,7 +2,6 @@
 
 #include "base_regions.hpp"
 #include "base_surface.hpp"
-#include "biome_compiler.hpp" // Climate::template_biome (a world file in stage E)
 #include "cascade.hpp"
 #include "cascade_terrain.hpp"
 #include "climate.hpp"
@@ -11,19 +10,20 @@
 #include "level_glsl.hpp"
 #include "level_program.hpp"
 #include "ov/format.hpp"
+#include "ov/json.hpp"
 #include "ov/math.hpp"
 #include "ov/on_error.hpp"
 #include "ov/str.hpp"
 #include "ov/value.hpp"
 #include "sdf_table.hpp"
+#include "world_file.hpp"
 
 #include <algorithm>
 #include <cmath>
 
-// The meshed terrain: the world's climate compiled into one cascade v2 program (Terrain::compile, docs/cascade-v2.md; without
-// a climate the template biome's: octaves from k = 3 up to the first at the 3.3 km cap, steepness 1/8), its output the
-// height h (value + gradient) of a surface over the base surface (BaseSurface::flat at BaseSurface::DATUM_M). A function
-// of the absolute position only.
+// The meshed terrain: the world's climate compiled into one cascade v2 program (Terrain::compile, docs/cascade-v2.md;
+// without a climate the template ground's, a world file: template_path), its output the height h (value + gradient) of a
+// surface over the base surface (BaseSurface::flat at BaseSurface::DATUM_M). A function of the absolute position only.
 //
 // The cascade only exists on lattice points: a LOD-L chunk's samples are the points of Λ_L, computed by
 // the meshers' cascade passes (cascade_glsl.hpp) bit for bit like Terrain::run, and evaluate() takes the
@@ -40,14 +40,11 @@ public:
     ~SDFCascade() override { stop_streaming(); }
 
     // Set before configure(): a climate table (the world file's format), empty for none. configure() compiles it
-    // (Terrain::compile). Without one, or one it refuses (an ERR, and no climate), the template biome's ground
-    // (Climate::template_biome).
+    // (Terrain::compile). Without one, or one it refuses (an ERR, and no climate), the template ground (template_path).
     ov::Value climate_data = ov::Value::object();
     // Set before configure(): the program specialised to the climate's values (Terrain::Mode::SPECIALISED), or generic
-    // (false, the biome mixer's: its GPU text interprets the program as data, so an edit compiles nothing). caps: unused
-    // by v2 (stage E removes them with World::Kept.caps).
+    // (false, the biome mixer's: its GPU text interprets the program as data, so an edit compiles nothing).
     bool specialize = true;
-    Climate::Caps caps;
 
     // Set before configure(). DEFAULT: the climate's notes. FLAT (the shapes gallery): a constant output, the ground at
     // FLAT_GROUND_M, a plane y = datum (the same passes, a zero height).
@@ -171,16 +168,27 @@ uint cascade_ground_material(Ch ch) {
             r_w[b] = size_t(b) < prog.weights.size() ? v[2 + prog.fields.size() + size_t(b)] : ExactNoise::Float4{};
         }
     }
-    // What a climate table is compiled for (Climate::parse / validate), after configure(): the LOD count's octaves, a
+    // What a climate table is compiled for (Terrain::compile), after configure(): the voxel, the LOD count's octaves, a
     // planet's relief (the flat world: the exact range's top).
     Climate::Ground climate_ground() const {
         const double relief = base.curved() ? PLANET_RELIEF * base.get_radius() : double(ExactNoise::exact_pow2(40));
-        return Climate::Ground{ double(voxel_size), k_max, float(relief), base.curved() ? relief / PLANET_HEADROOM : INFINITY, specialize, caps };
+        return Climate::Ground{ double(voxel_size), k_max, float(relief), base.curved() ? relief / PLANET_HEADROOM : INFINITY };
+    }
+    // The template ground's world file at p_voxel_m metres (worlds/template_5cm.world.json, template_50cm...): the ground of a
+    // world without biomes and of one whose climate is refused, and the graph a new biome starts from (the biome mixer).
+    static ov::str template_path(double p_voxel_m) { return ov::format("res://worlds/template_%dcm.world.json", int64_t(std::llround(p_voxel_m * 100.0))); }
+    // Its climate table in r_table: empty, or why not (no file at that voxel size, or one at another).
+    static ov::str template_table(double p_voxel_m, ov::Value &r_table) {
+        WorldFile w;
+        const ov::str err = WorldFile::load(template_path(p_voxel_m), w);
+        if (!err.empty() || float(w.voxel_m) != float(p_voxel_m)) {
+            return err.empty() ? ov::format("its voxel is %s m, not %s", ov::num(w.voxel_m), ov::num(p_voxel_m)) : err;
+        }
+        r_table = w.climate_table;
+        return ov::str();
     }
     float skirt_depth_m(int p_lod) const override { return skirt_depth_table[p_lod]; }
     const Terrain::LevelProgram &program() const { return prog; }
-    // The old generic capacities (v2's generic text has fixed caps: level_glsl.hpp): passed through until stage E.
-    Climate::Caps generic_caps() const { return caps; }
     int64_t get_datum_y() const { return base.datum_y(); }
     const BaseSurface &get_base() const override { return base; }
     const BaseSurface *get_curved_base() const override { return base.curved() ? &base : nullptr; }
@@ -453,62 +461,56 @@ vec4 base_stretch_gradient(vec4 g, int j) {
     return g;
 }
 )glsl";
-
-    // A table of one biome whose graph's output is the constant 0 (the flat preset).
+    // The flat preset's table, and the ground of last resort (a template the run refuses): one biome whose output is 0.
     static ov::Value flat_table() {
-        ov::Value c = ov::Value::object();
-        c["id"] = "c";
-        c["kind"] = "constant";
-        c["value_m"] = 0.0;
-        ov::Value o = ov::Value::object();
-        o["id"] = "o";
-        o["kind"] = "output";
-        o["height"] = "c";
-        ov::Value biome = ov::Value::object();
-        biome["name"] = "flat";
-        biome["graph"] = ov::Value::object();
-        biome["graph"]["nodes"] = ov::Value::array();
-        biome["graph"]["nodes"].push_back(c);
-        biome["graph"]["nodes"].push_back(o);
-        ov::Value t = ov::Value::object();
-        t["biomes"] = ov::Value::array();
-        t["biomes"].push_back(biome);
-        return t;
+        ov::str error;
+        return ov::parse_json(R"({"biomes": [{"name": "flat", "graph": {"nodes": [{"id": "c", "kind": "constant", "value_m": 0},
+            {"id": "o", "kind": "output", "height": "c"}]}}]})",
+                error);
     }
 
-    // The climate_data table (or the template, or the flat preset's) compiled into the program (configure, after the base
-    // and voxel size).
+    // p_data compiled into the program (its table, given or not): empty, or why it can't run here.
+    ov::str compile_climate(const ov::Value &p_data, Terrain::Mode p_mode) {
+        ov::str err = Terrain::compile(p_data, climate_ground(), p_mode, table, prog);
+        const bool stretched = std::any_of(prog.nodes.begin(), prog.nodes.end(), [](const Terrain::Node &p_n) { return p_n.op == Terrain::Op::NOTE && p_n.band.stretch > 0; });
+        // TODO: a stretched note reads the base at its own level, whose regions the GPU doesn't have (BaseRegions
+        // uploads the chunk's LOD only); upload those too to lift this.
+        if (err.empty() && base.curved() && stretched) {
+            err = "a stretched note (stretch_y) on a curved base has no GPU path yet";
+        }
+        ov::str layout_error;
+        if (err.empty()) {
+            Terrain::gpu_layout(prog, layout_error);
+        }
+        return err.empty() ? layout_error : err;
+    }
+
+    // The climate_data table compiled into the program, else the template's, else the flat one (configure, after the base
+    // and voxel size). The template and the flat table are specialised whatever specialize says: nothing edits them.
     void attach_climate() {
         given = false;
         climate_error = ov::str();
         set_ground_materials({});
-        const Terrain::Mode mode = specialize ? Terrain::Mode::SPECIALISED : Terrain::Mode::GENERIC;
         if (!climate_data.is_empty() && preset != Preset::FLAT) {
-            climate_error = Terrain::compile(climate_data, climate_ground(), mode, table, prog);
-            const bool stretched = std::any_of(prog.nodes.begin(), prog.nodes.end(), [](const Terrain::Node &p_n) { return p_n.op == Terrain::Op::NOTE && p_n.band.stretch > 0; });
-            // TODO: a stretched note reads the base at its own level, whose regions the GPU doesn't have (BaseRegions
-            // uploads the chunk's LOD only); upload those too to lift this.
-            if (climate_error.empty() && base.curved() && stretched) {
-                climate_error = "a stretched note (stretch_y) on a curved base has no GPU path yet";
-            }
-            ov::str layout_error;
-            if (climate_error.empty()) {
-                Terrain::gpu_layout(prog, layout_error);
-            }
-            climate_error = climate_error.empty() ? layout_error : climate_error;
+            climate_error = compile_climate(climate_data, specialize ? Terrain::Mode::SPECIALISED : Terrain::Mode::GENERIC);
             given = climate_error.empty();
             if (!given) {
                 OV_ERR_PRINT("SDFCascade: " + climate_error + ": no climate, the template ground.");
             }
         }
-        if (!given) {
-            const Climate::Ground ground = climate_ground();
-            ov::Value t = ov::Value::object();
-            t["biomes"] = ov::Value::array();
-            t["biomes"].push_back(Climate::template_biome(double(voxel_size), "ground", &ground));
-            // Specialised whatever specialize says: nothing edits the template.
-            const ov::str err = Terrain::compile(preset == Preset::FLAT ? flat_table() : t, ground, Terrain::Mode::SPECIALISED, table, prog);
-            OV_ERR_FAIL_COND_MSG(!err.empty(), "SDFCascade: the template ground: " + err);
+        bool flat = preset == Preset::FLAT;
+        if (!given && !flat) {
+            ov::Value t;
+            ov::str err = template_table(double(voxel_size), t);
+            err = err.empty() ? compile_climate(t, Terrain::Mode::SPECIALISED) : err;
+            if (!err.empty()) {
+                OV_ERR_PRINT("SDFCascade: the template ground (" + template_path(double(voxel_size)) + "): " + err + ": a flat ground.");
+                flat = true;
+            }
+        }
+        if (flat) {
+            const ov::str err = compile_climate(flat_table(), Terrain::Mode::SPECIALISED);
+            OV_ERR_FAIL_COND_MSG(!err.empty(), "SDFCascade: the flat ground: " + err);
         }
         prog.base = base; // compiled on the flat datum 0: the program's stretch and `up` read this one
         std::vector<std::pair<ov::str, Material::Params>> grounds;

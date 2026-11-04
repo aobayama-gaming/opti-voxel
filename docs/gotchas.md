@@ -85,7 +85,8 @@ Engine, GPU and float traps that already cost a debugging session each.
   `WorldCoord::lo32_i`.
 - Godot's JSON parser reads numbers back as doubles: reports carry int64 ids as strings
   (`WorldCoord::to_string`).
-- CPU mirrors of GPU float math (`ChunkMath::sample_pos`, `exact_noise.hpp`, `Archetype::run`, `Cascade::run`) must
+- CPU mirrors of GPU float math (`ChunkMath::sample_pos`, `exact_noise.hpp`, `Archetype::run`, the cascade's op table
+  `Terrain::op_def` in `level_program.cpp`, each op's CPU and GLSL form side by side) must
   stay op for op identical in float32: same expression order, `Float3` (not `Vector3`, which is
   double in precision=double builds), `precise` on every GPU float, and `-ffp-contract=off` (in
   `SConstruct`; aarch64 or `-march=native` would fuse FMAs otherwise). Only correctly rounded ops:

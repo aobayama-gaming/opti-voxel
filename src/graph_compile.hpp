@@ -13,7 +13,7 @@
 //             in a LIN), a shape on a note shapes its noise without its mean (so a dropped note makes no step), a curve
 //             node is its input plus the curve's offset, a multifractal is multiply(in, ramp(parent)) with the ramp a
 //             two-point clamped curve, a warp reads its input three times (seeds + 0, 1, 2) or its x, y, z ports, times
-//             amount_m. A field is the LIN of its bands and terms; a biome's weight its kernels' (Climate::weights, op
+//             amount_m. A field is the LIN of its bands and terms; a biome's weight its kernels' (ClimateTest::weights, op
 //             for op); the ground sum_b w_b out_b; the pick the largest weight. The acyclic check and the gate (a warp's
 //             input strictly coarser than the note) refuse with the node's name.
 //   identity: nodes are hash-consed as they are made: a note is one node whatever reads it (octave, seed, stretch,

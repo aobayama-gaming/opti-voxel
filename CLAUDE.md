@@ -110,7 +110,8 @@ to every change, and a reviewer may reject a PR on any of them.
 - Every terrain is a function of the absolute position: the same point gives the same bits from any
   origin, any chunk, any LOD where they share samples. The cascade only exists on lattice points.
 - CPU mirrors of GPU float math are op for op identical in float32 (no `mix` / `dot` / `normalize` /
-  `sqrt` / division in GLSL, no denormals, `precise` everywhere, constants as bits): `docs/gotchas.md`.
+  `sqrt` / division in GLSL, no denormals, `precise` everywhere, constants as bits): `docs/gotchas.md`. A terrain op
+  is written once, its CPU and GLSL forms side by side in the op table (`Terrain::op_def`, `level_program.cpp`).
 - One terrain, one instance path: a new terrain is a cascade preset, a new feature a library type of
   the table. Don't add a second way to make either (`docs/terrain.md`).
 - Main-RD resources are created and freed on the render thread; async readbacks outlive their object
@@ -122,14 +123,14 @@ to every change, and a reviewer may reject a PR on any of them.
 | `docs/pipelines.md` | the GPU Direct mesher, page layout, GPU budget and cost model, compaction, dual contouring | `GPU_*mesher*`, `quad_page_pool*`, `page_format.hpp`, `gpu_cost_model.hpp`, `gpu_glsl.hpp` |
 | `docs/integer-frame.md` | int64 ids, `WorldPos`, GPU words, origin, LOD range and clip planes, exact noise, Morton keys | `world_coord.hpp`, `gpu_frame.hpp`, `chunk_math*`, `exact_noise*` |
 | `docs/terrain.md` | world files, presets and `--terrain`, the table folded into the cascade samples, the base surface (flat / sphere) | `world_file*`, `sdf_cascade*`, `sdf_table*`, `base_surface*` |
-| `docs/cascade.md` | Hermite cascade, CPU and GPU passes, lattice-only evaluation | `cascade*` |
-| `docs/cascade-v2.md` | design (not implemented): the ground as one graph coarse to fine, a node computed at its level, the warp the only gate; what v2 deletes, its PRs | |
+| `docs/cascade.md` | Hermite cascade, CPU runs and GPU passes, specialised and generic text, lattice-only evaluation | `cascade*`, `level_program*`, `level_glsl*` |
+| `docs/cascade-v2.md` | design (implemented): the ground as one graph coarse to fine, a node computed at its level, the warp the only gate; what v2 deleted, its PRs | `level_program*`, `graph_compile*`, `level_glsl*` |
 | `docs/archetypes.md` | archetype IR (adding an op), library types, locality and band rules, the index, runtime edits | `archetype_*`, `instance_table*` |
 | `docs/instance-stream.md` | scatter sources, keys, the stream and its wiring | `cell_scatter*`, `scatter_source*`, `instance_stream*` |
 | `docs/trees.md` | trees, moment blobs (far field), biome features (lava lakes, floating islands) | `tree_archetype*`, `moment_layers*`, `biome_features*` |
 | `docs/materials.md` | per-chunk palettes, biome ground materials | `material_library*`, page shader |
 | `docs/look.md` | sky, fog, the atmosphere, volumetric clouds, surface detail, wind | scenes, page shader, `atmosphere*`, `clouds*` |
-| `docs/climate.md` | the climate's model (fields, biomes playing the ground's octaves, curves), its implementation, the biome mixer | `climate*`, `cascade_shaped_glsl*`, `debug/biome_mixer/` |
+| `docs/climate.md` | the climate's model (fields, weights, biome graphs), its implementation, the biome mixer | `climate*`, `graph_compile*`, `debug/biome_mixer/` |
 | `docs/caves.md` | caves as a 3D noise carve density in depth bands (plan: model, where it plugs in, stages) | |
 | `docs/discovery-lod.md` | discoverer (CPU / GPU, cache), view-dependent LOD and view memory, destroy check, coverage | `chunk_discoverer*`, `local_points_gpu*`, `chunk_memory*`, `subcube.hpp` |
 | `docs/testing.md` | every check tool and bench flag in detail, debug views, hole hunting | `tools/`, `adapter/godot/project/debug/` |
@@ -154,7 +155,7 @@ Details and flags: `docs/testing.md`.
 
 | After touching | Run |
 |---|---|
-| `cascade*`, `exact_noise*`, `gpu_frame.hpp`, `sdf_cascade*`, `cascade_points_gpu*`, `local_points_gpu*` | `tools/cascade_test.sh` (needs a window) |
+| `cascade*`, `level_program*`, `level_glsl*`, `graph_compile*`, `exact_noise*`, `gpu_frame.hpp`, `sdf_cascade*`, `cascade_points_gpu*`, `local_points_gpu*` | `tools/cascade_test.sh` (needs a window) |
 | `cell_sites*`, `field_gpu*`, `scatter_source*` walks | a 1M load with `--walk_verify=1` (`--preset=forest5cm_1m`), forest5cm `--walk_gpu=0` vs `1` chunk digests |
 | `world_coord.hpp`, `gpu_frame.hpp`, `chunk_math`, `exact_noise*`, the SDF, a new noise or SDF term | `tools/frame_test.sh` (+ an entry in `make_probes()`) |
 | the discoverer, the SDF, the cascade passes | `tools/discovery_audit.sh -- --terrain=cascade --discovery_compare=1` (and `--world=res://worlds/lods25.world.json`) |

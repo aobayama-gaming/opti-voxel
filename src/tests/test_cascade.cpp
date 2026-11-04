@@ -1,8 +1,8 @@
-#include "test_common.hpp"
+#include "test_climate_common.hpp"
 
 #include "cascade.hpp"
-#include "cascade_measure.hpp"
-#include "cascade_terrain.hpp"
+#include "graph_compile.hpp"
+#include "level_program.hpp"
 
 #include <cmath>
 
@@ -12,24 +12,46 @@
 constexpr unsigned int MXCSR_FTZ_DAZ = 0x8040u;
 #endif
 
+// The Hermite kernel (cascade.hpp) through the programs that run it: the subdivision's boxes, its carry rule, its
+// slopes and fidelity against analytic perlin3, and its denormal-free arithmetic. A program's own rules (purity, box ==
+// point, the LOD step) are test_level_program.cpp's.
+
 using namespace Cascade;
-using CascadeTerrain::earth;
 using ExactNoise::exact_pow2;
 using ExactNoise::float_bits;
 
 namespace {
 
-bool same_bits(const float *p_a, const float *p_b, int p_n) {
-    for (int c = 0; c < p_n; c++) {
-        if (float_bits(p_a[c]) != float_bits(p_b[c])) {
-            return false;
-        }
-    }
-    return true;
+// 5 cm voxels, octaves up to 62 (the deepest carry), no cap below the exact range.
+Climate::Ground ground() {
+    Climate::Ground g;
+    g.voxel_size = 0.05;
+    g.k_max = ExactNoise::MAX_K;
+    g.amp_cap = exact_pow2(40);
+    return g;
 }
 
-const Level *find_level(const std::vector<Level> &p_levels, int p_m) {
-    for (const Level &l : p_levels) {
+// One note per octave p_lo .. p_hi (seed p_seed), each of amplitude 2^p_steep_log2 of its wavelength, summed.
+ov::Value fbm(int p_lo, int p_hi, int p_seed, int p_steep_log2) {
+    ov::str nodes, rows;
+    for (int k = p_lo; k <= p_hi; k++) {
+        nodes += ov::format(R"({"id": "n%d", "kind": "note", "wavelength_m": %s, "seed": %d, "amp_m": %s}, )", int64_t(k), ov::num(std::ldexp(0.05, k)),
+                int64_t(p_seed), ov::num(std::ldexp(0.05, k + p_steep_log2)));
+        rows += ov::format(R"(%s{"in": "n%d"})", rows.empty() ? "" : ", ", int64_t(k));
+    }
+    return ClimateTest::json(R"({"biomes": [{"name": "b", "graph": {"nodes": [)" + nodes + R"({"id": "m", "kind": "mix", "rows": [)" + rows +
+            R"(]}, {"id": "o", "kind": "output", "height": "m"}]}}]})");
+}
+
+bool compiled(const ov::Value &p_table, Terrain::LevelProgram &r_prog) {
+    Climate::Table table;
+    const ov::str err = Terrain::compile(p_table, ground(), Terrain::Mode::SPECIALISED, table, r_prog);
+    CHECK(err == ov::str());
+    return err.empty();
+}
+
+const Terrain::Values *find_level(const std::vector<Terrain::Values> &p_levels, int p_m) {
+    for (const Terrain::Values &l : p_levels) {
         if (l.m == p_m) {
             return &l;
         }
@@ -37,9 +59,9 @@ const Level *find_level(const std::vector<Level> &p_levels, int p_m) {
     return nullptr;
 }
 
-int64_t subnormals(const std::vector<Level> &p_levels) {
+int64_t subnormals(const std::vector<Terrain::Values> &p_levels) {
     int64_t n = 0;
-    for (const Level &l : p_levels) {
+    for (const Terrain::Values &l : p_levels) {
         for (const std::vector<float> &c : l.ch) {
             for (const float f : c) {
                 n += std::fpclassify(f) == FP_SUBNORMAL;
@@ -49,16 +71,21 @@ int64_t subnormals(const std::vector<Level> &p_levels) {
     return n;
 }
 
-int64_t differing_bits(const std::vector<Level> &p_a, const std::vector<Level> &p_b) {
+int64_t differing_bits(const std::vector<Terrain::Values> &p_a, const std::vector<Terrain::Values> &p_b) {
     int64_t n = 0;
     for (size_t i = 0; i < p_a.size(); i++) {
-        for (int c = 0; c < CHANNELS; c++) {
+        for (size_t c = 0; c < p_a[i].ch.size(); c++) {
             for (size_t j = 0; j < p_a[i].ch[c].size(); j++) {
                 n += float_bits(p_a[i].ch[c][j]) != float_bits(p_b[i].ch[c][j]);
             }
         }
     }
     return n;
+}
+
+double angle_deg(double p_ax, double p_ay, double p_az, double p_bx, double p_by, double p_bz) {
+    const double cx = p_ay * p_bz - p_az * p_by, cy = p_az * p_bx - p_ax * p_bz, cz = p_ax * p_by - p_ay * p_bx;
+    return ov::rad_to_deg(std::atan2(std::sqrt(cx * cx + cy * cy + cz * cz), p_ax * p_bx + p_ay * p_by + p_az * p_bz));
 }
 
 } // namespace
@@ -81,119 +108,70 @@ TEST_CASE("Cascade: parent boxes cover the Hermite stencil, chunk boxes are the 
     CHECK(c.lo[1] == anchor.y / 8 - param.skirt_size);
 }
 
-// Criterion 1: V_m(p) is a pure function of p and m.
-TEST_CASE("Cascade: the same lattice point gives the same bits from chunks of every LOD and from a point query") {
-    const ChunkParam param;
-    // Near 0, around the voxel low-word wrap, the noise-cell low-word wrap of k = 20 (2^52) and +-2^60.
-    const int64_t bases[] = { 0, (int64_t(1) << 32) - 40, -(int64_t(1) << 32) + 3, (int64_t(1) << 52) - 1000, (int64_t(1) << 60) - 4096,
-        -(int64_t(1) << 60) + 4096 };
-    const int ms[] = { 0, 1, 3, 7, 16 };
-    const Spec spec = earth();
-    int compared = 0;
-    int differing = 0;
-    for (const int64_t base : bases) {
-        for (const int m : ms) {
-            const int64_t step = int64_t(1) << m;
-            const int64_t b = WorldCoord::floor_div(base, step);
-            const Vector3i64 lattice(b, b + 3, -b - 5);
-            float expect[CHANNELS];
-            point(spec, lattice, m, expect);
-            int previous = -1;
-            for (const int lod : { 0, m / 2, std::max(m - 1, 0), m }) {
-                if (lod == previous) {
-                    continue;
-                }
-                previous = lod;
-                std::vector<Level> levels;
-                run(spec, chunk_box(ChunkMath::chunk_at_voxel(lattice * step, lod, param), param), lod, &levels);
-                const Level *l = find_level(levels, m);
-                const bool found = l != nullptr && l->box.contains(lattice);
-                CHECK(found);
-                if (!found) {
-                    continue;
-                }
-                float got[CHANNELS];
-                l->channels_at(lattice, got);
-                compared++;
-                differing += !same_bits(got, expect, CHANNELS);
+TEST_CASE("Cascade: random chunks are odd multiples of 2^L under 2^40, the same for the same seed") {
+    int64_t bad = 0;
+    for (const int lod : { 0, 5, 20 }) {
+        for (int i = 0; i < 64; i++) {
+            const ChunkId id = random_chunk(lod, 3, i);
+            for (const int64_t a : { id.x, id.y, id.z }) {
+                bad += (a >> lod) % 2 == 0 || a % (int64_t(1) << lod) != 0 || std::llabs(a) >= (int64_t(1) << 40);
             }
+            bad += !(random_chunk(lod, 3, i) == id);
         }
     }
-    CHECK(compared == 6 * (1 + 2 + 4 + 4 + 4)); // distinct LODs for m = 0, 1, 3, 7, 16
-    CHECK(differing == 0);
+    CHECK(bad == 0);
 }
 
-// Criterion 2: V_L = flush(V_{L+1} with slopes x 2^-order + O_L) at the points L and L+1 share.
-TEST_CASE("Cascade: a LOD differs from the next only by the bands it inserts, bit for bit") {
+// Below its finest note a program is carried by H alone: at the points a level shares with the one above, its channels
+// are the parent's copied, the slopes halved (the units of the finer spacing), bit for bit.
+TEST_CASE("Cascade: a level below the notes is its parent's Hermite copy at their shared points, bit for bit") {
+    Terrain::LevelProgram prog;
+    CHECK_OR_RETURN(compiled(fbm(8, 14, 21, -3), prog)); // levels 5 .. 11
     const ChunkParam param;
-    const Spec spec = earth();
-    for (const int lod : { 0, 4, 20 }) {
-        std::vector<Level> levels;
-        run(spec, chunk_box(CascadeMeasure::random_chunk(lod, 77, lod), param), lod, &levels);
-        const Level *fine = find_level(levels, lod);
-        const Level *coarse = find_level(levels, lod + 1);
-        CHECK((fine != nullptr && coarse != nullptr));
-        if (fine == nullptr || coarse == nullptr) {
-            continue;
-        }
-        int checked = 0;
-        int differing = 0;
-        for_each_point(fine->box, [&](const Vector3i64 &p_p, int64_t) {
+    std::vector<Terrain::Values> levels;
+    Terrain::run(prog, chunk_box(random_chunk(0, 77, 0), param), 0, &levels);
+    int64_t checked = 0, differing = 0;
+    for (int m = 0; m < 5; m++) {
+        const Terrain::Values *fine = find_level(levels, m);
+        const Terrain::Values *coarse = find_level(levels, m + 1);
+        CHECK_OR_RETURN((fine != nullptr && coarse != nullptr && fine->has(prog.output) && coarse->has(prog.output)));
+        for_each_point(fine->box, [&](const Vector3i64 &p_p, int64_t p_i) {
             if (((p_p.x | p_p.y | p_p.z) & 1) != 0) {
                 return;
             }
-            float expect[CHANNELS] = {};
-            coarse->channels_at(Vector3i64(p_p.x / 2, p_p.y / 2, p_p.z / 2), expect);
+            float got[CHANNELS], parent[CHANNELS];
+            fine->channels(prog.output, p_i, got);
+            coarse->channels(prog.output, coarse->box.index(Vector3i64(p_p.x / 2, p_p.y / 2, p_p.z / 2)), parent);
             for (int c = 0; c < CHANNELS; c++) {
-                expect[c] = expect[c] * exact_pow2(-channel_order(c));
+                differing += float_bits(got[c]) != float_bits(flush_value(parent[c] * exact_pow2(-channel_order(c))));
             }
-            for (const Band &band : spec.bands) {
-                if (spec.insert_level(band) == lod) {
-                    float o[CHANNELS];
-                    band_channels(spec, band, p_p, o);
-                    for (int c = 0; c < CHANNELS; c++) {
-                        expect[c] = expect[c] + o[c];
-                    }
-                }
-            }
-            for (int c = 0; c < CHANNELS; c++) {
-                expect[c] = flush_value(expect[c]);
-            }
-            float got[CHANNELS];
-            fine->channels_at(p_p, got);
             checked++;
-            differing += !same_bits(got, expect, CHANNELS);
         });
-        CAPTURE(lod);
-        CHECK(checked == 16 * 16 * 16);
-        CHECK(differing == 0);
     }
+    CHECK(checked > 16 * 16 * 16);
+    CHECK(differing == 0);
 }
 
-// Criterion 3.
-// Criterion 4: below the finest inserted band the cascade is the Hermite interpolant; its carried slopes
-// are the derivatives of its values.
+// Below the finest note the cascade is the Hermite interpolant; its carried slopes are the derivatives of its values.
 TEST_CASE("Cascade: carried slopes agree with finite differences of the carried values") {
-    Spec spec = CascadeTerrain::make_spec(0x51D3u, 12, 0.125, 3);
-    // Keep the bands of wavelength >= 256 voxels: Λ_0 to Λ_4 only carry.
-    std::vector<Band> coarse;
-    for (const Band &b : spec.bands) {
-        if (b.k >= 8) {
-            coarse.push_back(b);
-        }
-    }
-    spec.bands = coarse;
+    Terrain::LevelProgram prog;
+    CHECK_OR_RETURN(compiled(fbm(8, 12, 0x51D3, -3), prog)); // wavelengths >= 256 voxels: Λ_0 to Λ_4 only carry
     const Box box{ { 1000, -300, 5000 }, { 1039, -261, 5039 } };
     const Box inner{ { 1001, -299, 5001 }, { 1038, -262, 5038 } };
-    const Level v = run(spec, box, 0);
+    const Terrain::Values v = Terrain::run(prog, box, 0);
+    const auto at = [&](int p_c, const Vector3i64 &p_p) {
+        float ch[CHANNELS];
+        v.channels(prog.output, box.index(p_p), ch);
+        return double(ch[p_c]);
+    };
     double worst = 0.0;
     double scale = 0.0;
     const Vector3i64 e[3] = { Vector3i64(1, 0, 0), Vector3i64(0, 1, 0), Vector3i64(0, 0, 1) };
     for_each_point(inner, [&](const Vector3i64 &p_p, int64_t) {
         for (int a = 0; a < 3; a++) {
-            const double fd = (double(v.at(VALUE, p_p + e[a])) - double(v.at(VALUE, p_p - e[a]))) * 0.5;
-            worst = std::max(worst, std::fabs(fd - v.at(DX + a, p_p)));
-            scale = std::max(scale, std::fabs(double(v.at(DX + a, p_p))));
+            const double fd = (at(VALUE, p_p + e[a]) - at(VALUE, p_p - e[a])) * 0.5;
+            worst = std::max(worst, std::fabs(fd - at(DX + a, p_p)));
+            scale = std::max(scale, std::fabs(at(DX + a, p_p)));
         }
     });
     MESSAGE("max |FD - slope| = ", worst, " (max |slope| ", scale, ")");
@@ -201,38 +179,51 @@ TEST_CASE("Cascade: carried slopes agree with finite differences of the carried 
     CHECK(worst <= 0.01 * scale);
 }
 
-// Criterion 5.
+// One octave of amplitude 1 voxel inserted 8 samples per wavelength (k = 7 on Λ_4), carried to Λ_0, against perlin3
+// there: values within 1% of the amplitude, the normals of the same octave at steepness 1/8 within 1 degree (fixed
+// before measuring).
 TEST_CASE("Cascade: fidelity of a cascaded octave, 8 samples per wavelength") {
-    Spec spec;
-    spec.insert_shift = 3;
-    const CascadeMeasure::Fidelity f = CascadeMeasure::measure_fidelity(spec, 7, 4, 48, 0xF1u);
-    MESSAGE("points ", f.points, " value max ", f.value_max, " rms ", f.value_rms, " slope max ", f.slope_max, " normal max (r = 1/8) ",
-            f.normal_max_deg[CascadeMeasure::REF_STEEPNESS], " deg");
-    CHECK(f.passes());
-}
-
-// Criterion 6.
-TEST_CASE("Cascade: points per chunk confirm the cost table (~+1.3% at LOD 0 vs LOD 24)") {
-    const Spec spec = earth();
-    CHECK(spec.top_level() == 26);
-    const CascadeMeasure::Cost top = CascadeMeasure::measure_cost(spec, 24, 50, 1, false);
-    const CascadeMeasure::Cost bottom = CascadeMeasure::measure_cost(spec, 0, 50, 1, false);
-    CHECK(bottom.first_levels.size() == 27);
-    if (bottom.first_levels.size() != 27) {
-        return;
+    constexpr int K = 7;
+    double value_max = 0.0, normal_max = 0.0;
+    int64_t points = 0;
+    for (int b = 0; b < 4; b++) {
+        Terrain::LevelProgram prog;
+        CHECK_OR_RETURN(compiled(fbm(K, K, 0xF1 + b, -K), prog));
+        const Terrain::Node *note = nullptr;
+        for (const Terrain::Node &n : prog.nodes) {
+            note = n.op == Terrain::Op::NOTE ? &n : note;
+        }
+        CHECK_OR_RETURN(note != nullptr);
+        const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ 0xF1u, uint32_t(b), 0xF1DEu });
+        const int64_t base = b == 3 ? (int64_t(1) << 50) : 0;
+        Box box;
+        const uint32_t r[3] = { h.x, h.y, h.z };
+        for (int a = 0; a < 3; a++) {
+            box.lo[a] = base + int64_t(r[a] % (1u << 30)) - (int64_t(1) << 29);
+            box.hi[a] = box.lo[a] + 47;
+        }
+        const Terrain::Values v = Terrain::run(prog, box, 0);
+        const double steep = exact_pow2(K - 3); // the octave at amplitude 1/8 of its wavelength
+        for_each_point(box, [&](const Vector3i64 &p_p, int64_t p_i) {
+            WorldPos pos;
+            pos.voxel = p_p;
+            const ExactNoise::Float4 a = ExactNoise::perlin3(pos, K, note->band.seed, note->band.offset);
+            float c[CHANNELS];
+            v.channels(prog.output, p_i, c);
+            value_max = std::max(value_max, std::fabs(double(c[VALUE]) - double(a.w)));
+            // The height field's normals (y - h): slopes per voxel, perlin3's per cell of 2^K voxels.
+            const double to_voxel = exact_pow2(-K);
+            normal_max = std::max(normal_max,
+                    angle_deg(-steep * c[DX], 1.0 - steep * c[DY], -steep * c[DZ], -steep * a.x * to_voxel, 1.0 - steep * a.y * to_voxel, -steep * a.z * to_voxel));
+            points++;
+        });
     }
-    CHECK(bottom.first_levels[0] == 32768);
-    CHECK(bottom.first_levels[1] == 4913);
-    CHECK(bottom.first_levels[2] == 1000);
-    CHECK(bottom.first_levels[3] == 216);
-    CHECK(top.points_mean == 38681.0);
-    const double ratio = bottom.points_mean / top.points_mean;
-    MESSAGE("points per chunk: LOD 24 ", top.points_mean, ", LOD 0 ", bottom.points_mean, " (max ", bottom.points_max, "), ratio ", ratio);
-    CHECK(ratio > 1.010);
-    CHECK(ratio < 1.016);
+    MESSAGE("points ", points, " value max ", value_max, " normal max (r = 1/8) ", normal_max, " deg");
+    CHECK(points == 4 * 48 * 48 * 48);
+    CHECK(value_max <= 0.01);
+    CHECK(normal_max <= 1.0);
 }
 
-// Criterion 7.
 TEST_CASE("Cascade: no denormal at any level, and flushing denormals (FTZ/DAZ) changes no bit") {
     const ChunkParam param;
 #ifdef CASCADE_TEST_MXCSR
@@ -240,20 +231,19 @@ TEST_CASE("Cascade: no denormal at any level, and flushing denormals (FTZ/DAZ) c
     const unsigned int csr = _mm_getcsr();
     _mm_setcsr(csr & ~MXCSR_FTZ_DAZ);
 #endif
-    // One band carried 60 levels down: its slopes shrink by 2^-|S| per level.
-    Spec deep;
-    deep.insert_shift = 2;
-    deep.bands = { Band{ 62, 0xDEEBu, Vector3i64(int64_t(3) << 59, int64_t(1) << 60, int64_t(5) << 58), 1.0f } };
-    const Box box = chunk_box(CascadeMeasure::random_chunk(0, 5, 0), param);
-    const Spec specs[] = { deep, earth() };
-    for (const Spec &spec : specs) {
-        std::vector<Level> ieee;
-        run(spec, box, 0, &ieee);
+    // One note carried 59 levels down (its slopes shrink by 2^-1 per level), and the template's octaves.
+    const Box box = chunk_box(random_chunk(0, 5, 0), param);
+    const ov::Value tables[] = { fbm(62, 62, 0xDEEB, -60), fbm(3, 19, 0xEA27, -3) };
+    for (const ov::Value &t : tables) {
+        Terrain::LevelProgram prog;
+        CHECK_OR_RETURN(compiled(t, prog));
+        std::vector<Terrain::Values> ieee;
+        Terrain::run(prog, box, 0, &ieee);
         CHECK(subnormals(ieee) == 0);
 #ifdef CASCADE_TEST_MXCSR
         _mm_setcsr(csr | MXCSR_FTZ_DAZ);
-        std::vector<Level> ftz;
-        run(spec, box, 0, &ftz);
+        std::vector<Terrain::Values> ftz;
+        Terrain::run(prog, box, 0, &ftz);
         _mm_setcsr(csr & ~MXCSR_FTZ_DAZ);
         CHECK(ftz.size() == ieee.size());
         if (ftz.size() == ieee.size()) {
@@ -266,85 +256,4 @@ TEST_CASE("Cascade: no denormal at any level, and flushing denormals (FTZ/DAZ) c
 #ifdef CASCADE_TEST_MXCSR
     _mm_setcsr(csr);
 #endif
-}
-
-// GPU discoverer step 2: the allocation-free point query is point() bit for bit, every LOD, near 0, across
-// 2^32-voxel boundaries and the k = 20 noise-cell wrap, and at +-2^60.
-TEST_CASE("Cascade: point_into equals point, bit for bit (10,240 points per LOD 0-24, both channel sets)") {
-    const int64_t P32 = int64_t(1) << 32;
-    const int64_t bases[] = { 0, P32, -P32, 3 * P32, (int64_t(1) << 52) - 1000, (int64_t(1) << 60) - 4096, -(int64_t(1) << 60) + 4096, -5 * P32 };
-    constexpr int PER_BASE = 1280;
-    const Spec spec = earth();
-    int64_t compared = 0;
-    int64_t differing = 0;
-    for (int m = 0; m <= 24; m++) {
-        const int64_t step = int64_t(1) << m;
-        uint32_t n = 0;
-        for (const int64_t base : bases) {
-            const int64_t b = WorldCoord::floor_div(base, step);
-            for (int i = 0; i < PER_BASE; i++, n++) {
-                const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ uint32_t(m), n, 0x9017u });
-                const Vector3i64 p(b + int64_t(h.x % 129u) - 64, b + int64_t(h.y % 129u) - 64, -b + int64_t(h.z % 129u) - 64);
-                float want[CHANNELS];
-                float got[CHANNELS];
-                point(spec, p, m, want);
-                point_into(spec, p, m, got);
-                compared++;
-                differing += same_bits(want, got, CHANNELS) ? 0 : 1;
-            }
-        }
-    }
-    CHECK(compared == 25 * 8 * PER_BASE);
-    CHECK(differing == 0);
-}
-
-// Where the climate is read: a modulated band above a run's last level reads the fields at its own level, the last
-// level the carry its level above derives (Modulation::derive). A batch's variant choice (batch, batch_carry) is the
-// union of its items' (carried, carries at the last level), and the fields are monotone in the level: a level with them
-// always finds them in its parent level.
-TEST_CASE("Cascade: FieldRange carries the fields to every reader above the last level, the carry to the last") {
-    std::vector<FieldRange> ranges;
-    for (const int floor : { 0, 3, 9 }) {
-        for (const int ceiling : { floor, floor + 4, 20 }) {
-            ranges.push_back(FieldRange{ floor, ceiling, false });
-        }
-    }
-    ranges.push_back(FieldRange{ MAX_LEVEL + 1, -1, true }); // the samples' terms alone (a pick, ground terms)
-    ranges.push_back(FieldRange{ 2, 6, true });
-    int64_t checked = 0, bad = 0;
-    for (const FieldRange &r : ranges) {
-        for (int lo = 0; lo <= 24; lo += 3) {
-            for (int hi = lo; hi <= MIN(lo + 8, 24); hi += 2) {
-                for (int j = 0; j <= 26; j++) {
-                    bool fields = false, carry = false;
-                    for (int lod = lo; lod <= hi; lod++) {
-                        const int m = lod + j;
-                        fields = fields || r.carried(lod, m);
-                        carry = carry || (j == 0 && r.carries(lod, m));
-                        const bool modulated = r.floor <= m && m <= r.ceiling;
-                        // The fields never at a run's last level, at every modulated level above it.
-                        bad += r.carried(lod, lod);
-                        bad += j > 0 && modulated && !r.carried(lod, m);
-                        // The carry on the last level where it reads it (a modulated band, the samples' terms), and on the
-                        // level above, which derives it from its fields; nowhere else.
-                        const bool reads = (j == 0 && modulated) || r.sample;
-                        bad += reads && !(r.carries(lod, lod) && r.carries(lod, lod + 1) && r.carried(lod, lod + 1));
-                        bad += r.carries(lod, m) && j > 1;
-                        // Monotone: the fields at m + 1 wherever m has them.
-                        bad += r.carried(lod, m) && !r.carried(lod, m + 1);
-                        // Their bands inserted exactly where the level below carries them on (the lowest level's
-                        // insertions have no reader).
-                        bad += r.inserted(lod, m) != (r.carried(lod, m) && r.carried(lod, m - 1));
-                    }
-                    bad += fields != r.batch(ov::ivec2(lo, hi), j);
-                    bad += carry != r.batch_carry(ov::ivec2(lo, hi), j);
-                    checked++;
-                }
-            }
-        }
-    }
-    CHECK(checked > 1000);
-    CHECK(bad == 0);
-    CHECK(FieldRange().empty());
-    CHECK_FALSE((FieldRange{ MAX_LEVEL + 1, -1, true }).empty());
 }

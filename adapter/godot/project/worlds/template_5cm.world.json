@@ -1,0 +1,38 @@
+{
+ "comment": "The template ground at 5 cm: the ground of a world without biomes (SDFCascade::template_path) and the one a new biome starts from (the biome mixer). One note of seed 59943 per octave from 8 voxels up to the first whose amplitude, 1/8 of its wavelength, reaches 3276.8 m, every one at that steepness.",
+ "engine": {
+  "voxel_m": 0.05,
+  "lods": 15
+ },
+ "climate": {
+  "fields": []
+ },
+ "biomes": [
+  {
+   "name": "ground",
+   "graph": {
+    "nodes": [
+     {"id": "ground_19", "kind": "note", "wavelength_m": 26214.4, "seed": 59943, "amp_m": 3276.8},
+     {"id": "ground_18", "kind": "note", "wavelength_m": 13107.2, "seed": 59943, "amp_m": 1638.4},
+     {"id": "ground_17", "kind": "note", "wavelength_m": 6553.6, "seed": 59943, "amp_m": 819.2},
+     {"id": "ground_16", "kind": "note", "wavelength_m": 3276.8, "seed": 59943, "amp_m": 409.6},
+     {"id": "ground_15", "kind": "note", "wavelength_m": 1638.4, "seed": 59943, "amp_m": 204.8},
+     {"id": "ground_14", "kind": "note", "wavelength_m": 819.2, "seed": 59943, "amp_m": 102.4},
+     {"id": "ground_13", "kind": "note", "wavelength_m": 409.6, "seed": 59943, "amp_m": 51.2},
+     {"id": "ground_12", "kind": "note", "wavelength_m": 204.8, "seed": 59943, "amp_m": 25.6},
+     {"id": "ground_11", "kind": "note", "wavelength_m": 102.4, "seed": 59943, "amp_m": 12.8},
+     {"id": "ground_10", "kind": "note", "wavelength_m": 51.2, "seed": 59943, "amp_m": 6.4},
+     {"id": "ground_9", "kind": "note", "wavelength_m": 25.6, "seed": 59943, "amp_m": 3.2},
+     {"id": "ground_8", "kind": "note", "wavelength_m": 12.8, "seed": 59943, "amp_m": 1.6},
+     {"id": "ground_7", "kind": "note", "wavelength_m": 6.4, "seed": 59943, "amp_m": 0.8},
+     {"id": "ground_6", "kind": "note", "wavelength_m": 3.2, "seed": 59943, "amp_m": 0.4},
+     {"id": "ground_5", "kind": "note", "wavelength_m": 1.6, "seed": 59943, "amp_m": 0.2},
+     {"id": "ground_4", "kind": "note", "wavelength_m": 0.8, "seed": 59943, "amp_m": 0.1},
+     {"id": "ground_3", "kind": "note", "wavelength_m": 0.4, "seed": 59943, "amp_m": 0.05},
+     {"id": "ground", "kind": "mix", "rows": [{"in": "ground_19"}, {"in": "ground_18"}, {"in": "ground_17"}, {"in": "ground_16"}, {"in": "ground_15"}, {"in": "ground_14"}, {"in": "ground_13"}, {"in": "ground_12"}, {"in": "ground_11"}, {"in": "ground_10"}, {"in": "ground_9"}, {"in": "ground_8"}, {"in": "ground_7"}, {"in": "ground_6"}, {"in": "ground_5"}, {"in": "ground_4"}, {"in": "ground_3"}]},
+     {"id": "out", "kind": "output", "height": "ground"}
+    ]
+   }
+  }
+ ]
+}

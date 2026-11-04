@@ -49,7 +49,7 @@ Inclusive shares of all samples (`cpu.md`, "All threads: top inclusive"):
 | `InstanceStream::drain` / `Job::run` | 80.9 / 77.5 | the drain tasks |
 | `ScatterSource::part_tile` | 58.3 | the LOD-0 tiles (the LOD 1-7 tiles only concatenate) |
 | `surface_sites` (from `part_tile`, `far_items`, `blob_tile`) | 61.0 | the site walk |
-| `SDFCascade::ground_field` = `Cascade::point_into` | 60.7 | the ground evaluated point by point for the walk |
+| `SDFCascade::ground_field` = `Cascade::point_into` (v1; `Terrain::point` since cascade v2) | 60.7 | the ground evaluated point by point for the walk |
 | of which `surface_cells` / `centre_field` | 48.3 | the octree walk of the cells the surface may cross |
 | of which `site_of` | 12.5 | the site per surface cell |
 | `ScatterSource::blob_tile` | 18.8 | the moment layers (blobs 5-7: 9-20 ms each) |

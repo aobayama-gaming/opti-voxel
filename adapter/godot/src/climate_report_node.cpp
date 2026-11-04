@@ -1,9 +1,9 @@
 #include "climate_report_node.hpp"
 
-#include "biome_compiler.hpp"
 #include "climate.hpp"
 #include "climate_report.hpp"
 #include "godot_conv.hpp"
+#include "sdf_cascade.hpp"
 #include "world_file.hpp"
 
 #include "ov/json.hpp"
@@ -14,6 +14,7 @@
 #include <godot_cpp/variant/packed_string_array.hpp>
 
 #include <cmath>
+#include <utility>
 
 void ClimateReportNode::_bind_methods() {
     ClassDB::bind_method(D_METHOD("run", "out_dir", "world_path", "extent_km", "size", "surface", "center", "lattice"),
@@ -130,7 +131,12 @@ Dictionary ClimateReportNode::shape(const Dictionary &p_node, const PackedFloat3
 }
 
 Dictionary ClimateReportNode::template_biome(double p_voxel_m, const String &p_name) {
-    return godot_dict(Climate::template_biome(p_voxel_m, ov_str(p_name)));
+    ov::Value table;
+    const ov::str err = SDFCascade::template_table(p_voxel_m, table);
+    ERR_FAIL_COND_V_MSG(!err.empty() || table["biomes"].size() == 0, Dictionary(), godot_str("ClimateReportNode: the template ground: " + err));
+    ov::Value b = std::as_const(table)["biomes"][size_t(0)];
+    b["name"] = ov_str(p_name);
+    return godot_dict(b);
 }
 
 Color ClimateReportNode::debug_color(const String &p_name) {

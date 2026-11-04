@@ -38,17 +38,33 @@ ov::str compile_table(const ov::Value &p_table, LevelProgram &r_prog, Mode p_mod
     return compile(p_table, ground(), p_mode, table, r_prog);
 }
 
-// A test table of the repo (its world file's climate table), its fields' "ground" terms dropped (v2 refuses them).
+// A test table of the repo (its world file's climate table).
 ov::Value test_table(const char *p_path) {
     ov::Value data;
     CHECK(load_table(p_path, data) == ov::str());
-    for (size_t f = 0; f < data["fields"].size(); f++) {
-        data["fields"].at(f).erase("terms");
-    }
     return data;
 }
 
 const char *const TABLES[] = { "res://climate/plain.json", "res://climate/shaped_test.json", "res://climate/eight_biomes_test.json", "res://climate/world.json" };
+
+// Every test table of the repo (the CascadeSpike sets' and the GPU checks'), with its v2 hash (the pin below), taken
+// when stage E removed the v1 machinery.
+struct Pin {
+    const char *path;
+    uint64_t hash;
+};
+const Pin PINS[] = {
+    { "res://climate/example.json", 14048922634438473485ull },
+    { "res://climate/plain.json", 8812832827283825826ull },
+    { "res://climate/shaped_test.json", 9767343333093668675ull },
+    { "res://climate/fieldless_test.json", 1997498522675870854ull },
+    { "res://climate/eight_biomes_test.json", 6180938215590612826ull },
+    { "res://climate/notes_test.json", 10293944894637181568ull },
+    { "res://climate/programs_test.json", 15627919854828456144ull },
+    { "res://climate/graph_test.json", 10291101714587891757ull },
+    { "res://climate/caves_test.json", 4148215606099006424ull },
+    { "res://climate/world.json", 16376013561544507610ull },
+};
 
 Cascade::Box cube(const Vector3i64 &p_lo, int p_n) {
     Cascade::Box b;
@@ -111,7 +127,7 @@ TEST_CASE("Terrain: the gate refuses a warp that isn't strictly coarser than its
         CHECK(prog.nodes.empty());
     }
     CHECK(compile_table(table(6.4), prog) == ov::str());
-    // A warp of a ridged (non-linear) coarser node: refused by the old relaxer, a plain gate here.
+    // A warp of a ridged (non-linear) coarser node: the gate only asks it be coarser.
     const ov::str ridged = "[" + note("w", 25.6, 7, 1.0) + R"(, {"id": "r", "kind": "shape", "in": "w", "shape": "ridged"}, {"id": "wp", "kind": "warp", "in": "r", "amount_m": 2}, )" +
             note("n", 3.2, 1, 1.0, R"(, "warp": "wp")") + R"(, {"id": "o", "kind": "output", "height": "n"}])";
     CHECK(compile_table(one_biome(ridged), prog) == ov::str());
@@ -121,8 +137,8 @@ TEST_CASE("Terrain: the gate refuses a warp that isn't strictly coarser than its
 }
 
 TEST_CASE("Terrain: a field's ground term is refused") {
-    ov::Value data;
-    CHECK_OR_RETURN(load_table("res://climate/plain.json", data) == ov::str());
+    const ov::Value data = json(R"({"fields": [{"name": "t", "bands": [{"wavelength_m": 26214.4, "amp": 1}], "terms": [{"source": "ground", "x": -0.00003}]}],
+        "biomes": [{"name": "a", "at": {"t": [0, 1]}}, {"name": "d"}]})");
     LevelProgram prog;
     CHECK(compile_table(data, prog).find("a 'ground' term is gone") != ov::str::npos);
 }
@@ -293,8 +309,8 @@ TEST_CASE("Terrain: the step between LOD L and L + 1 stays within the skirt's st
     }
 }
 
-TEST_CASE("Terrain: the weights are Climate::weights, op for op, and the pick their largest") {
-    // Two fields on the same octaves (one level: there the weights read the fields as Climate::weights does), three
+TEST_CASE("Terrain: the weights are ClimateTest::weights, op for op, and the pick their largest") {
+    // Two fields on the same octaves (one level: there the weights read the fields as ClimateTest::weights does), three
     // biomes, each a note.
     const ov::str bands = R"("bands": [{"wavelength_m": 26214.4, "amp": 1}, {"wavelength_m": 13107.2, "amp": 0.5}])";
     const auto graph = [](int p_seed) { return R"("graph": {"nodes": [)" + note("n", 3.2, p_seed, 1.0) + R"(, {"id": "o", "kind": "output", "height": "n"}]})"; };
@@ -330,11 +346,11 @@ TEST_CASE("Terrain: the weights are Climate::weights, op for op, and the pick th
             f[i] = field[i] >= 0 ? v.at(field[i], p_i) : Float4{};
         }
         Float4 w[Climate::MAX_BIOMES];
-        Climate::weights(table, f, w);
+        ClimateTest::weights(table, f, w);
         for (size_t b = 0; b < table.biomes.size(); b++) {
             bad += ExactNoise::same_bits(w[b], v.at(pick.in[b], p_i)) ? 0 : 1;
         }
-        bad += int(v.at(prog.pick, p_i).w) == Climate::pick(table, w, p_p, v.m) ? 0 : 1;
+        bad += int(v.at(prog.pick, p_i).w) == Climate::pick_of(int(table.biomes.size()), w, p_p, v.m) ? 0 : 1;
     });
     CHECK(bad == 0);
 }
@@ -377,4 +393,31 @@ TEST_CASE("Terrain: a ridged multifractal parent compiles and weighs its note") 
     CHECK(bad == 0);
     CHECK(zeros > 0);
     CHECK(ones > 0);
+}
+
+// Each test table's bits, pinned: the ground and the pick of its specialised program at points of every few LODs, near 0
+// and +-2^60 (a change of the compiler or an op that moves one bit fails; re-pin on purpose, saying why).
+TEST_CASE("Terrain: every test table's program bits are pinned") {
+    for (const Pin &pin : PINS) {
+        LevelProgram prog;
+        CHECK_OR_RETURN(compile_table(test_table(pin.path), prog) == ov::str());
+        uint64_t hash = 0xCBF29CE484222325ull;
+        auto mix = [&hash](uint32_t p_v) { hash = (hash ^ p_v) * 0x100000001B3ull; };
+        for (const int64_t base : { int64_t(0), int64_t(12345), (int64_t(1) << 60) - 4000, -(int64_t(1) << 60) + 77 }) {
+            for (int lod = 0; lod < 15; lod += 3) {
+                const int64_t step = int64_t(1) << lod;
+                for (int i = -2; i <= 2; i++) {
+                    const Sample s = point(prog, Vector3i64(WorldCoord::floor_div(base, step) + i, 5 * i, 2 - i), lod);
+                    mix(float_bits(s.ground.x));
+                    mix(float_bits(s.ground.y));
+                    mix(float_bits(s.ground.z));
+                    mix(float_bits(s.ground.w));
+                    mix(uint32_t(s.pick));
+                }
+            }
+        }
+        CAPTURE(std::string(pin.path));
+        MESSAGE(std::string(pin.path), ": hash ", hash);
+        CHECK(hash == pin.hash);
+    }
 }

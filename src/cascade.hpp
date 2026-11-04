@@ -9,23 +9,16 @@
 
 #include <cmath>
 #include <cstdint>
-#include <functional>
-#include <memory>
 #include <vector>
 
-// Hermite cascade: the CPU reference (oracle) of how noise bands reach every LOD with one
-// representation. Not used by the meshers yet (the GPU pass comes later and must match it bit for bit).
+// The Hermite cascade's kernel: lattices, boxes and the subdivision every program level runs (cascade v2,
+// docs/cascade.md; the programs themselves are level_program.hpp's).
 //
-// Λ_m is the lattice of points at multiples of 2^m LOD0 voxels (absolute int64 lattice indices). A band
-// (one octave k) is inserted once, on Λ_{k - insert_shift} (shift 2: 4 samples per wavelength, 3: 8),
-// then carried down:
-//     V_T = O_T on Λ_T,    V_m = flush(H(V_{m+1}) + O_m) on Λ_m,
-// where O_m is the sum of the bands inserted on Λ_m and H the tricubic Hermite subdivision. A LOD-L chunk
-// runs the cascade down to its own lattice Λ_L and stops: V_m(p) is a pure function of p and m, so every
-// LOD sees bit-identical values at the points it shares with another, and two LODs only differ by the bands
-// the coarser one doesn't insert (k - shift < L: replaced by their mean, 0). With a climate's carry
-// (Modulation::derive) a run's last level reads its modulated bands' amplitudes from the level above it: the samples
-// of LOD L are a pure function of (p, L), its band L amplitude not the one a finer run's Λ_L reads.
+// Λ_m is the lattice of points at multiples of 2^m LOD0 voxels (absolute int64 lattice indices). A node of a
+// LevelProgram is computed on its level's lattice and carried down by H, the tricubic Hermite subdivision:
+//     V_m = flush(H(V_{m+1})), then level m's code, on Λ_m,
+// so V_m(p) is a pure function of p and m: every LOD sees bit-identical values at the points it shares with another.
+// A LOD-L chunk runs down to its own lattice Λ_L and stops.
 //
 // Channels per lattice point, in units of the lattice's spacing (channel S times 2^(m |S|) per voxel):
 // value, d/dx, d/dy, d/dz.
@@ -59,29 +52,6 @@ constexpr int channel_order(int p_channel) {
 inline constexpr uint32_t FLUSH_BITS = 0x1F800000u; // 2^-64
 inline constexpr int MAX_LEVEL = ExactNoise::MAX_K;
 
-// Field groups (Spec::fields, the climate): the same 4 channels carried down with the ground, each after the
-// ground's CHANNELS slots: field f's channel c is Level slot field_slot(f, c). Group 0 is the ground, 1 + f field f.
-// The GPU code is generated per spec (Spec::group_count), so the cap only sizes the CPU's slot arrays.
-inline constexpr int MAX_FIELD_GROUPS = 24;
-inline constexpr int MAX_GROUPS = 1 + MAX_FIELD_GROUPS;
-static_assert(MAX_GROUPS < 32, "group masks (Modulation::modulated, (1 << groups) - 1) are 32-bit");
-// A field group's channels.
-inline constexpr int FIELD_CHANNELS = 4;
-// Carry groups (Modulation::derive): 4 channels each after the field groups, what a level computes from its
-// channels for the level below it (carry_slot(c, channel)).
-inline constexpr int MAX_CARRY = 24;
-inline constexpr int SLOTS = CHANNELS + FIELD_CHANNELS * (MAX_FIELD_GROUPS + MAX_CARRY);
-constexpr int field_slot(int p_field, int p_channel = VALUE) {
-    return CHANNELS + FIELD_CHANNELS * p_field + p_channel;
-}
-constexpr int carry_slot(int p_carry, int p_channel = VALUE) {
-    return field_slot(MAX_FIELD_GROUPS + p_carry, p_channel);
-}
-// Group g's first Level slot.
-constexpr int group_slot(int p_group) {
-    return p_group * CHANNELS;
-}
-
 // The per-axis rule of H (see above), in the order the GPU mirror must keep.
 inline void hermite_copy(float p_a, float p_sa, float &r_v, float &r_s) {
     r_v = p_a;
@@ -107,8 +77,8 @@ inline ov::str glsl_flush_of(const ov::str &p_expr) {
 }
 
 // Dual numbers (x, y, z: gradient, w: value), every result flushed under 2^-64: inputs 0 or >= 2^-64, so a product's
-// denormal part never reaches a result (the climate's exactness note, climate.hpp). The GLSL twins are cl_flush,
-// cl_mul, cl_sub (climate_glsl.cpp).
+// denormal part never reaches a result. The GLSL twins are cl_flush, cl_mul, cl_sub, cl_add and cl_scale
+// (Climate::shared_helpers_glsl).
 inline ExactNoise::Float4 dflush(const ExactNoise::Float4 &p_a) {
     return ExactNoise::Float4{ flush_value(p_a.x), flush_value(p_a.y), flush_value(p_a.z), flush_value(p_a.w) };
 }
@@ -224,95 +194,14 @@ Box chunk_box(const ChunkId &p_chunk, const ChunkParam &p_param);
 // chunk_size points per axis. A chunk's anchor is its minimum voxel; a point item's is its point (skirt 0, size 1).
 Box item_box(const VoxelPos &p_anchor, int p_lod, const ChunkParam &p_param);
 
-struct Level {
-    int m = 0;
-    Box box;
-    int fields = 0; // field groups carried (slots field_slot(0 .. fields - 1))
-    int carry = 0; // carry groups carried (slots carry_slot(0 .. carry - 1))
-    int copied = -1; // the carry group H copies (Modulation::copied_carry)
-    std::vector<float> ch[SLOTS];
+// A random chunk id at LOD p_lod (odd multiple of 2^L per axis, |id| < 2^40): the checks' and tests' chunks.
+ChunkId random_chunk(int p_lod, uint32_t p_seed, int p_index);
 
-    void allocate(int p_m, const Box &p_box, int p_fields = 0, int p_carry = 0);
-    // Carries p_carry carry groups, the new ones 0 (a derive writes them).
-    void add_carry(int p_carry);
-    float at(int p_channel, const Vector3i64 &p_p) const { return ch[p_channel][box.index(p_p)]; }
-    // All channels at a point.
-    void channels_at(const Vector3i64 &p_p, float r_ch[CHANNELS]) const;
-    // Every slot of the point at box index p_i (the fields' too), 0 for the slots not carried: point_slots' layout.
-    void slots_at(int64_t p_i, float r_slots[SLOTS]) const {
-        for (int s = 0; s < SLOTS; s++) {
-            r_slots[s] = ch[s].empty() ? 0.0f : ch[s][size_t(p_i)];
-        }
-    }
-};
-
-// A band is one octave of perlin3 (wavelength 2^k voxels, value * amp).
+// A band is one octave of perlin3 (wavelength 2^k voxels, value * amp): a program's NOTE, at amp 1.
 using Band = ExactNoise::Octave;
 
-// Where the field groups and the carry are carried in a run down to LOD L. A modulated band above the run's last level
-// reads the fields at its own level (floor <= m <= ceiling, the finest / coarsest modulated ground level); the last
-// level reads none: its band and its samples' terms (sample: the biomes' curve weights, the pick) read the carry
-// that level L + 1 derives (Modulation::derive). So the fields at m >= lowest(L) (monotone in m: a level carrying them
-// always finds them in its parent level), the carry at L + 1 (written) and L (read) where the last level reads it.
-// The ground is the same bits whatever else is carried. Empty (no modulation): nothing anywhere. The CPU's ground
-// queries and the GPU's passes both follow it; a query for the fields themselves (Climate's fields_at) carries them
-// everywhere.
-struct FieldRange {
-    int floor = MAX_LEVEL + 1;
-    int ceiling = -1;
-    bool sample = false;
-
-    bool empty() const { return floor > ceiling && !sample; }
-    // Every run's last level reads the carry, every level above it has the fields: no ground-only level.
-    bool everywhere() const { return sample; }
-    // Whether a run down to p_lod has a last level that reads the carry (its samples' terms, or its band modulated).
-    bool reads_carry(int p_lod) const { return sample || (floor <= p_lod && p_lod <= ceiling); }
-    // The finest level with the fields in a run down to p_lod (past MAX_LEVEL: none).
-    int lowest(int p_lod) const {
-        if (sample) {
-            return p_lod + 1;
-        }
-        return p_lod <= ceiling ? ov::max(floor, p_lod + 1) : MAX_LEVEL + 2;
-    }
-    bool carried(int p_lod, int p_m) const { return p_m >= lowest(p_lod); }
-    // Whether level p_m inserts the fields' own bands: above lowest only. The lowest level's bands and derive read the
-    // fields before its insertions and no level below carries them, so its field octaves would reach no reader.
-    bool inserted(int p_lod, int p_m) const { return p_m > lowest(p_lod); }
-    bool carries(int p_lod, int p_m) const { return (p_m == p_lod || p_m == p_lod + 1) && reads_carry(p_lod); }
-    // Whether a batch of LODs p_lods (min, max) carries the fields (batch) at level j above some item's LOD (the largest
-    // LOD at most the ceiling is the first to need them), and whether one of its last levels reads the carry
-    // (batch_carry, j = 0; level 1 writes it where it has the fields).
-    bool batch(const ov::ivec2 &p_lods, int p_j) const {
-        if (sample) {
-            return p_j >= 1;
-        }
-        return p_j >= 1 && p_lods.x <= ceiling && ov::min(p_lods.y, int32_t(ceiling)) + p_j >= floor;
-    }
-    bool batch_carry(const ov::ivec2 &p_lods, int p_j) const { return p_j == 0 && (sample || (p_lods.x <= ceiling && p_lods.y >= floor)); }
-};
-
-// Per-point band amplitudes (the climate's biome weights, climate.hpp). At every point of Λ_m above a run's last level,
-// before that level's insertions, the amplitude of each modulated group's band on Λ_m is computed from the point's
-// channels: from H(V_{m+1}) only, so no band reads one inserted at its own level and the groups can modulate each other
-// in any order. A run's last level Λ_L computes none: at every point of Λ_{L+1}, from the same channels its own bands
-// read (before its insertions: one climate per point), derive computes the amplitudes of Λ_L's bands and the terms its
-// samples read into the carry slots, and H carries them to Λ_L (A = H(derive(H(V_{L+2})))): the samples, the most points
-// of a run, only interpolate. The top level derives from a
-// level above it that holds nothing (Spec::top_level). A modulated band inserts value A n and slopes A dn + n dA
-// n = the noise, A = (dA, A) per lattice spacing of Λ_m.
-//
-// Shaped bands (BandMod::features): the band also inserts A_abs (|n| - NOISE_ABS_MEAN) and A_sq (n^2 - NOISE_SQ_MEAN),
-// the means taken out so a coarser LOD dropping the band (mean 0) makes no step; its noise may be read at the point
-// displaced by a warp (LOD0 voxels, the warp's gradient applied to the noise's by the chain rule). All of it dual
-// numbers, flushed like dmul.
-struct Spec;
-
-// BandMod::features bits.
-inline constexpr uint32_t MOD_ABS = 1u;
-inline constexpr uint32_t MOD_SQ = 2u;
-inline constexpr uint32_t MOD_WARP = 8u;
-// |n| of a shaped band is smoothed: sabs(n) = sqrt(n^2 + e^2) - e, e = SMOOTH_ABS_E. A crease at n = 0 is finer than
-// the 8 samples per wavelength a band is carried by: the Hermite subdivision rings along the lattice axes around it,
+// |n| of a shape is smoothed: sabs(n) = sqrt(n^2 + e^2) - e, e = SMOOTH_ABS_E. A crease at n = 0 is finer than
+// the 8 samples per wavelength a note is carried by: the Hermite subdivision rings along the lattice axes around it,
 // and the gradient channels miss it (measured, the climate report: 16-21% gradient error on ridged bands, 2.5% plain). e = 0.1 is about how far n moves between two samples.
 inline constexpr float SMOOTH_ABS_E = 0.1f;
 // sabs of a dual n (gradient per lattice spacing): (n.g n / r, (n^2 + e^2) r - e), r = det_rsqrt(n^2 + e^2), from n^2
@@ -329,21 +218,7 @@ inline constexpr float NOISE_SQ_MEAN = 0.0728f;
 // |W| bound of a warp (LOD0 voxels): its floor stays an exact float.
 inline constexpr float WARP_LIMIT = 4194304.0f; // 2^22
 
-// Several ground bands may share a level (the biome compiler's notes of one octave, other seeds or stretches): at most
-// MAX_LEVEL_NOTES, the first is the level's group-0 band, the others follow it in spec order (Spec::level_notes). A
-// level's ground bands are all modulated or all constant (modulated bit 0). A modulation fills r_mod[Spec::note_mod(i)]
-// for the ground's note i of the level and r_mod[Spec::group_mod(g)] for each other modulated group g's band.
-inline constexpr int MAX_LEVEL_NOTES = 8;
-inline constexpr int MAX_MODS = MAX_GROUPS + MAX_LEVEL_NOTES - 1;
-
-// One modulated group's band on Λ_m at a point. Float4 = (gradient per lattice spacing of Λ_m, value).
-struct BandMod {
-    uint32_t features = 0;
-    ExactNoise::Float4 amp[3] = {}; // on n, |n| - NOISE_ABS_MEAN, n^2 - NOISE_SQ_MEAN
-    ExactNoise::Float4 warp[3] = {}; // displacement per axis, LOD0 voxels (MOD_WARP)
-};
-
-// The numbers a generated shader reads from a buffer instead of as literals: a climate's (its biomes' places, amplitudes,
+// The numbers a generated shader reads from a buffer instead of as literals: a program's (its biomes' places, amplitudes,
 // shapes, curves, constants). Its text then depends on the table's structure alone (which nodes, which coefficients are
 // zero), so an edit of a value compiles nothing: the buffer is re-uploaded. Each call hands out the next slot, holding
 // p_value's bits, of the uniform block of vec4s (std140) the level shader binds at CascadeGLSL::PARAM_BINDING: reads at
@@ -364,7 +239,7 @@ struct ShaderParams {
     }
     // The GLSL read of the slot at p_index, an int expression (CascadeGLSL::level_shader defines cl_param).
     static ov::str at(const ov::str &p_index) { return "cl_param(" + p_index + ")"; }
-    // A generic text's variable-length records (lists, programs, the modulator's plan): after values (level_shader
+    // A generic text's variable-length records (the curves, the interpreter's levels): after values (level_shader
     // appends them last), so a record's length never moves the index of a value the text names. p_values' index on
     // the heap, read by heap_at (cl_heap: cl_param past the values, their count a literal of the structure).
     std::vector<float> heap;
@@ -380,170 +255,10 @@ struct ShaderParams {
     int64_t vec4s() const { return ov::max(int64_t(1), (int64_t(values.size()) + 3) / 4); }
 };
 
-struct Modulation {
-    virtual ~Modulation() = default;
-    // Bit g: group g's band on Λ_m is modulated (the others insert their constant amplitude).
-    virtual uint32_t modulated(int p_m) const = 0;
-    // The finest and coarsest level with a modulated ground band (FieldRange: only the ground reaches the mesh; a field
-    // band modulated elsewhere only changes the fields where they are carried, Climate's fields_at).
-    virtual FieldRange field_range() const = 0;
-    // r_mod[g] for every modulated group g of Λ_m, from p_pre: the point's Level slots after subdivision, before Λ_m's
-    // insertions; p_carried (Λ_m is the run's last level): from its carry slots, H of what Λ_{m+1} derived.
-    virtual void modulate(int p_m, bool p_carried, const float p_pre[SLOTS], BandMod r_mod[MAX_MODS]) const = 0;
-    // The carry groups the derive writes (at most MAX_CARRY), and the one H copies from the floor parent instead of
-    // interpolating (a value that can't be blended, the climate's pick; -1: none).
-    virtual int carry_groups() const { return 0; }
-    virtual int copied_carry() const { return -1; }
-    // The carry groups Λ_m reads as a run's last level without the fields (the first ones; with them, Climate's
-    // fields_at, it reads them all): the GPU's carry (Spec::gpu_carry_groups).
-    virtual int carry_used(int p_m) const {
-        (void)p_m;
-        return carry_groups();
-    }
-    // Writes the carry slots of r_slots, the slots of lattice point p_p of Λ_m before its insertions (modulate's p_pre),
-    // for Λ_{m-1} as a run's last level: its bands' amplitudes and the terms its samples read.
-    virtual void derive(int p_m, const Vector3i64 &p_p, float r_slots[SLOTS]) const {
-        (void)p_m;
-        (void)p_p;
-        (void)r_slots;
-    }
-    // The features group p_group's bands use at some level (the union): its GLSL insert has the code for them only.
-    virtual uint32_t group_features(int p_group) const {
-        (void)p_group;
-        return 0u;
-    }
-    // The same in GLSL, bit for bit: `uint cascade_mods(int m, Ch pre, out BandMod mod[MAX_GROUPS])` returning
-    // modulated(m) (CascadeGLSL's insert code). pre in p_spec's GPU layout (Spec::gpu_base, gpu_carry); p_carried: modulate's, for the
-    // samples' view (p_spec without the fields). p_derive (the fields' view, p_spec with the carry): `inout Ch pre` and a
-    // last `WorldPos p`, and where g_carry_n says, derive too, from the same weights, into pre's carry groups. Its numbers
-    // go to r_params.
-    virtual ov::str glsl(const Spec &p_spec, bool p_carried, bool p_derive, ShaderParams &r_params) const = 0;
-};
-
-struct Spec {
-    std::vector<Band> bands;
-    // Band k is inserted on Λ_{k - insert_shift}: 2 = 4 samples per wavelength, 3 = 8 (the chosen one).
-    int insert_shift = ExactNoise::BAND_SHIFT;
-    // Coarsest lattice T; -1: the highest insertion lattice of the ground's bands and, where they are carried
-    // (FieldRange not empty, or p_all_fields), the fields'.
-    int top = -1;
-    // Field groups (at most MAX_FIELD_GROUPS, the same insert shift; at most one band per level each),
-    // carried at slots field_slot(f): the climate. They never reach the ground's channels except through modulation.
-    std::vector<std::vector<Band>> fields;
-    // Null: every band at its constant amplitude.
-    std::shared_ptr<const Modulation> modulation;
-    // The base a stretched band stretches along (BaseSurface::stretched): the ground's (SDFCascade), flat at datum 0
-    // otherwise.
-    BaseSurface base = BaseSurface::flat(0);
-    // A generic climate's (Climate::Table::generic): its text a function of its capacities, not of its bands or values:
-    // the ground's stretch path on a flat base whatever its bands, at least level_notes_cap notes per level (mod_count),
-    // the shader params' block at its largest (CascadeGLSL::level_shader).
-    bool generic = false;
-    int level_notes_cap = 0;
-
-    int insert_level(const Band &p_band) const { return p_band.k - insert_shift; }
-    // Some band of group p_group (any group: -1) is stretched along y (Band::stretch): its GLSL inserts go through
-    // the base's base_stretched. Generic on a flat base: every group (a stretch is a value).
-    bool stretched(int p_group = -1) const;
-    int top_level(bool p_all_fields = false) const;
-    // The top lattice of a run down to p_lod: top_level, at least p_lod, and above p_lod where its last level reads the
-    // carry (the level that derives it, empty above the highest band). The GPU's: max(top, lod + 1) in a carry view.
-    int run_top(int p_lod, bool p_all_fields = false) const;
-    int group_count() const { return 1 + int(fields.size()); }
-    const std::vector<Band> &group_bands(int p_group) const { return p_group == 0 ? bands : fields[size_t(p_group - 1)]; }
-    // The ground bands of Λ_p_m (in spec order: the level's first, then its other notes) and the most any level has.
-    int level_notes(int p_m) const;
-    int max_level_notes() const;
-    // The index of the ground band p_band (one of `bands`) among its level's notes, in spec order: the order every
-    // consumer inserts them in (LevelBands, the GPU table, the modulation's BandMod slots).
-    int note_rank(const Band &p_band) const;
-    // The BandMod slots (MAX_MODS): the ground's notes of a level first (note p_i at p_i), then the field groups (group
-    // p_g > 0 past the most notes a level has), so a view without the fields (without_fields) keeps the notes' slots;
-    // and how many slots the GPU's arrays hold.
-    int note_mod(int p_i) const { return p_i; }
-    int group_mod(int p_g) const { return group_mod(p_g, max_level_notes()); }
-    static int group_mod(int p_g, int p_max_level_notes) { return p_g == 0 ? 0 : p_g + ov::max(0, p_max_level_notes - 1); }
-    int mod_count() const { return group_count() + ov::max(0, max_level_notes() - 1); }
-    FieldRange field_range() const { return modulation ? modulation->field_range() : FieldRange(); }
-    int carry_groups() const { return modulation ? modulation->carry_groups() : 0; }
-    // The carry groups some run's last level reads without the fields (the GPU's: its runs carry no field to it).
-    int gpu_carry_groups() const;
-    int copied_carry() const { return modulation ? modulation->copied_carry() : -1; }
-    // The ground alone: no field group, no modulation.
-    Spec ground_only() const {
-        Spec s = *this;
-        s.fields.clear();
-        s.modulation.reset();
-        return s;
-    }
-    // The ground and the carry, no field group: the GPU's view of a run's last level.
-    Spec without_fields() const {
-        Spec s = *this;
-        s.fields.clear();
-        return s;
-    }
-    // The GPU's layout (CascadeGLSL's Ch, scratch and debug channels): the ground's CHANNELS, then 4 per
-    // field group, then 4 per carry group; slot_of_gpu maps a GPU channel to its Level slot.
-    int gpu_channels() const { return gpu_carry(gpu_carry_groups()); }
-    int gpu_base(int p_group) const { return group_slot(p_group); }
-    int gpu_carry(int p_carry) const { return gpu_base(group_count()) + FIELD_CHANNELS * p_carry; }
-    int slot_of_gpu(int p_channel) const {
-        if (p_channel < CHANNELS) {
-            return p_channel;
-        }
-        const int f = (p_channel - CHANNELS) / FIELD_CHANNELS;
-        const int c = (p_channel - CHANNELS) % FIELD_CHANNELS;
-        return f < int(fields.size()) ? field_slot(f, c) : carry_slot(f - int(fields.size()), c);
-    }
-};
-
-// Points per lattice level (cost per chunk), from the boxes alone.
-struct Stats {
-    int64_t points[MAX_LEVEL + 1] = {};
-    int64_t total() const;
-};
-void count_points(const Spec &p_spec, const Box &p_box, int p_lod, Stats &r_stats);
-
 // A note's noise at lattice point p_p of its insertion lattice Λ_p_m (perlin3, its gradient per cell of 2^k voxels),
 // stretched along p_base's up if the band is (BaseSurface::stretched), read displaced by p_warp (null: none; else the
 // displacement per axis, LOD0 voxels, gradients per lattice spacing of Λ_m, clamped to WARP_LIMIT), the displacement's
 // gradient applied by the chain rule.
 ExactNoise::Float4 note_noise(const BaseSurface &p_base, const Band &p_band, int p_m, const Vector3i64 &p_p, const ExactNoise::Float4 *p_warp);
-
-// Band channels on its insertion lattice at lattice point p: perlin3 per cell times
-// amp * 2^(-insert_shift |S|).
-void band_channels(const Spec &p_spec, const Band &p_band, const Vector3i64 &p_p, float r_ch[CHANNELS]);
-// Adds the bands of the ground and of p_fields field groups (-1: every one r_level carries) on r_level.m (modulated where
-// the spec says) to its channels.
-// A level holding carry is its run's last (the level above gets its carry after its insertions, derived from its channels
-// before them): its modulated bands
-// read it (Modulation::modulate).
-void insert_bands(const Spec &p_spec, Level &r_level, int p_fields = -1);
-// The same at one lattice point p_p of Λ_m: r_slots holds every slot after subdivision (H(V_{m+1})), the level's
-// insertions are added (a modulated band: value n.w A, slopes n.s (A 2^-shift) + n.w dA, the GPU's order).
-void insert_at(const Spec &p_spec, int p_m, const Vector3i64 &p_p, float r_slots[SLOTS]);
-
-// H of p_parent onto p_child_box, carrying the ground, p_fields field groups and p_carry carry groups (-1: the
-// parent's; at most them). The copied carry group (Level::copied) takes its floor parent's channels.
-Level subdivide(const Level &p_parent, const Box &p_child_box, int p_fields = -1, int p_carry = -1);
-void flush(Level &r_level);
-
-// Runs the cascade from the top lattice down to Λ_{p_lod} over the points of p_box (on Λ_{p_lod}).
-// r_levels (optional) receives every level, top first.
-// The fields are carried where the spec's FieldRange says, everywhere with p_all_fields.
-Level run(const Spec &p_spec, const Box &p_box, int p_lod, std::vector<Level> *r_levels = nullptr,
-        bool p_all_fields = false);
-
-// V_m at one lattice point of Λ_m (the ground's channels).
-void point(const Spec &p_spec, const Vector3i64 &p_p, int p_m, float r_ch[CHANNELS]);
-
-// point() without a heap allocation (the discoverer's corners, SDFCascade::evaluate): a point's level boxes
-// have at most POINT_AXIS points per axis (level_bound(1, j)), so every level and every axis pass of H fits
-// in stack arrays. The same ops on the same values in the same order as run(): the same bits (unit-tested).
-inline constexpr int POINT_AXIS = 2;
-void point_into(const Spec &p_spec, const Vector3i64 &p_p, int p_m, float r_ch[CHANNELS]);
-// point_into with every slot (the fields' too, field_slot), 0 for the slots not carried (FieldRange; p_all_fields:
-// the fields everywhere, Climate's fields_at).
-void point_slots(const Spec &p_spec, const Vector3i64 &p_p, int p_m, float r_slots[SLOTS], bool p_all_fields = false);
 
 } // namespace Cascade

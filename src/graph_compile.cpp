@@ -1,7 +1,5 @@
 #include "graph_compile.hpp"
 
-#include "biome_compiler.hpp"
-
 #include "ov/format.hpp"
 #include "ov/math.hpp"
 
@@ -18,6 +16,21 @@ namespace {
 
 using Climate::Ground;
 using Term = std::pair<int, float>; // a LIN's input and its coefficient
+
+// Whether p_ground has p_note's octave ([BAND_SHIFT, k_max]: a note the LOD count doesn't have plays nothing, so a
+// world reads at any LOD count); its stretch on its octave (Band::stretch: octave k takes at most k - BAND_SHIFT of it);
+// its amplitude (LOD0 voxels), under p_ground's note_cap.
+bool note_plays(const Climate::NoteNode &p_note, const Ground &p_ground) {
+    return p_note.k >= ExactNoise::BAND_SHIFT && p_note.k <= p_ground.k_max;
+}
+
+int note_stretch(const Climate::NoteNode &p_note) {
+    return ov::max(0, ov::min(p_note.stretch, p_note.k - ExactNoise::BAND_SHIFT));
+}
+
+float note_amp(const Climate::NoteNode &p_note, const Ground &p_ground) {
+    return float(ov::min(p_note.amp_m / p_ground.voxel_size, p_ground.note_cap));
+}
 
 // The program under construction: nodes hash-consed (one node per identity), their levels set and their constants
 // folded as they are added; with `specialise`, the value-dependent folds too.
@@ -225,11 +238,11 @@ private:
         r_unit = -1;
         r_amp = 0.0f;
         Climate::NoteNode nn;
-        if (!take(Climate::parse_note(p_n, ground, at(p_n), nn)) || !Climate::note_plays(nn, ground)) {
+        if (!take(Climate::parse_note(p_n, ground, at(p_n), nn)) || !note_plays(nn, ground)) {
             return;
         }
         Cascade::Band band = ExactNoise::make_octave(nn.seed + p_seed, uint32_t(nn.k), nn.k, 1.0f);
-        band.stretch = Climate::note_stretch(nn, nn.k);
+        band.stretch = note_stretch(nn);
         std::vector<int> disp;
         if (p_n.has("warp")) {
             const ov::Value *w = input(p_n, "warp");
@@ -241,7 +254,7 @@ private:
             }
         }
         r_unit = g.add(note_node(band, disp));
-        r_amp = Climate::note_amp(nn, ground);
+        r_amp = note_amp(nn, ground);
     }
 
     // A warp's three displacements (LOD0 voxels): amount_m times its input read with seeds + 0, 1, 2, or times its x, y,
@@ -406,7 +419,7 @@ private:
         }
         if (kind == "field") {
             const int f = table.field_index(p_n["field"].as_str());
-            if (f < 0 || table.fields[size_t(f)].warp || table.fields[size_t(f)].channel) {
+            if (f < 0) {
                 fail(at(p_n), "'" + p_n["field"].as_str() + ov::str("' is not a field."));
                 return -1;
             }
@@ -436,7 +449,7 @@ std::vector<int> field_nodes(Graph &r_g, const Climate::Table &p_table) {
     return fields;
 }
 
-// The biome weights (Climate::weights, op for op): each kernel the product of its axes' factors, the default's fill of
+// The biome weights (the unit tests' oracle: ClimateTest::weights, op for op): each kernel the product of its axes' factors, the default's fill of
 // their sum, each over the total.
 std::vector<int> weight_nodes(Graph &r_g, const Climate::Table &p_table, const std::vector<int> &p_fields) {
     const size_t n = p_table.biomes.size();

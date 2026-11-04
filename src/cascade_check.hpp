@@ -4,13 +4,13 @@
 
 #include "ov/value.hpp"
 
-// The GPU cascade (cascade_glsl.hpp) against the CPU oracle (Cascade::run), with the meshers' level passes, on any
+// The GPU cascade (cascade_glsl.hpp) against the CPU oracle (Terrain::run), with the meshers' level passes, on any
 // device:
 //   - G1: every channel of every level and the final sdf_sample of chunks of every LOD (>= 64 per LOD,
 //     near 0, +-2^60 and straddling 2^32-voxel boundaries, in mixed-LOD batches): GPU == CPU bit for bit.
 //     The passes run one level at a time and each level's scratch is read back before the next one.
-//   - G3: on the GPU outputs, at the points a LOD-L chunk shares with its parent (LOD L+1):
-//     V_L = flush(V_{L+1} * 2^-order + O_L), exact.
+//   - G3: on the GPU outputs, at the points a LOD-L chunk shares with its parent (LOD L+1): the GPU's level L+1
+//     channels copied and flushed, then LevelProgram::last_code(L) on the CPU, give the GPU's output and pick, exact.
 //   - G6 / G7 timing: single-LOD batches of 128 chunks at LOD 0, 4, ... 24, every level of the cascade
 //     passes, every set, interleaved runs (GPU timestamps when the device returns them, wall clock
 //     of submit + sync otherwise).

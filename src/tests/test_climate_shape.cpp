@@ -2,6 +2,8 @@
 
 #include "cascade_glsl.hpp"
 #include "climate.hpp"
+#include "graph_compile.hpp"
+#include "level_program.hpp"
 #include "sdf_cascade.hpp"
 
 #include <godot_cpp/classes/file_access.hpp>
@@ -14,16 +16,6 @@
 using namespace Climate;
 using ClimateTest::ClimateSDF;
 using ExactNoise::float_bits;
-
-// A generic capacity: a power of two, at least the floor, at most the max, and never under the need (a generic carry
-// clamped to MAX_CARRY under its need overran the cascade's slots).
-TEST_CASE("Climate shape: cap_for holds the need") {
-    CHECK(cap_for(5, 0, 24) == 8);
-    CHECK(cap_for(5, 16, 24) == 16);
-    CHECK(cap_for(0, 4, 24) == 4);
-    CHECK(cap_for(20, 0, 24) == 24);
-    CHECK(cap_for(30, 0, 24) == 30);
-}
 
 // The shapes' centring constants are the noise's own means: E[sabs(n)] and E[n^2] of perlin3, over random points of
 // random cells.
@@ -43,29 +35,7 @@ TEST_CASE("Climate shape: NOISE_ABS_MEAN and NOISE_SQ_MEAN are the noise's means
     CHECK(std::fabs(sq_sum / n - Cascade::NOISE_SQ_MEAN) < 0.01 * Cascade::NOISE_SQ_MEAN);
 }
 
-namespace {
-
-// Every operation at once (adapter/godot/project/climate/shaped_test.json, CascadeSpike's set 4s too).
-ov::Value shaped_table() {
-    ov::Value d;
-    CHECK(load_table("res://climate/shaped_test.json", d) == ov::str());
-    return d;
-}
-
-struct ShapedSDF {
-    SDFCascade sdf;
-    explicit ShapedSDF(int p_lods = 15, float p_skirt_cells = 1.0f) {
-        sdf.climate_data = shaped_table();
-        ChunkParam param;
-        param.voxel_size = 0.05f;
-        param.skirt_depth = p_skirt_cells;
-        sdf.configure(param, p_lods);
-    }
-};
-
-} // namespace
-
-TEST_CASE("Climate shape: curves pass through their points, shapes bound their values") {
+TEST_CASE("Climate shape: curves pass through their points") {
     const Curve c = make_curve({ -1.0, 0.0, 0.5, 2.0 }, { 3.0, -1.0, 0.25, 4.0 });
     const double xs[] = { -1.0, 0.0, 0.5 };
     const double ys[] = { 3.0, -1.0, 0.25 };
@@ -76,14 +46,6 @@ TEST_CASE("Climate shape: curves pass through their points, shapes bound their v
     }
     CHECK(c.y_last == 4.0f);
     CHECK(curve_slope_bound(c) > 0.0f);
-    CHECK(shape_bound(Shape()) == 1.0f);
-    Shape ridged;
-    ridged.c[0] = 1.0f;
-    ridged.c[1] = 0.0f;
-    ridged.c[2] = -2.0f;
-    ridged.c[3] = 1.0f;
-    CHECK(shape_bound(ridged) > 0.5f);
-    CHECK(shape_bound(ridged) < 1.0f);
 }
 
 TEST_CASE("Climate shape: malformed shapes and terms are refused with the reason") {
@@ -94,7 +56,8 @@ TEST_CASE("Climate shape: malformed shapes and terms are refused with the reason
     const Ground g = sdf.climate_ground();
     auto err = [&](const ov::str &p_json) {
         Table t;
-        return parse(ClimateTest::json(p_json), g, t);
+        Terrain::LevelProgram prog;
+        return Terrain::compile(ClimateTest::json(p_json), g, Terrain::Mode::SPECIALISED, t, prog);
     };
     // One biome whose graph is note "n" (51.2 m) through p_nodes (each reading the one before), its last p_height.
     auto biome = [](const ov::str &p_nodes, const char *p_height, const ov::str &p_note = ov::str()) {
@@ -103,9 +66,8 @@ TEST_CASE("Climate shape: malformed shapes and terms are refused with the reason
     };
     const ov::str f1 = R"({"fields": [{"name": "t", "bands": [{"from_m": 400, "to_m": 26000, "amp": 1}]}], )";
     CHECK(ov::contains(err(f1 + biome(R"({"id": "s", "kind": "shape", "in": "n", "shape": "spiky"}, )", "s")), "plain, billow"));
-    CHECK(ov::contains(err(f1 + biome(R"({"id": "f", "kind": "field", "field": "t"}, {"id": "m", "kind": "multifractal", "in": "f", "parent": "n", "low_m": 0, "high_m": 1}, )", "m")),
-            "a multifractal weighs one note"));
-    // A multifractal's parent: a plain note strictly coarser than its own, low_m and high_m apart.
+    // A multifractal weighs any node by a ramp of any other (a field's here), low_m and high_m apart.
+    CHECK(err(f1 + biome(R"({"id": "f", "kind": "field", "field": "t"}, {"id": "m", "kind": "multifractal", "in": "f", "parent": "n", "low_m": 0, "high_m": 1}, )", "m")) == ov::str());
     auto mf = [&](const char *p_parent, double p_low, double p_high, const ov::str &p_note = ov::str()) {
         return ov::format(R"({"id": "c", "kind": "note", "wavelength_m": 409.6, "seed": 3, "amp_m": 0.5%s}, {"id": "w", "kind": "warp", "in": "c", "amount_m": 1}, )"
                           R"({"id": "m", "kind": "multifractal", "in": "n", "parent": "%s", "low_m": %s, "high_m": %s}, )",
@@ -114,20 +76,18 @@ TEST_CASE("Climate shape: malformed shapes and terms are refused with the reason
     CHECK(err(f1 + biome(mf("c", -0.25, 0.25), "m")) == ov::str());
     CHECK(err(f1 + biome(mf("c", 0.25, -0.25), "m")) == ov::str());
     CHECK(err(f1 + biome(mf("c", 0, 1), "m")) == ov::str()); // add 0: weight 0 at the parent's zero height
-    CHECK(ov::contains(err(f1 + biome(mf("n", -1, 1), "m")), "coarser than its note"));
-    CHECK(ov::contains(err(f1 + biome(mf("w", -1, 1), "m")), "parent is a note"));
+    CHECK(err(f1 + biome(mf("n", -1, 1), "m")) == ov::str());
     CHECK(ov::contains(err(f1 + biome(mf("c", 1, 1), "m")), "differ"));
     CHECK(err(f1 + biome(mf("c", -1, 1, R"(, "stretch_y": 2)"), "m")) == ov::str());
-    CHECK(ov::contains(err(f1 + biome(mf("c", -1, 1, R"(, "warp": "w")"), "m")), "without a warp"));
-    // A warp is a note's input, its notes coarser than the note (the planner's rule) and plain: the ground's slope (the
-    // swiss turbulence's) is not offered, nor its damping (climate.hpp).
+    CHECK(ov::contains(err(f1 + biome(mf("c", -1, 1, R"(, "warp": "w")"), "m")), "the graph loops")); // c warped by its own warp
+    // A warp is a note's input, strictly coarser than the note (the gate); its input any node, a shaped one too.
     const ov::str coarse = R"({"id": "c", "kind": "note", "wavelength_m": 409.6, "seed": 3, "amp_m": 0.5}, )";
     CHECK(ov::contains(err(f1 + biome(coarse + R"({"id": "w", "kind": "warp", "in": "c", "amount_m": 1}, )", "w")), "a note's input"));
     CHECK(err(f1 + biome(coarse + R"({"id": "w", "kind": "warp", "in": "c", "amount_m": 1}, )", "n", R"(, "warp": "w")")) == ov::str());
     CHECK(ov::contains(err(f1 + biome(R"({"id": "c", "kind": "note", "wavelength_m": 51.2, "seed": 3, "amp_m": 0.5}, {"id": "w", "kind": "warp", "in": "c", "amount_m": 1}, )", "n", R"(, "warp": "w")")),
             "coarser"));
-    CHECK(ov::contains(err(f1 + biome(coarse + R"({"id": "r", "kind": "shape", "in": "c", "shape": "ridged"}, {"id": "w", "kind": "warp", "in": "r", "amount_m": 1}, )", "n", R"(, "warp": "w")")),
-            "no shape"));
+    CHECK(err(f1 + biome(coarse + R"({"id": "r", "kind": "shape", "in": "c", "shape": "ridged"}, {"id": "w", "kind": "warp", "in": "r", "amount_m": 1}, )", "n", R"(, "warp": "w")")) ==
+            ov::str());
     CHECK(ov::contains(err(f1 + biome(coarse, "n", R"(, "warp": "c")")), "is a warp node"));
     CHECK(ov::contains(err(f1 + biome("", "n", R"(, "damp": 4)")), "unknown key 'damp'"));
     // An offset is a constant term: inserted without its mean, it doesn't count on a note (ridged's scales its |n| too).
@@ -143,7 +103,8 @@ TEST_CASE("Climate shape: malformed shapes and terms are refused with the reason
 // (Λ_{L+1}) near the LOD-L surface, the step is within the outer chunk's skirt depth, the cap lifted (the bound itself;
 // the cap is a cost choice).
 TEST_CASE("Climate shape: the step between LOD L and L+1 stays within the skirt depth") {
-    for (const auto &[path, lods] : { std::pair{ "res://climate/example.json", 15 }, std::pair{ "res://climate/eight_biomes_test.json", 15 }, std::pair{ "res://climate/programs_test.json", 15 } }) {
+    for (const auto &[path, lods] : { std::pair{ "res://climate/example.json", 15 }, std::pair{ "res://climate/eight_biomes_test.json", 15 }, std::pair{ "res://climate/programs_test.json", 15 },
+                 std::pair{ "res://climate/shaped_test.json", 15 } }) {
         CAPTURE(std::string(path));
         ClimateSDF c(path, lods, 1e6f);
         CLIMATE_REQUIRE(c.sdf.get_climate() != nullptr);

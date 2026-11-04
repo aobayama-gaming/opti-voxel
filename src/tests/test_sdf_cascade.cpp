@@ -4,7 +4,6 @@
 
 #include "cascade.hpp"
 #include "cascade_glsl.hpp"
-#include "cascade_measure.hpp"
 #include "cascade_terrain.hpp"
 #include "gpu_frame.hpp"
 #include "sdf_cascade.hpp"
@@ -59,7 +58,7 @@ TEST_CASE("Cascade: closed-form level boxes equal the iterated parent boxes, wit
     const ChunkParam param;
     int reached[8] = {};
     for (int i = 0; i < 64; i++) {
-        const Box c = chunk_box(CascadeMeasure::random_chunk(i % 7, 9, i), param);
+        const Box c = chunk_box(random_chunk(i % 7, 9, i), param);
         for (int j = 0; j < 8; j++) {
             const Box l = level_box(c, j);
             for (int a = 0; a < 3; a++) {
@@ -80,14 +79,13 @@ TEST_CASE("SDFCascade: evaluate equals Terrain::point and height_sdf, bit for bi
         SDFCascade sdf;
         sdf.configure(param, lods);
         const Terrain::LevelProgram &prog = sdf.program();
-        // The template's top: k = 16 at 0.5 m (26.2 km), whatever the LOD count past it.
-        const int k_top = std::min(lods + 4, Climate::template_top(param.voxel_size));
-        CHECK(k_top == 16);
+        // The template's top (template_50cm.world.json): k = 16 at 0.5 m (26.2 km), whatever the LOD count past it.
+        const int k_top = 16;
         CHECK(prog.top == k_top - 3);
         CHECK(ClimateTest::note_count(prog) == k_top - 2);
         CHECK(ClimateTest::note_top_k(prog) == k_top);
         // Capped at 3.3 km: 6553.6 voxels at 0.5 m.
-        CHECK(ClimateTest::note_amp(prog) == float(Climate::TEMPLATE_MAX_AMP_M / 0.5));
+        CHECK(ClimateTest::note_amp(prog) == float(3276.8 / 0.5));
         int compared = 0;
         int differing = 0;
         const int64_t bases[] = { 0, 600, (int64_t(1) << 32) - 3, -(int64_t(1) << 60) + 1000, (int64_t(1) << 60) - 4000 };
@@ -143,8 +141,10 @@ TEST_CASE("SDFCascade: the flat preset is the plane y = FLAT_GROUND_M at every L
 // The template ground stops at the first octave at the 3.3 km cap (26.2 km at 5 cm): past 15 LODs the ground is the
 // same octaves, so the same bits.
 TEST_CASE("SDFCascade: the template ground stops at its top, the same at any LOD count past it") {
-    CHECK(Climate::template_top(0.05) == 19);
-    CHECK(Climate::template_top(0.5) == 16);
+    // Each template file's first note is its top: 2^19 voxels at 5 cm, 2^16 at 0.5 m.
+    const ov::Value fine = ClimateTest::template_graph(0.05), coarse = ClimateTest::template_graph(0.5);
+    CHECK(fine["nodes"][size_t(0)]["wavelength_m"].as_double() == 26214.4);
+    CHECK(coarse["nodes"][size_t(0)]["wavelength_m"].as_double() == 32768.0);
     ChunkParam param;
     param.voxel_size = 0.05f;
     auto top = [&](const SDFCascade &p_sdf) { return ClimateTest::note_top_k(p_sdf.program()); };

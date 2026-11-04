@@ -353,9 +353,6 @@ ov::str field_section(const Table &p_table, const Sampled &p_s, int p_n, int p_m
     const int64_t points = int64_t(p_n) * p_n;
     ov::str md = "| field | octaves (k) | min | mean | max |\n|---|---|---|---|---|\n";
     for (int f = 0; f < p_s.nf; f++) {
-        if (p_table.fields[size_t(f)].warp) {
-            continue; // a note's input, its octave's noise: no map of its own
-        }
         auto v = [&](int64_t p_i) { return double(p_s.fields[size_t(p_i) * p_s.nf + f]); };
         double lo = INFINITY, hi = -INFINITY, sum = 0.0;
         for (int64_t i = 0; i < points; i++) {
@@ -564,15 +561,11 @@ ClimateReport::Preview ClimateReport::preview(const ov::Value &p_world, const ov
         out.altitude_m[i] = float(s.altitude[i] * voxel);
         out.relief_m = ov::max(out.relief_m, std::abs(double(out.altitude_m[i])));
     }
-    std::vector<int> named;
     for (int f = 0; f < s.nf; f++) {
-        if (!table.fields[size_t(f)].channel && !table.fields[size_t(f)].warp) {
-            named.push_back(f);
-            out.field_names.push_back(table.fields[size_t(f)].name);
-        }
+        out.field_names.push_back(table.fields[size_t(f)].name);
     }
     for (size_t i = 0; i < s.altitude.size(); i++) {
-        for (const int f : named) {
+        for (int f = 0; f < s.nf; f++) {
             out.fields.push_back(s.fields[i * size_t(s.nf) + size_t(f)]);
         }
     }

@@ -8,8 +8,8 @@ instances (`docs/trees.md`, biome features); this is the field-wide part.
 
 A cave is a node chain of a biome's graph, no carve kind: a smooth min on the mix's output (the mix builds the ground's
 height), `h' = smin(h, up - C)`, which is the model's `smax(up - h, C)` below exactly. `up` is the sample's height
-above the base (`SampleOp::UP`); the carve density `C` is a sub-mix of cave notes (the relaxer carries it to the
-samples as a channel field, its octaves inserted by the cascade like any band) under the band's tent, all of it
+above the base (the `up` node); the carve density `C` is a sub-mix of cave notes (in cascade v2 a node at its finest
+note's level, carried down like any channel) under the band's tent, all of it
 ordinary nodes (`climate/caves_test.json`):
 
 ```
@@ -88,13 +88,12 @@ worm-like tubes, which is the reason to allow two notes sets per layer later.
   the biome curves, between `ground_channels` and `height_sdf` (`sdf_cascade.hpp:272-292`;
   GPU: `level_shader`'s `/*GROUND_C0*/`, `cascade_glsl.cpp:648-678`, and the point items' fills `:178-188`). The CPU
   and the GLSL stay op for op (`det_rsqrt`, `precise`, constants as bits).
-- **The structural change.** The samples' level is compiled `without_fields()` and the point items `ground_only()`
-  (`cascade.hpp:407-414`), so the carve can't be another climate field: it is a new channel group carried down to the
-  samples in every view. That is about 4 more channels everywhere (8 measured 1.30x the GPU time of 4: G7,
+- **The structural change** (v1's, before cascade v2: there the samples' level ran without the fields, so the carve
+  was a new channel group carried down to the samples in every view; in v2 it is one more live channel). That is about 4 more channels everywhere (8 measured 1.30x the GPU time of 4: G7,
   `docs/cascade.md`). The cost is skipped per chunk where the band can't reach it: a chunk whose corners are all above
   `top - r`, or all below `floor + r`, never reads the noise (the SDFDummy `cave_skip`, which saved two thirds of its SDF
   cost).
-- **Per-layer strength** rides in `SampleCarry` (`climate.hpp:267`, `MAX_CARRY` 24) like the curve weights.
+- **Per-layer strength** is a node like the curve weights (v1 carried it in its sample carry).
 - **Discoverer** (`chunk_discoverer.cpp:51-67`): `evaluate_cull` returns `d` with the carve, so a cave chunk deep
   underground is no longer "solid" and is found. The GPU path (`CascadePointsGPU::cull_values`) must match it bit for
   bit (`--discovery_compare`).

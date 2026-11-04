@@ -51,7 +51,7 @@ are explicit at engine call sites (`godot_conv.hpp`: `godot_str`, `godot_v3`, `o
 ## Done — steps 1, 1b, 3 (`feature/de-godot-core`)
 
 - **Shader text in `ov::str`.** Every GLSL generator (exact_noise, gpu_frame, gpu_glsl, cascade, base_surface,
-  cascade_shaped_glsl, archetype_glsl, the climate's GLSL, the table's fold and library, the SDF's GLSL virtuals)
+  level_glsl, archetype_glsl, the climate's GLSL, the table's fold and library, the SDF's GLSL virtuals)
   returns `ov::str`; `String::replace` chains are `ov::replace_all` over (key, text) pairs in the same order
   (`ov/str.hpp`, godot's semantics). The meshers and FrameSpike convert once, at `set_stage_source`. cascade_glsl
   splits at the device: the text stays, `CascadePasses` moves to `cascade_passes`; the level shader reads the

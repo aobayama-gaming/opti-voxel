@@ -6,7 +6,7 @@
 #
 # Each set loads its world file (voxel and LODs from its engine); --world is the bare set's and the table's.
 #
-# check: the cascade passes (cascade_glsl.hpp) vs Cascade::run, every channel of every level and the
+# check: the cascade passes (cascade_glsl.hpp) vs Terrain::run, every channel of every level and the
 # sdf_sample, chunks of every LOD near 0, +-2^60 and across 2^32 boundaries (G1), and the LOD relation on
 # the GPU outputs (G3). points: point items (CascadePasses::create_points, the discoverer's corners and the site walk's
 # readings) vs SDFCascade::ground_unit, ground_field and evaluate_cull, one mixed-LOD batch of 5,120 voxels per LOD (0-8,

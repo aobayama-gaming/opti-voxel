@@ -7,7 +7,7 @@ Which chunks are scanned, loaded and dropped. Run `tools/discovery_audit.sh` aft
   ERRORs on a mismatch. The walk is breadth first, one wave per LOD: each wave's uncached nodes give
   their 8 corners, deduplicated on the voxel (~6 nodes share a corner), evaluated in one batch
   (`SDFBase::evaluate_batch`; `SDFCascade` spreads it over the `WorkerThreadPool` with the
-  allocation-free `Cascade::point_into`). `VoxelTerrain.discoverer_mode` / `--discoverer=cpu|gpu` (bench
+  allocation-free `Terrain::point`). `VoxelTerrain.discoverer_mode` / `--discoverer=cpu|gpu` (bench
   and player): -1 auto (default, the same as 1), 0 CPU, 1 GPU. The GPU path,
   `LocalPointsGPU` (`src/local_points_gpu.*`, shared with the site walks' `FieldGPU`), runs the cascade passes on point
   items (`CascadePasses::create_points`, `CascadePointsGPU::cull_values`: the unit register read back, metres on the CPU

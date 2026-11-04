@@ -3,7 +3,7 @@
 #include "cascade.hpp"
 #include "cascade_check_points.hpp"
 #include "cascade_check_sets.hpp"
-#include "cascade_measure.hpp"
+
 #include "cascade_passes.hpp"
 #include "debug_log.hpp"
 #include "gpu_frame.hpp"
@@ -682,7 +682,7 @@ ov::Value timing(ov::gpu::Device *p_device, const std::vector<SpikeSet> &p_sets,
             ov::bytes ids;
             ids.resize(TIMING_CHUNKS * GPUFrame::CHUNK_INPUT_BYTES);
             for (uint32_t c = 0; c < TIMING_CHUNKS; c++) {
-                GPUFrame::encode_chunk_input(ids, c, CascadeMeasure::random_chunk(lod, 0x7133u + uint32_t(r + 2), int(c)), p_param);
+                GPUFrame::encode_chunk_input(ids, c, Cascade::random_chunk(lod, 0x7133u + uint32_t(r + 2), int(c)), p_param);
             }
             for (const auto &ps : passes) {
                 ps->upload_items(ids.data(), TIMING_CHUNKS); // one input: each set its own regions

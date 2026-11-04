@@ -1,4 +1,3 @@
-#include "biome_compiler.hpp"
 #include "climate.hpp"
 
 #include "ov/containers.hpp"
@@ -12,7 +11,8 @@
 #include <cmath>
 #include <string>
 
-// A climate table's JSON format (parse, load); validate() is in climate_validate.cpp.
+// A climate table's JSON format: the parser of its layout (fields, biomes' places, looks and contents) and of its graph
+// nodes, which the cascade v2 compiler reads (graph_compile.cpp).
 namespace Climate {
 
 // The format (JSON; distances in metres, rounded to whole octaves 2^k voxels; "comment" keys are ignored, any
@@ -20,12 +20,12 @@ namespace Climate {
 //   { "fields": [ field... ], "biomes": [ biome..., default biome ] }
 //   field:  { "name": "temperature", "seed": 7 (optional, else a hash of the name),
 //             "bands": [ { "wavelength_m": 5000, "amp": 1 } | { "from_m": 1600, "to_m": 210000, "amp": 1, "persistence": 1 (optional) } ],
-//             "terms": [ { "source": "ground", "per_m": -0.002 } | { "source": "<earlier field>", "x": 0.5 } ] }
+//             "terms": [ { "source": "<earlier field>", "x": 0.5 } ] }
 //     A range is every octave from from_m to to_m that the ground has (its octaves depend on the LOD count: the
 //     table covers the whole spectrum at any count), amp at to_m (the coarsest) times persistence per finer octave.
 //     Octave k's seed and lattice are make_octave(field seed, k): editing one band leaves the others' unchanged.
-//     A ground term reads the ground's height above the datum (per metre: colder higher up); a field term that
-//     field's value.
+//     A term adds x times an earlier field's value (the ground can't be one: it depends on the weights, which depend on
+//     the fields).
 //   biome:  { "name": "volcanic",
 //             "at": { "temperature": [0.5, 0.3] (centre, span), "humidity": { "min": 0.1, "max": 0.5 } },
 //             "graph": { "nodes": [ node... ] },
@@ -36,7 +36,7 @@ namespace Climate {
 //             "debug_color": "#c04020" }
 //     "at": the biome's place in the fields' space, a centre and a span on each field it names ({min, max}: their
 //     middle and half their gap); on each it is whole within 0.71 of the span and gone a span away, overlapping biomes
-//     blend by their kernels (Climate::weights), a field it doesn't name doesn't matter to it. The last biome is the
+//     blend by their kernels (climate.hpp, Weights), a field it doesn't name doesn't matter to it. The last biome is the
 //     default: no "at", it fills what the others leave. "surface": the biome's ground colours (sRGB) on gentle and
 //     steep slopes; without it, the procedural ground's. "clouds": the sky over the biome, its cover and cloud type in
 //     [0, 1] (stratus 0, stratocumulus 0.5, cumulus 1; Climate::BiomeClouds); without it, the sky's cover and the
@@ -55,29 +55,27 @@ namespace Climate {
 //              (k outside [3, LODs + 4]) plays nothing: a world reads at any LOD count. The ground is a 3D noise whose
 //              vertical slope is as large as its horizontal one: past dh/dy = 1 it folds into overhangs; stretched
 //              octaves keep it a height field where they dominate.
-//     "warp":  "in": notes (a note or a mix of them, each coarser than every note the warp moves), "amount_m": 80: a
-//              note reading it is read displaced by amount_m times (x, y, z), the input's notes read with their seed,
-//              seed + 1 and seed + 2 (libnoise's turbulence; amp_m 0.5 is half of amount_m).
+//     "warp":  "in": any node strictly coarser than every note the warp moves (the gate, docs/cascade-v2.md), "amount_m":
+//              80: a note reading it is read displaced by amount_m times (x, y, z), the input read three times with its
+//              notes' seeds + 0, + 1 and + 2 (libnoise's turbulence; amp_m 0.5 is half of amount_m).
 //     "shape": "in", "shape": "plain" | "billow" | "ridged" | "square", "scale": a, "offset": o (both optional): a n + o,
-//              2 |a n| - 1 + o, (o - |a n|)^2 (o default 1), (a n)^2 + o; or "coeffs": [c1, cn, cabs, csq] (Shape). A
-//              band inserts its shape without its mean; |n| is smoothed below the lattice's resolution (Cascade::smooth_abs).
-//              Past a note's chain (a second shape, a mix of several notes, a node past the notes) it shapes their sum at
-//              the samples, its constant term counting (SampleOp::SHAPE).
-//     "multifractal": "in", "parent": a note strictly coarser than in's (no warp), "low_m": -50, "high_m": 100: in's note
-//              weighted by where its parent's height (amp_m times its noise, stretched as the note says) lies between
-//              low_m (weight 0) and high_m (weight 1), clamped; low_m above high_m inverts it. The parent plays nothing
-//              itself (a stretched note's parent stretched alike keeps its weight's vertical slope down).
+//              2 |a n| - 1 + o, (o - |a n|)^2 (o default 1), (a n)^2 + o; or "coeffs": [c1, cn, cabs, csq] (Shape). On a
+//              note it shapes the noise without its mean (a coarser LOD dropping the note makes no step), its constant
+//              term not counting; |n| is smoothed below the lattice's resolution (Cascade::smooth_abs). On any other node
+//              it shapes the node's value, its constant term counting.
+//     "multifractal": "in", "parent": any node, "low_m": -50, "high_m": 100: in weighted by where its parent's value
+//              lies between low_m (weight 0) and high_m (weight 1), clamped; low_m above high_m inverts it.
 //     "mix":   "rows": [ { "in": id, "x": 1.2 (volume, default 1) } ]: the rows' sum, each row any node.
-//     "curve": "in", "points": [[h, R], ...] (h increasing, metres): the ground height h becomes R(h) where the biome's
-//              weight is 1 (R - h through libnoise's cubic, constant past the ends; Biome).
+//     "curve": "in", "points": [[h, R], ...] (h increasing, metres): in's value h becomes R(h) (R - h through libnoise's
+//              cubic, constant past the ends).
 //     "up":    the sample's height above the base (metres as LOD0 voxels): a cave is "smin" (k_m) of the mix and
 //              up - C, C a carve density (> 0 in the air it adds, its band's tent built from the depth mix - up).
+//     "constant" (value_m), "field" (a field's value), "add", "subtract", "multiply", "min", "max" (a, b), "smin", "smax"
+//              (a, b, k_m).
 //     "output": "height": any node.
-//     Any node may read any other (no loop): the relaxer (expr) decides where each plays, per octave in the cascade or
-//     at the samples, notes read past a node at the samples becoming a sub-mix field (docs/climate.md, "Parse, compile
-//     and validate").
-//     The biome compiler (biome_compiler.hpp) keeps each note once whatever biome mixes it. Octave k reads the weights
-//     from the fields' octaves coarser than k only (Cascade::Modulation).
+//     Any node may read any other, without a loop. Each is computed at the level of the finest note it reads
+//     (docs/cascade-v2.md, The rule).
+
 const std::vector<GraphKind> &graph_kinds() {
     static const std::vector<GraphKind> KINDS = {
         { "note", { "warp" }, { { "wavelength_m", "number", true, NAN, "" }, { "seed", "seed", true, NAN, "" }, { "amp_m", "number", true, NAN, "" }, { "stretch_y", "pow2", false, 1.0, "" } } },
@@ -141,7 +139,9 @@ public:
 
     ov::str error;
 
-    void run(const ov::Value &p_data) {
+    // The table's fields and biomes, each biome's graph nodes into r_graphs (the compiler reads them).
+    void run(const ov::Value &p_data, std::vector<ov::Value> &r_graphs) {
+        graphs = &r_graphs;
         if (!keys(p_data, "climate", { "fields", "biomes" })) {
             return;
         }
@@ -149,27 +149,9 @@ public:
         for (int64_t i = 0; i < int64_t(fields.size()) && error.empty(); i++) {
             field(dict(fields[i], ov::format("field %d", i)), i);
         }
-        named = int(table.fields.size());
         const ov::Value biomes = array(p_data, "biomes", "climate");
-        std::vector<BiomeGraph> graphs;
         for (int64_t i = 0; i < int64_t(biomes.size()) && error.empty(); i++) {
-            graphs.emplace_back();
-            biome(dict(biomes[i], ov::format("biome %d", i)), i, graphs.back());
-        }
-        if (raw != nullptr) {
-            return; // parse_layout: the graphs are the caller's
-        }
-        // A generic table keeps the warp fields of its capacity (the rest without a band), so a warp deleted compiles
-        // nothing; never past the fields its sub-mixes' capacity leaves.
-        while (!ground.specialize && int(table.fields.size()) - named < ground.caps.warps && int(table.fields.size()) + ground.caps.channels < MAX_FIELDS) {
-            Field f;
-            f.name = ov::format("~warp%d", int64_t(table.fields.size()));
-            f.warp = true;
-            table.fields.push_back(f);
-        }
-        const ov::str err = error.empty() ? compile(graphs, ground, table) : ov::str();
-        if (!err.empty()) {
-            error = "climate: " + err;
+            biome(dict(biomes[i], ov::format("biome %d", i)), i);
         }
     }
 
@@ -177,8 +159,7 @@ public:
     void run_list(const ov::Value &p_list, const ov::str &p_where, std::vector<InstanceShare> &r_out) { instances(p_list, p_where, r_out); }
     void run_list(const ov::Value &p_list, const ov::str &p_where, std::vector<FeatureShare> &r_out) { features(p_list, p_where, r_out); }
     void shape_of(const ov::Value &p_node, bool p_constant, Shape &r_shape) { shape(p_node, "shape", p_constant, r_shape); }
-    // parse_layout's: each biome's graph nodes go to r_graphs instead of the relaxer; the node readers.
-    void set_raw(std::vector<ov::Value> &r_graphs) { raw = &r_graphs; }
+    // The node readers (parse_note, parse_curve, parse_node_keys, parse_number).
     void note_of(const ov::Value &p_node, const ov::str &p_where, NoteNode &r_n) { note(p_node, p_where, r_n); }
     void curve_of(const ov::Value &p_node, const ov::str &p_where, Curve &r_c) { curve(p_node, p_where, r_c); }
     void keys_of(const ov::Value &p_node, const ov::str &p_where) {
@@ -196,8 +177,7 @@ public:
 private:
     const Ground &ground;
     Table &table;
-    std::vector<ov::Value> *raw = nullptr;
-    int named = 0; // the fields the format names (the climate's); the warps' follow (warp_field)
+    std::vector<ov::Value> *graphs = nullptr;
 
     // The first error only: "climate: <where>: <msg>".
     void fail(const ov::str &p_where, const ov::str &p_msg) {
@@ -305,12 +285,8 @@ private:
         return error.empty();
     }
 
-    // The field a name refers to: GROUND for "ground" (if p_ground_ok), else a field index below p_before (p_expect
-    // names the allowed ones in the error).
-    int source(const ov::str &p_name, const ov::str &p_where, bool p_ground_ok, int p_before, const char *p_expect) {
-        if (p_name == "ground" && p_ground_ok) {
-            return GROUND;
-        }
+    // The field a name refers to: a field index below p_before (p_expect names the allowed ones in the error).
+    int source(const ov::str &p_name, const ov::str &p_where, int p_before, const char *p_expect) {
         const int i = table.field_index(p_name);
         if (i < 0 || i >= p_before) {
             fail(p_where, "'" + p_name + ov::str("' is not ") + ov::str(p_expect) + ov::str("."));
@@ -418,13 +394,17 @@ private:
     }
 
     void term(const ov::Value &p_d, const ov::str &p_where, int p_field, Field &r_f) {
-        if (!keys(p_d, p_where, { "source", "per_m", "x" })) {
+        if (p_d["source"].as_str() == "ground") {
+            fail(p_where, "a 'ground' term is gone (the ground depends on the weights, which depend on the fields): a field's terms read earlier fields only.");
             return;
         }
+        if (!keys(p_d, p_where, { "source", "x" })) {
+            return;
+        }
+        const ov::str name = text(p_d, "source", p_where);
         Term t;
-        t.source = source(text(p_d, "source", p_where), p_where, true, p_field, "the ground or an earlier field");
-        // The ground's value is in LOD0 voxels: per metre * metres per voxel.
-        t.coef = float(t.source == GROUND ? number(p_d, "per_m", p_where) * ground.voxel_size : number(p_d, "x", p_where));
+        t.source = source(name, p_where, p_field, "an earlier field");
+        t.coef = float(number(p_d, "x", p_where));
         r_f.terms.push_back(t);
     }
 
@@ -481,7 +461,7 @@ private:
                 continue;
             }
             const ov::str where = p_where + ov::str(" ") + entry.first;
-            const int f = source(entry.first, where, false, named, "a field");
+            const int f = source(entry.first, where, int(table.fields.size()), "a field");
             const ov::Value &v = entry.second;
             double centre = 0.0, span = 0.0;
             if (v.get_type() == ov::Value::ARRAY && v.size() == 2 && is_number(v[0]) && is_number(v[1])) {
@@ -503,393 +483,6 @@ private:
             r_at.push_back(Axis{ f, float(centre), float(1.0 / span) });
         }
         std::stable_sort(r_at.begin(), r_at.end(), [](const Axis &p_a, const Axis &p_b) { return p_a.field < p_b.field; });
-    }
-
-    // A graph's node of id p_id, null (an error) if there is none.
-    const ov::Value *node(const std::vector<ov::Value> &p_nodes, const ov::str &p_id, const ov::str &p_where) {
-        for (const ov::Value &n : p_nodes) {
-            if (n["id"].as_str() == p_id) {
-                return &n;
-            }
-        }
-        fail(p_where, "no node '" + p_id + ov::str("'."));
-        return nullptr;
-    }
-
-    // The node an input of p_d names (its key p_key).
-    const ov::Value *input(const std::vector<ov::Value> &p_nodes, const ov::Value &p_d, const char *p_key, const ov::str &p_where) {
-        const ov::str id = text(p_d, p_key, p_where);
-        return error.empty() ? node(p_nodes, id, p_where) : nullptr;
-    }
-
-    static bool is_kind(const ov::Value *p_n, const char *p_kind) { return p_n != nullptr && (*p_n)["kind"].as_str() == p_kind; }
-
-    // The relaxer (docs/climate.md, "Biome graphs"): a graph's node is either notes the cascade inserts (rows, each a
-    // note's per-octave chain at a volume: their sum) or a register of the biome's sample program. A note's chain plays
-    // per octave while it reads note -> warp -> shape -> multifractal (each optional, at most once; a warp anywhere in it:
-    // it only moves where the note is read); a node past that, or any node past a mix, reads their sum at the samples
-    // (the notes lifted to a register: the ground's or a sub-mix's, graph()). Mixes are linear: a mix of mixes is one.
-    struct Value {
-        std::vector<GraphRow> rows;
-        int reg = -1;
-    };
-
-    // How a graph is read back from its output: each node's value once (by id), the note sums lifted to registers (their rows and the instruction graph() makes the ground's or a
-    // sub-mix's read), the depth (a loop).
-    struct Reading {
-        ov::HashMap<ov::str, Value, ov::DefaultHash> memo;
-        std::vector<std::pair<std::vector<GraphRow>, int>> lifts;
-        int depth = 0;
-    };
-
-    // Whether p_v is one note's chain a per-octave node may extend (at volume 1, no multifractal yet).
-    static bool per_octave(const Value &p_v) {
-        return p_v.reg < 0 && p_v.rows.size() == 1 && p_v.rows[0].x == 1.0f && p_v.rows[0].multifractal.field < 0;
-    }
-
-    int emit(Biome &r_b, SampleOp p_op, int p_a = -1, int p_b = -1, float p_value = 0.0f, int p_index = 0) {
-        r_b.program.code.push_back(SampleInstr{ p_op, p_a, p_b, p_value, p_index });
-        return int(r_b.program.code.size()) - 1;
-    }
-
-    // r_v as a register: its own, or its notes lifted (a placeholder graph() makes the ground's or a sub-mix's read).
-    int lift(Value &r_v, Biome &r_b, Reading &r_read) {
-        if (r_v.reg < 0 && error.empty()) {
-            r_read.lifts.emplace_back(r_v.rows, int(r_b.program.code.size()));
-            r_v.reg = emit(r_b, SampleOp::FIELD);
-        }
-        return r_v.reg;
-    }
-
-    // Node p_n's register (its notes lifted once, whatever reads it).
-    int reg(const std::vector<ov::Value> &p_nodes, const ov::Value *p_n, const ov::str &p_where, Biome &r_b, Reading &r_read) {
-        Value v = expr(p_nodes, p_n, p_where, r_b, r_read);
-        if (v.reg >= 0 || !error.empty()) {
-            return v.reg;
-        }
-        const int r = lift(v, r_b, r_read);
-        if (Value *m = r_read.memo.getptr((*p_n)["id"].as_str())) {
-            m->reg = r;
-        }
-        return r;
-    }
-
-    // Node p_n's value.
-    Value expr(const std::vector<ov::Value> &p_nodes, const ov::Value *p_n, const ov::str &p_where, Biome &r_b, Reading &r_read) {
-        if (!error.empty() || p_n == nullptr) {
-            return Value();
-        }
-        const ov::str id = (*p_n)["id"].as_str();
-        if (const Value *m = r_read.memo.getptr(id)) {
-            return *m;
-        }
-        if (++r_read.depth > 4096) {
-            fail(p_where + ov::str(" node '") + id + ov::str("'"), "the graph loops.");
-            return Value();
-        }
-        const Value v = node_value(p_nodes, p_n, p_where, r_b, r_read);
-        r_read.memo.insert(id, v);
-        return v;
-    }
-
-    // A shape or a multifractal (p_kind): the note chain it extends per octave, or a shape at the samples.
-    Value chain_value(const ov::str &kind, const std::vector<ov::Value> &p_nodes, const ov::Value *p_n, const ov::str &p_where, const ov::str &where, Biome &r_b,
-            Reading &r_read) {
-        Value out;
-        if (kind == "shape") {
-            out = expr(p_nodes, input(p_nodes, *p_n, "in", where), p_where, r_b, r_read);
-            if (per_octave(out) && !out.rows[0].has_shape) {
-                out.rows[0].has_shape = shape(*p_n, where, false, out.rows[0].shape);
-                return out;
-            }
-            Shape s;
-            shape(*p_n, where, true, s);
-            const int a = reg(p_nodes, input(p_nodes, *p_n, "in", where), p_where, r_b, r_read);
-            r_b.program.shapes.push_back(s);
-            return Value{ {}, error.empty() ? emit(r_b, SampleOp::SHAPE, a, -1, 0.0f, int(r_b.program.shapes.size()) - 1) : -1 };
-        }
-        if (kind == "multifractal") {
-            out = expr(p_nodes, input(p_nodes, *p_n, "in", where), p_where, r_b, r_read);
-            if (error.empty() && !per_octave(out)) {
-                fail(where, "a multifractal weighs one note: its input is a note (through a warp and a shape).");
-            }
-            if (error.empty()) {
-                multifractal(*p_n, input(p_nodes, *p_n, "parent", where), where, out.rows[0]);
-            }
-            return out;
-        }
-        return out;
-    }
-
-    // Row r_row weighted by multifractal node p_mf: clamp(mul f + add, 0, 1), f its parent's noise at amplitude 1
-    // (parent_field), 0 at the parent's height low_m, 1 at high_m (its amplitude under the note cap, as it would play). A
-    // parent the LOD count doesn't have, or a silent one, is at height 0: the weight a constant, folded into the row's
-    // volume.
-    void multifractal(const ov::Value &p_mf, const ov::Value *p_parent, const ov::str &p_where, GraphRow &r_row) {
-        const double low = number(p_mf, "low_m", p_where), high = number(p_mf, "high_m", p_where);
-        if (!is_kind(p_parent, "note")) {
-            fail(p_where, "a multifractal's parent is a note.");
-            return;
-        }
-        NoteNode parent;
-        note(*p_parent, p_where, parent);
-        if (!error.empty()) {
-            return;
-        }
-        if (p_parent->has("warp")) {
-            fail(p_where, "a multifractal's parent is read without a warp.");
-        } else if (parent.k <= r_row.note.k) {
-            fail(p_where, ov::format("a multifractal's parent is coarser than its note: %s m isn't coarser than %s m.", ov::num(std::ldexp(ground.voxel_size, parent.k), 2), ov::num(std::ldexp(ground.voxel_size, r_row.note.k), 2)));
-        } else if (!(std::isfinite(low) && std::isfinite(high) && low != high)) {
-            fail(p_where, "a multifractal's low_m and high_m differ.");
-        }
-        if (!error.empty()) {
-            return;
-        }
-        const double add = -low / (high - low);
-        const double amp_m = double(note_amp(parent, ground)) * ground.voxel_size;
-        if (!note_plays(parent, ground) || amp_m == 0.0) {
-            r_row.x = r_row.x * float(ov::clamp(add, 0.0, 1.0));
-            return;
-        }
-        r_row.multifractal = Multifractal{ parent_field(parent), float(amp_m / (high - low)), float(add) };
-    }
-
-    // The field of multifractal parent p_note: its noise at amplitude 1, stretched as a ground octave. A note of octave
-    // k reads it before level k's insertions, whole: it is coarser.
-    int parent_field(const NoteNode &p_note) {
-        const int stretch = note_stretch(p_note, p_note.k);
-        const ov::str name = ov::format("~parent%d_%d_%d", int64_t(p_note.k), int64_t(p_note.seed), int64_t(stretch));
-        const int known = table.field_index(name);
-        if (known >= 0) {
-            return known;
-        }
-        Field f;
-        f.name = name;
-        f.warp = true;
-        f.bands.push_back(ExactNoise::make_octave(p_note.seed, uint32_t(p_note.k), p_note.k, 1.0f));
-        f.bands.back().stretch = stretch;
-        table.fields.push_back(f);
-        return int(table.fields.size()) - 1;
-    }
-
-    // Note row r_row read through warp node p_w: one term per note of its input (every one coarser than the note: what
-    // the planner checks), its octave's fields (warp_field) at amount_m times the note's amplitude and volume. The fields
-    // hold the noise alone, so a value edit never changes them: the table's structure follows the graph's.
-    void warp(const std::vector<ov::Value> &p_nodes, const ov::Value *p_w, const ov::str &p_where, const ov::str &p_note, Biome &r_b, Reading &r_read, GraphRow &r_row) {
-        if (!is_kind(p_w, "warp")) {
-            fail(p_note, "'warp' is a warp node.");
-            return;
-        }
-        const ov::str where = p_where + ov::str(" node '") + (*p_w)["id"].as_str() + ov::str("'");
-        if (!node_keys(*p_w, where, "warp")) {
-            return;
-        }
-        const Value in = expr(p_nodes, input(p_nodes, *p_w, "in", where), p_where, r_b, r_read);
-        if (error.empty() && in.reg >= 0) {
-            fail(where, "a warp's input is notes or a mix of them, not a node past them.");
-        }
-        const double amount = number(*p_w, "amount_m", where) / ground.voxel_size;
-        for (size_t i = 0; i < in.rows.size() && error.empty(); i++) {
-            const GraphRow &row = in.rows[i];
-            if (row.has_shape || row.multifractal.field >= 0 || !row.warps.empty() || row.note.stretch != 0) {
-                fail(where, "a warp's input is notes or a mix of them (no shape, multifractal, warp or stretch).");
-            } else if (row.note.k <= r_row.note.k) {
-                fail(where, ov::format("a warp is coarser than the note it moves: its note of %s m isn't coarser than %s m.", ov::num(std::ldexp(ground.voxel_size, row.note.k), 2), ov::num(std::ldexp(ground.voxel_size, r_row.note.k), 2)));
-            } else if (note_plays(row.note, ground)) {
-                const float scale = float(amount * double(row.x) * row.note.amp_m);
-                if (scale != 0.0f) {
-                    r_row.warps.push_back(WarpTerm{ warp_field(row.note), scale });
-                }
-            }
-        }
-    }
-
-    // The first of the three fields (x, y, z) of warp note p_note's octave: its noise at amplitude 1, read with its
-    // seed, seed + 1 and seed + 2. A note of octave k reads them before level k's insertions, whole: they are coarser.
-    int warp_field(const NoteNode &p_note) {
-        const int known = table.field_index(ov::format("~warp%d_%dx", int64_t(p_note.k), int64_t(p_note.seed)));
-        if (known >= 0) {
-            return known;
-        }
-        const int field = int(table.fields.size());
-        for (int a = 0; a < 3; a++) {
-            Field f;
-            f.name = ov::format("~warp%d_%d%c", int64_t(p_note.k), int64_t(p_note.seed), "xyz"[a]);
-            f.warp = true;
-            f.bands.push_back(ExactNoise::make_octave(p_note.seed + uint32_t(a), uint32_t(p_note.k), p_note.k, 1.0f));
-            table.fields.push_back(f);
-        }
-        return field;
-    }
-
-    // A mix: its rows' notes at their volumes, the rows past the notes summed at the samples.
-    Value mix_value(const std::vector<ov::Value> &p_nodes, const ov::Value *p_n, const ov::str &p_where, const ov::str &where, Biome &r_b, Reading &r_read) {
-        Value out;
-        const ov::Value rows = array(*p_n, "rows", where);
-        std::vector<std::pair<int, float>> regs;
-        for (int64_t i = 0; i < int64_t(rows.size()) && error.empty(); i++) {
-            const ov::str row_where = where + ov::format(" row %d", i);
-            const ov::Value r = dict(rows[i], row_where);
-            if (!keys(r, row_where, { "in", "x" })) {
-                return out;
-            }
-            const float x = float(number(r, "x", row_where, 1.0));
-            const Value v = expr(p_nodes, input(p_nodes, r, "in", row_where), p_where, r_b, r_read);
-            if (v.reg >= 0) {
-                regs.emplace_back(v.reg, x);
-                continue;
-            }
-            for (GraphRow row : v.rows) {
-                row.x = row.x * x;
-                out.rows.push_back(row);
-            }
-        }
-        if (regs.empty() || !error.empty()) {
-            return out;
-        }
-        int acc = out.rows.empty() ? -1 : lift(out, r_b, r_read);
-        for (const auto &[r, x] : regs) { // at its volume whatever its value: a volume edit keeps the program's structure
-            const int t = emit(r_b, SampleOp::MUL, emit(r_b, SampleOp::CONST, -1, -1, x), r);
-            acc = acc < 0 ? t : emit(r_b, SampleOp::ADD, acc, t);
-        }
-        return Value{ {}, acc };
-    }
-
-    // expr's kinds: "note" (its row, read through its warp), "shape" / "multifractal" (the chain, or a shape at the samples), "mix"
-    // (rows, or a sum at the samples), and the samples' ops on registers: "constant" value_m, "field" (a climate
-    // field's value), "add" / "subtract" / "multiply" / "min" / "max" (a, b), "smin" / "smax" (a, b, k_m), "curve" (in,
-    // points), "up".
-    Value node_value(const std::vector<ov::Value> &p_nodes, const ov::Value *p_n, const ov::str &p_where, Biome &r_b, Reading &r_read) {
-        const ov::str kind = (*p_n)["kind"].as_str();
-        const ov::str where = p_where + ov::str(" node '") + (*p_n)["id"].as_str() + ov::str("'");
-        Value out;
-        if (graph_kind(kind) != nullptr && kind != "output" && !node_keys(*p_n, where, kind.c_str())) {
-            return out;
-        }
-        if (kind == "note") {
-            out.rows.emplace_back();
-            note(*p_n, where, out.rows.back().note);
-            if (p_n->has("warp") && error.empty()) {
-                warp(p_nodes, input(p_nodes, *p_n, "warp", where), p_where, where, r_b, r_read, out.rows.back());
-            }
-            return out;
-        }
-        if (kind == "warp") {
-            fail(where, "a warp is a note's input ('warp'): it moves where that note is read.");
-            return out;
-        }
-        if (kind == "shape" || kind == "multifractal") {
-            return chain_value(kind, p_nodes, p_n, p_where, where, r_b, r_read);
-        }
-        if (kind == "mix") {
-            return mix_value(p_nodes, p_n, p_where, where, r_b, r_read);
-        }
-        if (kind == "constant") {
-            return Value{ {}, emit(r_b, SampleOp::CONST, -1, -1, float(number(*p_n, "value_m", where) / ground.voxel_size)) };
-        }
-        if (kind == "up") {
-            return Value{ {}, emit(r_b, SampleOp::UP, -1, -1) };
-        }
-        if (kind == "field") {
-            return Value{ {}, emit(r_b, SampleOp::FIELD, -1, -1, 0.0f, source(text(*p_n, "field", where), where, false, named, "a field")) };
-        }
-        static const std::pair<const char *, SampleOp> BINARY[] = { { "add", SampleOp::ADD }, { "subtract", SampleOp::SUB }, { "multiply", SampleOp::MUL }, { "min", SampleOp::MIN },
-            { "max", SampleOp::MAX }, { "smin", SampleOp::SMIN }, { "smax", SampleOp::SMAX } };
-        for (const auto &[name, op] : BINARY) {
-            if (kind != name) {
-                continue;
-            }
-            const bool smooth = op == SampleOp::SMIN || op == SampleOp::SMAX;
-            const float k = smooth ? float(number(*p_n, "k_m", where) / ground.voxel_size) : 0.0f;
-            const int a = reg(p_nodes, input(p_nodes, *p_n, "a", where), p_where, r_b, r_read);
-            const int b = reg(p_nodes, input(p_nodes, *p_n, "b", where), p_where, r_b, r_read);
-            return Value{ {}, error.empty() ? emit(r_b, op, a, b, k) : -1 };
-        }
-        if (kind == "curve") {
-            const int a = reg(p_nodes, input(p_nodes, *p_n, "in", where), p_where, r_b, r_read);
-            Curve c;
-            curve(*p_n, where, c);
-            r_b.program.curves.push_back(c);
-            return Value{ {}, error.empty() ? emit(r_b, SampleOp::CURVE, a, -1, 0.0f, int(r_b.program.curves.size()) - 1) : -1 };
-        }
-        fail(where, "'" + kind + ov::str("' is not a node kind (note, warp, shape, multifractal, mix, constant, field, add, subtract, multiply, min, max, smin, smax, curve, up, output)."));
-        return out;
-    }
-
-    // A lift's rank as the ground (graph(): the largest): its coarsest octave, then its octave count. Its structure, not
-    // its values: an edit of a volume or an amplitude never makes another lift the ground.
-    std::pair<int, int> rank(const std::vector<GraphRow> &p_rows) const {
-        std::pair<int, int> r{ -1, 0 };
-        for (const GraphRow &row : p_rows) {
-            if (note_plays(row.note, ground)) {
-                r.first = ov::max(r.first, row.note.k);
-                r.second++;
-            }
-        }
-        return r;
-    }
-
-    // A biome's "graph": its nodes by id, read back from the output's height (expr) into the biome's sample program
-    // and r_g's rows: the lifted notes of the largest rank are the ground (GROUND, rows of channel 0; the first of
-    // equals), the others the biome's sub-mixes 1, 2, ... (FIELD -c until the compiler gives each its field). A program
-    // that is the ground alone is none.
-    void graph(const ov::Value &p_d, const ov::str &p_where, Biome &r_b, BiomeGraph &r_g) {
-        if (!keys(p_d, p_where, { "nodes" })) {
-            return;
-        }
-        const ov::Value list = array(p_d, "nodes", p_where);
-        std::vector<ov::Value> nodes;
-        const ov::Value *out = nullptr;
-        for (int64_t i = 0; i < int64_t(list.size()) && error.empty(); i++) {
-            const ov::Value n = dict(list[i], p_where + ov::format(" node %d", i));
-            const ov::str id = text(n, "id", p_where + ov::format(" node %d", i));
-            text(n, "kind", p_where + ov::str(" node '") + id + ov::str("'"));
-            for (const ov::Value &m : nodes) {
-                if (m["id"].as_str() == id) {
-                    fail(p_where, "two nodes are '" + id + ov::str("'."));
-                }
-            }
-            nodes.push_back(n);
-        }
-        for (const ov::Value &n : nodes) {
-            if (is_kind(&n, "output")) {
-                if (out != nullptr) {
-                    fail(p_where, "a graph has one output.");
-                }
-                out = &n;
-            }
-        }
-        if (!error.empty()) {
-            return;
-        }
-        if (out == nullptr || !node_keys(*out, p_where + ov::str(" output"), "output")) {
-            fail(p_where, "a graph has an output node, its 'height' what the biome's ground is.");
-            return;
-        }
-        Reading read;
-        reg(nodes, input(nodes, *out, "height", p_where), p_where, r_b, read);
-        if (!error.empty()) {
-            return;
-        }
-        size_t top = 0;
-        for (size_t i = 1; i < read.lifts.size(); i++) {
-            top = rank(read.lifts[i].first) > rank(read.lifts[top].first) ? i : top;
-        }
-        int channel = 0;
-        for (size_t i = 0; i < read.lifts.size(); i++) {
-            SampleInstr &in = r_b.program.code[size_t(read.lifts[i].second)];
-            const int c = i == top ? 0 : ++channel;
-            in.op = c == 0 ? SampleOp::GROUND : SampleOp::FIELD;
-            in.index = -c;
-            for (GraphRow row : read.lifts[i].first) {
-                row.channel = c;
-                r_g.rows.push_back(row);
-            }
-        }
-        if (r_b.program.code.size() == 1 && r_b.program.code[0].op == SampleOp::GROUND) {
-            r_b.program = SampleProgram(); // the notes alone: no term at the samples
-        }
     }
 
     // A "#rrggbb" string at p_key as 0xRRGGBB.
@@ -941,7 +534,7 @@ private:
         r_c.type = float(type);
     }
 
-    void biome(const ov::Value &p_d, int64_t p_i, BiomeGraph &r_g) {
+    void biome(const ov::Value &p_d, int64_t p_i) {
         if (p_d.has("where")) {
             fail(ov::format("biome %d", p_i), "'where' (edges) became 'at': a centre and span per field, e.g. \"at\": { \"temperature\": [0.3, 0.2] }.");
             return;
@@ -959,15 +552,11 @@ private:
         if (p_d.has("at")) {
             axes(dict(p_d["at"], where + ov::str(" at")), where + ov::str(" at"), b.at);
         }
-        if (raw != nullptr) {
-            const ov::Value g = p_d.has("graph") ? dict(p_d["graph"], where + ov::str(" graph")) : ov::Value();
-            if (p_d.has("graph") && keys(g, where + ov::str(" graph"), { "nodes" })) {
-                raw->push_back(array(g, "nodes", where + ov::str(" graph")));
-            } else {
-                raw->push_back(ov::Value::array());
-            }
-        } else if (p_d.has("graph") && error.empty()) {
-            graph(dict(p_d["graph"], where + ov::str(" graph")), where + ov::str(" graph"), b, r_g);
+        const ov::Value g = p_d.has("graph") ? dict(p_d["graph"], where + ov::str(" graph")) : ov::Value();
+        if (p_d.has("graph") && keys(g, where + ov::str(" graph"), { "nodes" })) {
+            graphs->push_back(array(g, "nodes", where + ov::str(" graph")));
+        } else {
+            graphs->push_back(ov::Value::array());
         }
         if (p_d.has("surface")) {
             surface(dict(p_d["surface"], where + ov::str(" surface")), where + ov::str(" surface"), b.surface);
@@ -1063,6 +652,109 @@ ov::str parse_list(const ov::Value &p_list, const ov::str &p_where, const char *
     return parser.error;
 }
 
+// Coefficients, bounds and scales: |x| within [2^-40, 2^40], so their products with field values stay normal.
+bool moderate(double p_v) {
+    const double a = std::fabs(p_v);
+    return std::isfinite(p_v) && a >= std::ldexp(1.0, -40) && a <= std::ldexp(1.0, 40);
+}
+
+template <typename T>
+bool name_taken_before(const std::vector<T> &p_list, size_t p_i) {
+    for (size_t j = 0; j < p_i; j++) {
+        if (p_list[j].name == p_list[p_i].name) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// A field: an identifier used once, each band's octave in the cascade's range once, its amplitude in the exact range,
+// each term on an earlier field with a moderate coefficient.
+ov::str validate_field(const Table &p_table, int p_i, const Ground &p_ground) {
+    const Field &f = p_table.fields[size_t(p_i)];
+    if (!ov::is_valid_ascii_identifier(f.name) || f.name == "ground") {
+        return ov::format("climate field %d: the name must be an identifier (letters, digits, _), and 'ground' is reserved.", p_i);
+    }
+    const ov::str where = "climate field '" + f.name + ov::str("': ");
+    if (name_taken_before(p_table.fields, size_t(p_i))) {
+        return where + ov::str("the name is used twice.");
+    }
+    for (const Cascade::Band &b : f.bands) {
+        if (b.k < ExactNoise::BAND_SHIFT || b.k > p_ground.k_max) {
+            return where + ov::format("octave k = %d is outside the cascade's range [%d, %d].", b.k, ExactNoise::BAND_SHIFT, p_ground.k_max);
+        }
+        if (std::count_if(f.bands.begin(), f.bands.end(), [&](const Cascade::Band &p_o) { return p_o.k == b.k; }) > 1) {
+            return where + ov::format("octave k = %d is listed twice.", b.k);
+        }
+        if (b.amp != 0.0f && !ExactNoise::in_exact_range(b.amp)) {
+            return where + ov::format("octave k = %d: amplitude %s outside [2^-16, 2^40].", b.k, b.amp);
+        }
+    }
+    for (const Term &t : f.terms) {
+        if (t.source < 0 || t.source >= p_i) {
+            return where + ov::str("a term reads an earlier field only.");
+        }
+        if (!moderate(t.coef)) {
+            return where + ov::format("term coefficient %s outside [2^-40, 2^40].", t.coef);
+        }
+    }
+    return ov::str();
+}
+
+// A biome: a name used once, the last one alone without 'at' (the default), each axis on an existing field once, in
+// field order, its centre 0 or moderate and its 1 / span moderate and > 0.
+ov::str validate_biome(const Table &p_table, size_t p_i) {
+    const Biome &b = p_table.biomes[p_i];
+    if (b.name.empty()) {
+        return ov::format("biome %d: a name is required.", int64_t(p_i));
+    }
+    const ov::str where = "biome '" + b.name + ov::str("': ");
+    if (name_taken_before(p_table.biomes, p_i)) {
+        return where + ov::str("the name is used twice.");
+    }
+    const bool last = p_i + 1 == p_table.biomes.size();
+    if (last != b.at.empty()) {
+        return where + ov::str(last ? "the last biome is the default: no 'at'." : "only the last biome (the default) has no 'at'.");
+    }
+    for (size_t i = 0; i < b.at.size(); i++) {
+        const Axis &a = b.at[i];
+        if (a.field < 0 || a.field >= int(p_table.fields.size())) {
+            return where + ov::str("'at' names a field that doesn't exist.");
+        }
+        if (i > 0 && b.at[i - 1].field >= a.field) {
+            return where + ov::format("'at' names '%s' twice, or out of field order.", p_table.fields[size_t(a.field)].name);
+        }
+        if ((a.centre != 0.0f && !moderate(a.centre)) || !moderate(a.inv_span) || !(a.inv_span > 0.0f)) {
+            return where + ov::format("'at' on '%s': centre or span out of range.", p_table.fields[size_t(a.field)].name);
+        }
+    }
+    return ov::str();
+}
+
+// The layout's rules (the graphs' are the compiler's: graph_compile.cpp, graph_bounds.cpp): the field and biome counts,
+// each field's and each biome's.
+ov::str validate(const Table &p_table, const Ground &p_ground) {
+    if (p_table.fields.size() > size_t(MAX_FIELDS)) {
+        return ov::format("climate: %d fields, at most %d.", int64_t(p_table.fields.size()), MAX_FIELDS);
+    }
+    if (p_table.biomes.empty() || p_table.biomes.size() > size_t(MAX_BIOMES)) {
+        return ov::format("climate: %d biomes, 1 to %d.", int64_t(p_table.biomes.size()), MAX_BIOMES);
+    }
+    for (int i = 0; i < int(p_table.fields.size()); i++) {
+        const ov::str err = validate_field(p_table, i, p_ground);
+        if (!err.empty()) {
+            return err;
+        }
+    }
+    for (size_t i = 0; i < p_table.biomes.size(); i++) {
+        const ov::str err = validate_biome(p_table, i);
+        if (!err.empty()) {
+            return err;
+        }
+    }
+    return ov::str();
+}
+
 } // namespace
 
 ov::str height_curve(const std::vector<double> &p_h_m, const std::vector<double> &p_r_m, double p_voxel, Curve &r_c) {
@@ -1105,16 +797,8 @@ ov::str parse_layout(const ov::Value &p_data, const Ground &p_ground, Table &r_t
     r_table = Table();
     r_graphs.clear();
     Parser parser(p_ground, r_table);
-    parser.set_raw(r_graphs);
-    parser.run(p_data);
-    ov::str err = parser.error.empty() ? validate(r_table, p_ground) : parser.error;
-    for (size_t f = 0; f < r_table.fields.size() && err.empty(); f++) {
-        for (const Term &t : r_table.fields[f].terms) {
-            if (t.source == GROUND) {
-                err = "climate: field '" + r_table.fields[f].name + ov::str("': a 'ground' term is gone (the ground depends on the weights, which depend on the fields): a field's terms read earlier fields only.");
-            }
-        }
-    }
+    parser.run(p_data, r_graphs);
+    const ov::str err = parser.error.empty() ? validate(r_table, p_ground) : parser.error;
     if (!err.empty()) {
         r_table = Table();
         r_graphs.clear();
@@ -1150,20 +834,6 @@ ov::str parse_curve(const ov::Value &p_node, const Ground &p_ground, const ov::s
     Parser parser(p_ground, table);
     parser.curve_of(p_node, p_where, r_curve);
     return parser.error;
-}
-
-ov::str parse(const ov::Value &p_data, const Ground &p_ground, Table &r_table) {
-    r_table = Table();
-    Parser parser(p_ground, r_table);
-    parser.run(p_data);
-    ov::str err = parser.error;
-    if (err.empty()) {
-        err = validate(r_table, p_ground);
-    }
-    if (!err.empty()) {
-        r_table = Table();
-    }
-    return err;
 }
 
 } // namespace Climate

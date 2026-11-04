@@ -22,16 +22,24 @@ inline ov::Value json(const ov::str &p_text) {
     return v;
 }
 
-// A biome's "graph" member playing the template ground (Climate::template_graph) at p_voxel metres, to splice into a
-// table's text: a biome without a graph mixes no note (a flat ground).
-inline ov::str ground_graph(double p_voxel) {
-    return "\"graph\": " + ov::to_json(Climate::template_graph(p_voxel));
+// The template ground's graph at p_voxel metres (its world file, SDFCascade::template_path).
+inline ov::Value template_graph(double p_voxel) {
+    ov::Value table;
+    CHECK(SDFCascade::template_table(p_voxel, table) == ov::str());
+    const ov::Value &t = table;
+    return t["biomes"][size_t(0)]["graph"];
 }
 
-// The template ground's nodes (Climate::template_graph) but its output: its notes and their mix "ground", each note
-// through a shape of p_shape's members if any (a shape on every octave).
+// A biome's "graph" member playing the template ground at p_voxel metres, to splice into a table's text: a biome
+// without a graph mixes no note (a flat ground).
+inline ov::str ground_graph(double p_voxel) {
+    return "\"graph\": " + ov::to_json(template_graph(p_voxel));
+}
+
+// The template ground's nodes but its output: its notes and their mix "ground", each note through a shape of p_shape's
+// members if any (a shape on every octave).
 inline ov::Value ground_nodes(double p_voxel, const ov::str &p_shape = ov::str()) {
-    const ov::Value graph = Climate::template_graph(p_voxel);
+    const ov::Value graph = template_graph(p_voxel);
     ov::Value nodes = ov::Value::array();
     for (const ov::Value &n : graph["nodes"].elements()) {
         if (n["kind"].as_str() == "output") {
@@ -132,10 +140,9 @@ struct ClimateSDF {
         CHECK(load_table(p_path, sdf.climate_data) == ov::str());
         configure(p_lods, p_skirt_cells);
     }
-    ClimateSDF(const ov::Value &p_data, int p_lods, bool p_specialize = true, Climate::Caps p_caps = Climate::Caps()) {
+    ClimateSDF(const ov::Value &p_data, int p_lods, bool p_specialize = true) {
         sdf.climate_data = p_data;
         sdf.specialize = p_specialize;
-        sdf.caps = p_caps;
         configure(p_lods, -1.0f);
     }
 
@@ -163,28 +170,33 @@ inline int64_t differing_floats(const float *p_a, const float *p_b, int p_n) {
     return n;
 }
 
-// Every lattice point of a box on Λ_lod vs Cascade::point_slots, every slot: the box run and the point query agree bit
-// for bit (the GPU's chunks and the discoverer's points). p_all_fields: the fields carried everywhere.
-inline int64_t box_point_mismatches(const Cascade::Spec &p_spec, const Vector3i64 &p_lo, int p_n, int p_lod, bool p_all_fields = false) {
-    Cascade::Box box;
-    box.lo[0] = p_lo.x;
-    box.lo[1] = p_lo.y;
-    box.lo[2] = p_lo.z;
-    for (int a = 0; a < 3; a++) {
-        box.hi[a] = box.lo[a] + p_n - 1;
+// The biomes' weights at field values p_fields, op for op as the compiler builds them (graph_compile.cpp's
+// weight_nodes): each biome but the default the product of its axes' factors in order, the default the fill of their
+// sum, each over the total; one biome weighs 1.
+inline void weights(const Climate::Table &p_table, const ExactNoise::Float4 *p_fields, ExactNoise::Float4 r_w[Climate::MAX_BIOMES]) {
+    using ExactNoise::Float4;
+    for (int b = 0; b < Climate::MAX_BIOMES; b++) {
+        r_w[b] = Float4{ 0.0f, 0.0f, 0.0f, 0.0f };
     }
-    const Cascade::Level l = Cascade::run(p_spec, box, p_lod, nullptr, p_all_fields);
-    int64_t bad = 0;
-    Cascade::for_each_point(box, [&](const Vector3i64 &p_p, int64_t p_i) {
-        float slots[Cascade::SLOTS];
-        Cascade::point_slots(p_spec, p_p, p_lod, slots, p_all_fields);
-        for (int s = 0; s < Cascade::SLOTS; s++) {
-            if (!l.ch[s].empty()) {
-                bad += ExactNoise::float_bits(l.ch[s][size_t(p_i)]) != ExactNoise::float_bits(slots[s]);
-            }
+    const size_t n = p_table.biomes.size();
+    if (n == 1) {
+        r_w[0] = Float4{ 0.0f, 0.0f, 0.0f, 1.0f };
+        return;
+    }
+    Float4 sum{ 0.0f, 0.0f, 0.0f, 0.0f };
+    for (size_t b = 0; b + 1 < n; b++) {
+        Float4 k{ 0.0f, 0.0f, 0.0f, 1.0f };
+        for (const Climate::Axis &a : p_table.biomes[b].at) {
+            k = Cascade::dmul(k, Climate::axis_factor(a, p_fields[a.field]));
         }
-    });
-    return bad;
+        r_w[b] = k;
+        sum = Cascade::dadd(sum, k);
+    }
+    r_w[n - 1] = Climate::fill(sum);
+    const Float4 rcp = Climate::blend_rcp(Cascade::dadd(sum, r_w[n - 1]));
+    for (size_t b = 0; b < n; b++) {
+        r_w[b] = Climate::blend_weight(r_w[b], rcp);
+    }
 }
 
 // A v2 program's notes (Terrain::Op::NOTE): their largest amplitude (a LIN's coefficient of one), coarsest octave and count.
@@ -210,6 +222,29 @@ inline int note_count(const Terrain::LevelProgram &p_prog) {
     int c = 0;
     for (const Terrain::Node &n : p_prog.nodes) {
         c += n.op == Terrain::Op::NOTE ? 1 : 0;
+    }
+    return c;
+}
+
+// The ground's notes alone: the notes the output reads that no field reads (a field's bands are notes too).
+inline int ground_note_count(const Terrain::LevelProgram &p_prog) {
+    // Nodes come after their inputs: walk back from the roots.
+    const auto reached = [&](const std::vector<int> &p_roots) {
+        std::vector<bool> r(p_prog.nodes.size(), false);
+        for (const int n : p_roots) {
+            r[size_t(n)] = true;
+        }
+        for (size_t i = p_prog.nodes.size(); i-- > 0;) {
+            for (const int in : r[i] ? p_prog.nodes[i].in : std::vector<int>()) {
+                r[size_t(in)] = true;
+            }
+        }
+        return r;
+    };
+    const std::vector<bool> ground = reached({ p_prog.output }), fields = reached(p_prog.fields);
+    int c = 0;
+    for (size_t i = 0; i < p_prog.nodes.size(); i++) {
+        c += p_prog.nodes[i].op == Terrain::Op::NOTE && ground[i] && !fields[i] ? 1 : 0;
     }
     return c;
 }

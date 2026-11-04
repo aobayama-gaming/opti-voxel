@@ -124,7 +124,7 @@ that follow it (the climate's map below is 3D for the same reason).
   trees' load, on the worker it lands in the first frames) evaluates it on a 64^3 lattice of cells round the camera (`CloudClimate::Map`, cells of
   2^`climate_cell_shift` voxels, ~8 km on Earth: 6.55 km at 5 cm, the map 419 km), only the cells within 2 cells of the
   layer, each from the biome weights at the corner of the base cell under its centre (`CloudClimate::at`:
-  `Cascade::point_slots` with every field on the cell's lattice, then `Climate::state`; one sample per base cell, which
+  `Terrain::point_nodes` of the program's weight nodes on the cell's lattice; one sample per base cell, which
   a column's cells share; ~140 us a sample, ~0.6 s for the first flat map, ~80 ms a re-centre, the base cells it already
   had reused), uploaded as a 3D RGBA16F texture once built (Dawn's `update_texture` now writes 3D textures whole, and its
   `create_texture_3d` makes a 3D texture at any depth). A texel is linear in the weights (sum w cover, sum w type, sum w
@@ -182,7 +182,7 @@ that follow it (the climate's map below is 3D for the same reason).
   biome's cover replaces the sky's `cloud_cover` over it (the slider moves only the biomes without clouds); the climate
   is the base point's at the cell's lattice, low-passed at ~6.5 km (a biome smaller than that blends into its
   neighbours); the layer's altitudes are the same everywhere (a cumulonimbus is a cumulus, not a taller layer); each
-  sample replays the cascade from its top alone (one `Cascade::run` over the base cells would share the coarse levels);
+  sample replays the cascade from its top alone (one `Terrain::run` over the base cells would share the coarse levels);
   on an inline executor (threads=no) a build runs in `pump()`, a 0.6 s frame (the Dawn viewer runs no clouds yet). The field still repeats every warp period, at most 2^23 voxels (`ShadeFrame::MAX_SHIFT`: 419 km at
   5 cm; a tile index from the origin's high bits could hash each tile instead); the light march reuses its start
   point's warp (as it does the weather); the plain cloud layer (`VoxelSky`'s `clouds.png`, without the volumetric
