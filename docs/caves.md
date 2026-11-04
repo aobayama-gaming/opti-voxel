@@ -19,15 +19,15 @@ C     = min(noise + threshold, tent)
 out   = smin(mix, up - C, k)
 ```
 
-- **Bounds.** `bound_program` keeps each register's affine forms in `z = up - H` and `H`, so the tent bounds the term:
-  `-floor - k/4 <= h' - H <= 0` (unit test: exactly `floor + k/4`). A graph reading `up` without a tent has no bound
-  and is refused. The skirts and validate take that bound like any program's.
+- **Bounds.** `bound_program` (`graph_bounds.cpp`) gives `up` an unbounded value: an output reading it is bounded from
+  above only (its lower side is a carve), `smin` keeps the mix's top, and the cap applies to that top. The skirts take
+  the program's step like any program's.
 - **Where it moves h.** Below the band's top the term is nonzero wherever `C > -depth`, also deep in the rock: `h'`
   moves but `up - h' = C < 0` stays solid. Air opens only where `C > 0`, inside the band (unit test: columns through
   the band, air only between top and floor within the dip; GPU set `4v`, bit for bit).
-- **Paths.** CPU `SDFCascade::ground_channels(slots, voxel, lod)` and GLSL `climate_ground(ch, p, lod)` read the base
-  only where a program reads `up` (generic: always); the discoverer's corners (CPU and GPU point items) and the samples
-  go through them, so the cull sees the caves.
+- **Paths.** `up` is a node of the program (the op table's `UP`, `Climate::up_value` / `base_at`), computed at each
+  level that reads it; the discoverer's corners (CPU and GPU point items) and the samples run the same program, so the
+  cull sees the caves.
 
 Still the plan below: per-layer strengths per biome as a world table (the graph has them per biome today), the
 per-chunk skip of the noise outside the band, the placement on the bare ground with the cave-mouth reject, the rock

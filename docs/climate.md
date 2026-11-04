@@ -84,8 +84,9 @@ macro layer in double on the CPU, `BaseSurface`'s region machinery).
   depth) and the validation: the output within `Ground::amp_cap` (a planet's relief, the exact range's top on the flat
   world), a curve's slope within `MAX_CURVE_SLOPE` (4), a warp within `WARP_LIMIT`. Refusals name the biome and node.
 - **CPU** (`level_program.cpp`): `Terrain::run` / `Terrain::point` on the op table's CPU forms, through
-  `SDFCascade::ground_channels` on every path (chunk samples, point items, `ground_along`, the report); BiomePick,
-  CloudClimate and ClimateReport read the program's `fields` and `weights` nodes.
+  `SDFCascade::channels_at` on every path (chunk samples, point items, `ground_along`, the report); BiomePick,
+  CloudClimate and ClimateReport read the program's `fields` and `weights` nodes (`Terrain::point_nodes`, which
+  subdivides a field the program carries no lower than its own level).
 - **GPU** (`level_glsl.cpp`): the same ops' GLSL forms, op for op (`precise`, the climate's flushed dual ops `cl_*`,
   `Climate::shared_helpers_glsl`).
 - **Generic or specialised** (`SDFCascade::specialize`, `World::Settings::specialize_shaders`, the `VoxelTerrain`

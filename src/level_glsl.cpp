@@ -1,5 +1,6 @@
 #include "level_glsl.hpp"
 
+#include "cascade_glsl.hpp"
 #include "climate.hpp"
 #include "exact_noise.hpp"
 
@@ -150,7 +151,7 @@ GenericRecords generic_records(const LevelProgram &p_prog, const GpuLayout &p_la
         for (const int n : p_prog.levels[size_t(s)].code) {
             const Node &node = p_prog.nodes[size_t(n)];
             const float aux0 = node.op == Op::NOTE ? float(band[size_t(n)]) : (node.op == Op::CURVE ? float(curves[size_t(node.curve)]) : 0.0f);
-            code.insert(code.end(), { float(node.op), float(p_layout.reg[size_t(n)]), float(node.in.size()), float(node.k.size()), aux0, float(ov::min(node.level, 1 << 20)) });
+            code.insert(code.end(), { float(node.op), float(p_layout.reg[size_t(n)]), float(node.in.size()), float(node.k.size()), aux0, float(node.level) });
             for (const int in : node.in) {
                 code.push_back(float(p_layout.reg[size_t(in)]));
             }
@@ -339,7 +340,7 @@ GpuLayout gpu_layout(const LevelProgram &p_prog, ov::str &r_error) {
 
 ov::bytes band_table(const LevelProgram &p_prog) {
     using namespace WorldCoord;
-    constexpr size_t BYTES = 64; // CascadeGLSL::BAND_BYTES
+    constexpr size_t BYTES = CascadeGLSL::BAND_BYTES;
     ov::bytes bytes(BYTES, 0);
     size_t at = 0;
     for (const Node &n : p_prog.nodes) {

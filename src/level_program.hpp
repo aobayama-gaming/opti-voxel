@@ -132,8 +132,6 @@ const OpDef &op_def(Op p_op);
 // The GLSL functions the forms call beyond the shared ones (cl_smooth_abs, cascade_warped, then tp_note, tp_term,
 // tp_shape, tp_axis, tp_norm, tp_pick), after the climate's shared helpers, smooth min, curve and the base's stretch.
 ov::str glsl_helpers();
-// cl_smooth_abs (Cascade::smooth_abs) and cascade_warped (Cascade::warped), op for op.
-ov::str glsl_warp_helpers();
 // Node p_node's value from its inputs' values p_in at p_at (op_def's CPU form).
 Float4 eval_node(const LevelProgram &p_prog, const Node &p_node, const Float4 *p_in, const OpPoint &p_at);
 
@@ -162,7 +160,8 @@ struct Sample {
     int pick = 0;
 };
 Sample point(const LevelProgram &p_prog, const Vector3i64 &p_p, int p_lod);
-// The values of nodes p_targets[0 .. p_count) at point p_p of Λ_p_lod (a run down to p_lod: its last level's).
+// The values of nodes p_targets[0 .. p_count) at point p_p of Λ_p_lod (a run down to p_lod: its last level's), a
+// target the program doesn't carry to Λ_p_lod (a field, a constant weight) subdivided or computed there all the same.
 void point_nodes(const LevelProgram &p_prog, const Vector3i64 &p_p, int p_lod, const int *p_targets, int p_count, Float4 *r_values);
 
 } // namespace Terrain

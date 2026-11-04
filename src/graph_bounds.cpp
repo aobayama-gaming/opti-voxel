@@ -120,7 +120,7 @@ double step(const LevelProgram &p_prog, const std::vector<double> &p_d, size_t p
             return s;
         }
         case Op::MUL:
-            return times(b.peak(0), d(1)) + times(b.peak(1), d(0)) + d(0) * d(1);
+            return times(b.peak(0), d(1)) + times(b.peak(1), d(0)) + times(d(0), d(1));
         case Op::MIN:
         case Op::MAX:
         case Op::SMIN:

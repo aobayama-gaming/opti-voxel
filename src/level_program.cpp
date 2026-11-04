@@ -290,14 +290,12 @@ const OpDef &op_def(Op p_op) {
     return OPS[size_t(p_op)];
 }
 
-ov::str glsl_warp_helpers() {
-    using ExactNoise::glsl_float;
-    return ov::replace_all(GLSL_WARP_HELPERS, { { "SABS_E2", glsl_float(Cascade::SMOOTH_ABS_E * Cascade::SMOOTH_ABS_E) }, { "SABS_E", glsl_float(Cascade::SMOOTH_ABS_E) }, { "WARP_LIMIT", glsl_float(Cascade::WARP_LIMIT) }, { "FLUSH", Cascade::glsl_flush() } });
-}
-
 ov::str glsl_helpers() {
     using ExactNoise::glsl_float;
-    return glsl_warp_helpers() + ov::replace_all(GLSL_HELPERS, { { "FLUSH", Cascade::glsl_flush() }, { "SLOPE", glsl_float(ExactNoise::exact_pow2(-ExactNoise::BAND_SHIFT)) }, { "KERNEL_FADE", glsl_float(Climate::KERNEL_FADE) }, { "MAX_BIOMES", ov::itos(Climate::MAX_BIOMES) }, { "PICK_SEED", ov::itos(int64_t(Climate::PICK_SEED)) + ov::str("u") } });
+    return ov::replace_all(ov::str(GLSL_WARP_HELPERS) + GLSL_HELPERS,
+            { { "SABS_E2", glsl_float(Cascade::SMOOTH_ABS_E * Cascade::SMOOTH_ABS_E) }, { "SABS_E", glsl_float(Cascade::SMOOTH_ABS_E) }, { "WARP_LIMIT", glsl_float(Cascade::WARP_LIMIT) },
+                    { "FLUSH", Cascade::glsl_flush() }, { "SLOPE", glsl_float(ExactNoise::exact_pow2(-ExactNoise::BAND_SHIFT)) }, { "KERNEL_FADE", glsl_float(Climate::KERNEL_FADE) },
+                    { "MAX_BIOMES", ov::itos(Climate::MAX_BIOMES) }, { "PICK_SEED", ov::itos(int64_t(Climate::PICK_SEED)) + ov::str("u") } });
 }
 
 Float4 eval_node(const LevelProgram &p_prog, const Node &p_node, const Float4 *p_in, const OpPoint &p_at) {
@@ -360,10 +358,12 @@ namespace {
 // A point run's level boxes hold at most 2 points per axis (level_bound(1, j)), and so do the axis passes' boxes between.
 constexpr int POINT_BOX = 8;
 
-// A point run's per-thread storage: each node's values on the level's box (POINT_BOX per node), the cone of the targets.
+// A point run's per-thread storage: each node's values on the level's box (POINT_BOX per node), the cone of the targets
+// and its nodes of no level.
 struct PointWork {
     std::vector<Float4> cur, next, in;
     std::vector<uint8_t> cone;
+    std::vector<int> free;
 };
 
 float &channel(Float4 &r_v, int p_c) {
@@ -427,16 +427,34 @@ void point_nodes(const LevelProgram &p_prog, const Vector3i64 &p_p, int p_lod, c
             w.cone[size_t(in)] |= w.cone[i];
         }
     }
+    w.free.clear();
+    for (size_t i = 0; i < n; i++) {
+        if (w.cone[i] && p_prog.nodes[i].level == NO_LEVEL) {
+            w.free.push_back(int(i));
+        }
+    }
     const Cascade::Box lod_box = Cascade::point_box(p_p);
     const int top = ov::max(p_prog.top, p_lod);
     Cascade::Box parent;
     for (int m = top; m >= p_lod; m--) {
         const Cascade::Box box = Cascade::level_box(lod_box, m - p_lod);
+        const auto carry = [&](int p_node) {
+            const size_t at = size_t(p_node) * POINT_BOX;
+            subdivide_point(p_prog.nodes[size_t(p_node)].op == Op::PICK, w.cur.data() + at, parent, w.next.data() + at, box);
+        };
         if (m < top) {
-            for (const int in : p_prog.inputs(m)) {
+            const std::vector<int> &inputs = p_prog.inputs(m);
+            for (const int in : inputs) {
                 if (w.cone[size_t(in)]) {
-                    const size_t at = size_t(in) * POINT_BOX;
-                    subdivide_point(p_prog.nodes[size_t(in)].op == Op::PICK, w.cur.data() + at, parent, w.next.data() + at, box);
+                    carry(in);
+                }
+            }
+            // A target computed above that the program doesn't carry here (a field: its biomes' axes read it on its own
+            // level), subdivided as its channel would be.
+            for (int t = 0; t < p_count; t++) {
+                const int level = p_prog.nodes[size_t(p_targets[t])].level;
+                if (level != NO_LEVEL && level > m && std::find(inputs.begin(), inputs.end(), p_targets[t]) == inputs.end()) {
+                    carry(p_targets[t]);
                 }
             }
         }
@@ -445,6 +463,9 @@ void point_nodes(const LevelProgram &p_prog, const Vector3i64 &p_p, int p_lod, c
                 compute_point(p_prog, p_prog.levels[size_t(m)].code, box, m, w);
             }
         } else {
+            // The cone's nodes of no level first (their inputs have none either): a target no level computes (a single
+            // biome's weight) gets its value too.
+            compute_point(p_prog, w.free, box, m, w);
             for (int s = ov::min(p_lod, p_prog.top); s >= 0; s--) {
                 compute_point(p_prog, p_prog.levels[size_t(s)].code, box, m, w);
             }

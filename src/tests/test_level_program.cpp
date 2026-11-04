@@ -450,3 +450,50 @@ TEST_CASE("Terrain: every test table's program bits are pinned") {
         CHECK(hash == pin.hash);
     }
 }
+
+// A point query's targets need not be carried to its lattice: a field (read by its biomes' axes on its own level, so not
+// a channel below it) and a single biome's weight (a constant no level computes) at LOD 0 are the field subdivided and
+// the constant, whatever the queries before.
+TEST_CASE("Terrain: a point query's targets are their values at its lattice, carried or not") {
+    for (const char *path : { "res://climate/eight_biomes_test.json", "res://climate/world.json", "res://climate/plain.json" }) {
+        LevelProgram prog;
+        CHECK_OR_RETURN(compile_table(test_table(path), prog) == ov::str());
+        std::vector<int> targets = prog.fields;
+        targets.insert(targets.end(), prog.weights.begin(), prog.weights.end());
+        const int count = int(targets.size());
+        std::vector<Float4> fine(targets.size()), coarse(targets.size()), other(targets.size());
+        int64_t bad = 0, compared = 0;
+        for (int i = 0; i < 16; i++) {
+            const Vector3i64 p(i * 37 - 300, i * 3 - 20, 11 - i * 29);
+            for (int t = 0; t < count; t++) {
+                const int level = prog.nodes[size_t(targets[size_t(t)])].level;
+                const int m = level == NO_LEVEL ? 0 : level;
+                point_nodes(prog, Vector3i64(p.x + 1000, p.y, p.z), 0, targets.data(), count, other.data()); // another point first
+                point_nodes(prog, Vector3i64(p.x << m, p.y << m, p.z << m), 0, &targets[size_t(t)], 1, &fine[size_t(t)]);
+                point_nodes(prog, p, m, &targets[size_t(t)], 1, &coarse[size_t(t)]);
+                bad += fine[size_t(t)].w == coarse[size_t(t)].w ? 0 : 1; // a copy on the shared point: the same value
+                compared++;
+            }
+        }
+        CAPTURE(std::string(path));
+        CHECK(compared > 0);
+        CHECK(bad == 0);
+        if (prog.biomes == 1) {
+            Float4 w;
+            point_nodes(prog, Vector3i64(5, 6, 7), 0, prog.weights.data(), 1, &w);
+            CHECK(w.w == 1.0f);
+        }
+    }
+}
+
+// An unbounded change (a note times up) times a node that doesn't change is still unbounded, not inf * 0 = NaN: a NaN
+// step under a min or max would read as 0 (ov::max picks the other side) and leave the seam without a skirt.
+TEST_CASE("Terrain: a product's step with an unbounded factor stays unbounded") {
+    const ov::str nodes = "[" + note("n1", 3.2, 1, 1.0) + ", " + note("n2", 25.6, 2, 1.0) +
+            R"(, {"id": "u", "kind": "up"}, {"id": "m1", "kind": "multiply", "a": "u", "b": "n1"}, {"id": "m2", "kind": "multiply", "a": "m1", "b": "n2"},)" +
+            R"( {"id": "c", "kind": "constant", "value_m": 10}, {"id": "lo", "kind": "min", "a": "m2", "b": "c"}, {"id": "o", "kind": "output", "height": "lo"}])";
+    LevelProgram prog;
+    CHECK_OR_RETURN(compile_table(one_biome(nodes), prog) == ov::str());
+    CHECK_OR_RETURN(prog.step.size() > 3);
+    CHECK(prog.step[3] == INFINITY); // n1's level: its change times an unbounded up
+}
