@@ -702,7 +702,9 @@ ov::str compile(const ov::Value &p_data, const Climate::Ground &p_ground, Mode p
     r_program.generic = p_mode == Mode::GENERIC;
     err = lower(r_program);
     err = err.empty() ? bound_program(p_ground, r_program) : err;
-    if (!err.empty()) {
+    if (err.empty()) {
+        fold_lods(r_program);
+    } else {
         r_program = LevelProgram();
         r_table = Climate::Table();
     }
