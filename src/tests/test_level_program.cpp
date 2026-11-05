@@ -532,6 +532,8 @@ LevelProgram unfolded(const LevelProgram &p_prog) {
     for (Node &n : u.nodes) {
         n.const_lod = NO_LEVEL;
         n.live_lod = NO_LEVEL;
+        n.guard = -1;
+        n.mark = 0;
     }
     return u;
 }
@@ -587,7 +589,7 @@ TEST_CASE("Terrain: the generic text keeps none of its placeholders") {
         Cascade::ShaderParams params;
         const std::string text = level_glsl(prog, layout, params).c_str();
         INFO(pin.path);
-        for (const char *word : { "CASES", "CH_GET", "PUT_OUTPUT", "PUT_CHANNEL", "ROOT_PICK", "MAX_REGISTERS", "MAX_LEVEL", "TOP", "DIR", "OUTPUT", "PICK", "FINEST" }) {
+        for (const char *word : { "CASES", "CH_GET", "PUT_OUTPUT", "PUT_CHANNEL", "ROOT_PICK", "MAX_REGISTERS", "MAX_LEVEL", "TOP", "DIR", "OUTPUT", "PICK", "FINEST", "WEIGHTS", "RECORD_HEAD" }) {
             CHECK_MESSAGE(text.find(word) == std::string::npos, word);
         }
         std::smatch glued; // a placeholder replaced inside a longer one: an upper-case word glued to a number
@@ -618,4 +620,47 @@ TEST_CASE("Terrain: a product by an absent note folds to 0 and its other factor 
         CHECK(prog.nodes[size_t(prog.output)].const_lod == 4); // 0 + 2 m: the whole ground a constant
         CHECK(last_computed(prog, 9) == 0);
     }
+}
+
+// The biome pruning changes what a run computes, never its output or pick: runs over chunk-sized boxes spread over the
+// biomes, pruned and not, on every test table in both modes; and somewhere a biome is off a whole box.
+TEST_CASE("Terrain: the pruned program gives the unpruned bits, and prunes") {
+    int64_t pruned_runs = 0;
+    for (const Pin &pin : PINS) {
+        for (const Mode mode : { Mode::SPECIALISED, Mode::GENERIC }) {
+            LevelProgram prog;
+            CHECK_OR_RETURN(compile_table(test_table(pin.path), prog, mode) == ov::str());
+            LevelProgram plain = prog;
+            int64_t guarded = 0;
+            int64_t unmarked = 0; // a guard whose weight doesn't set its bit (biomes sharing a weight node)
+            for (Node &n : plain.nodes) {
+                guarded += n.guard >= 0 ? 1 : 0;
+                unmarked += n.guard >= 0 && (prog.nodes[size_t(prog.weights[size_t(n.guard)])].mark & biome_bit(n.guard)) == 0u ? 1 : 0;
+                n.guard = -1;
+                n.mark = 0;
+            }
+            CHECK(unmarked == 0);
+            int64_t bad = 0;
+            for (const int lod : { 0, 2, 5 }) {
+                for (int i = 0; i < 6; i++) {
+                    const int64_t far = (int64_t(i) * 7919 - 20000) * (int64_t(1) << (12 - lod));
+                    const Cascade::Box box = cube(Vector3i64(far, 3 - (i << 2), -far / 3), 10);
+                    const Values a = run(prog, box, lod), b = run(plain, box, lod);
+                    Cascade::for_each_point(box, [&](const Vector3i64 &, int64_t p_i) {
+                        bad += ExactNoise::same_bits(a.at(prog.output, p_i), b.at(prog.output, p_i)) ? 0 : 1;
+                        bad += float_bits(a.at(prog.pick, p_i).w) == float_bits(b.at(prog.pick, p_i).w) ? 0 : 1;
+                    });
+                    for (size_t w = 0; w < prog.weights.size() && guarded > 0; w++) {
+                        const int level = prog.nodes[size_t(prog.weights[w])].level;
+                        pruned_runs += level != NO_LEVEL && lod < level && (a.mask & biome_bit(int(w))) == 0u ? 1 : 0;
+                    }
+                }
+            }
+            CAPTURE(std::string(pin.path));
+            MESSAGE((std::string(pin.path) + (mode == Mode::GENERIC ? " (generic)" : "")), ": ", guarded, " guarded nodes of ", prog.nodes.size());
+            CHECK(bad == 0);
+        }
+    }
+    MESSAGE("runs with a biome off their whole box: ", pruned_runs);
+    CHECK(pruned_runs > 0);
 }

@@ -53,7 +53,11 @@ ov::bytes band_table(const LevelProgram &p_prog);
 // The globals the Hermite and storage functions read, set per invocation by `void level_flags(int m)`: g_in (the
 // channels level m receives), g_pick (its first one is the pick), g_out (the channels it stores).
 ov::str level_flags_glsl(const LevelProgram &p_prog, const GpuLayout &p_layout, Cascade::ShaderParams &r_params);
-// level_run (after Ch, glsl_helpers and the climate's helpers); its values and records go to r_params.
+// Whether p_prog's level shader reads the biome pruning's mask (CascadeGLSL::BIOME_MASK_BINDING, set g_item): a
+// program with guards (guard_biomes), and every generic one (its text never depends on the graph).
+bool uses_biome_mask(const LevelProgram &p_prog);
+// level_run (after Ch, glsl_helpers and the climate's helpers), led by the mask's declaration when it uses one; its
+// values and records go to r_params.
 ov::str level_glsl(const LevelProgram &p_prog, const GpuLayout &p_layout, Cascade::ShaderParams &r_params);
 
 } // namespace Terrain

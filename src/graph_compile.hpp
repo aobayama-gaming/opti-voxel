@@ -30,6 +30,7 @@
 //             output within amp_cap, a curve's slope within MAX_CURVE_SLOPE, a note's amplitude in the noise's exact
 //             range, a warp within WARP_LIMIT.
 //   per LOD:  the constant relaxation (fold_lods): what each node is on a run whose finer notes are absent.
+//   guards:   the biome pruning (guard_biomes): the nodes only a biome's weight products read, skipped where it is 0.
 namespace Terrain {
 
 enum class Mode {

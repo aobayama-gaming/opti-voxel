@@ -51,6 +51,8 @@ static constexpr int TABLE_LIST_BINDING = 8;
 static constexpr int MATERIAL_BINDING = 9;
 // The numbers of the generated climate code (Cascade::ShaderParams: a uniform block), after the base regions' (10, 11).
 static constexpr int PARAM_BINDING = 12;
+// The biome pruning's per-item mask (Terrain::guard_biomes, Terrain::uses_biome_mask): uint per item of a batch.
+static constexpr int BIOME_MASK_BINDING = 13;
 // Its largest size, the size of every generic program's block (its records: level_glsl.hpp). Half the 64 KB of WebGPU's
 // default maxUniformBufferBindingSize and of desktop Vulkan drivers' maxUniformBufferRange (Vulkan guarantees 16 KB only:
 // mobile isn't a target); the 16 KB it was held the example table's generic records (17.7 KB) short.

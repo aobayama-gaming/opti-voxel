@@ -704,6 +704,7 @@ ov::str compile(const ov::Value &p_data, const Climate::Ground &p_ground, Mode p
     err = err.empty() ? bound_program(p_ground, r_program) : err;
     if (err.empty()) {
         fold_lods(r_program);
+        guard_biomes(r_program);
     } else {
         r_program = LevelProgram();
         r_table = Climate::Table();

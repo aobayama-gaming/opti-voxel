@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <climits>
+#include <iterator>
 
 namespace Terrain {
 
@@ -122,6 +123,24 @@ std::vector<float> last_stops(const LevelProgram &p_prog) {
     return stops;
 }
 
+// Biome b's bit in the GLSL's masks (Terrain::biome_bit).
+ov::str bit_glsl(int p_b) {
+    return ov::format("%du", int64_t(biome_bit(p_b)));
+}
+
+// The specialised text's `on` word at level s's start (empty: no guards): above the last level the run's mask, on the
+// last level the bits of the gating weights (Node::mark) not 0 at the point (registers computed on a level above s, or
+// carried to it).
+ov::str on_word(const LevelProgram &p_prog, const GpuLayout &p_layout) {
+    ov::str bits;
+    for (size_t n = 0; n < p_prog.nodes.size(); n++) {
+        if (p_prog.nodes[n].mark != 0u) {
+            bits += (bits.empty() ? "" : " | ") + ov::format("(%s != vec4(0.0) ? %du : 0u)", reg(p_layout.reg[n]), int64_t(p_prog.nodes[n].mark));
+        }
+    }
+    return bits.empty() ? ov::str() : "        uint on = last ? (" + bits + ") : mask;\n";
+}
+
 // Node p_n's folded value on a run of LOD m (its constant from const_lod up), p_expr its expression.
 ov::str folded_value(const Node &p_node, const ov::str &p_expr, ShaderParams &r_params) {
     const ov::str c = folded_literal(p_node, r_params);
@@ -131,24 +150,46 @@ ov::str folded_value(const Node &p_node, const ov::str &p_expr, ShaderParams &r_
     return p_node.const_lod < NO_LEVEL ? ov::format("(m >= %d ? %s : %s)", int64_t(p_node.const_lod), c, p_expr) : p_expr;
 }
 
-// Node p_n's statement in the specialised text, p_expr under its fold (Node::const_lod, live_lod): its constant on a
-// run of LOD >= const_lod, nothing on a last level of LOD > live_lod.
+// p_lines inside `p_head {` ... `}`, indented.
+std::vector<ov::str> wrapped(const ov::str &p_head, const std::vector<ov::str> &p_lines, const std::vector<ov::str> &p_else = {}) {
+    std::vector<ov::str> t = { p_head + " {" };
+    for (const ov::str &l : p_lines) {
+        t.push_back("    " + l);
+    }
+    if (!p_else.empty()) {
+        t.push_back("} else {");
+        for (const ov::str &l : p_else) {
+            t.push_back("    " + l);
+        }
+    }
+    t.push_back("}");
+    return t;
+}
+
+// Node p_n's statement in the specialised text, p_expr under its fold and guard, in compute()'s order: nothing on a
+// last level of LOD > live_lod; 0 where its biome is off (guard: the `on` word); its constant on a run of LOD >=
+// const_lod; else p_expr. A weight with a mark (Node::mark) then sets those bits in the run's mask, above the last level.
 ov::str statement(const LevelProgram &p_prog, const GpuLayout &p_layout, int p_n, const ov::str &p_expr, ShaderParams &r_params) {
     const Node &node = p_prog.nodes[size_t(p_n)];
-    const ov::str set = reg(p_layout.reg[size_t(p_n)]) + " = ";
-    const ov::str c = set + folded_literal(node, r_params) + ";", e = set + p_expr + ";";
+    const ov::str dst = reg(p_layout.reg[size_t(p_n)]);
+    const ov::str c = dst + " = " + folded_literal(node, r_params) + ";", e = dst + " = " + p_expr + ";";
     std::vector<ov::str> lines = { e };
     if (node.const_lod <= 0) {
         lines = { c };
     } else if (node.const_lod < NO_LEVEL) {
-        lines = { ov::format("if (m >= %d) {", int64_t(node.const_lod)), "    " + c, "} else {", "    " + e, "}" };
+        lines = wrapped(ov::format("if (m >= %d)", int64_t(node.const_lod)), { c }, { e });
+    }
+    if (node.guard >= 0) {
+        lines = wrapped("if ((on & " + bit_glsl(node.guard) + ") == 0u)", { dst + " = vec4(0.0);" }, lines);
     }
     if (node.live_lod < NO_LEVEL) {
-        for (ov::str &l : lines) {
-            l = "    " + l;
-        }
-        lines.insert(lines.begin(), ov::format("if (!last || m <= %d) {", int64_t(node.live_lod)));
-        lines.push_back("}");
+        lines = wrapped(ov::format("if (!last || m <= %d)", int64_t(node.live_lod)), lines);
+    }
+    if (node.mark != 0u) {
+        // a plain read first: once a thread's atomic has landed, most others skip theirs
+        const ov::str bits = ov::format("%du", int64_t(node.mark));
+        const std::vector<ov::str> mark = wrapped("if (!last && " + dst + " != vec4(0.0) && (biome_mask[g_item] & " + bits + ") != " + bits + ")", { "atomicOr(biome_mask[g_item], " + bits + ");" });
+        lines.insert(lines.end(), mark.begin(), mark.end());
     }
     ov::str t;
     for (const ov::str &l : lines) {
@@ -161,7 +202,7 @@ ov::str statement(const LevelProgram &p_prog, const GpuLayout &p_layout, int p_n
 // level's start, so the text holds one perlin3 whatever the note count (one inlined call per note took the NVIDIA
 // compiler minutes and gigabytes for 80 notes); each note's statement then copies its nv slot. r_slot: per node, its
 // slot in nv (-1: computed by its own statement).
-ov::str note_loop(const LevelProgram &p_prog, const std::vector<int> &p_band, const GpuLayout &p_layout, ShaderParams &r_params, std::vector<int> &r_slot) {
+ov::str note_loop(const LevelProgram &p_prog, const std::vector<int> &p_band, const GpuLayout &p_layout, const ov::str &p_on, ShaderParams &r_params, std::vector<int> &r_slot) {
     r_slot.assign(p_prog.nodes.size(), -1);
     std::vector<float> first(size_t(Cascade::MAX_LEVEL + 1), 0.0f), count(size_t(Cascade::MAX_LEVEL + 1), 0.0f);
     int most = 0;
@@ -187,7 +228,8 @@ ov::str note_loop(const LevelProgram &p_prog, const std::vector<int> &p_band, co
     if (most == 0) {
         return ov::str();
     }
-    ov::str t = "        int nf = int(" + r_params.table(first, "min(s, " + ov::itos(Cascade::MAX_LEVEL) + ")") + ");\n";
+    ov::str t = p_on;
+    t += "        int nf = int(" + r_params.table(first, "min(s, " + ov::itos(Cascade::MAX_LEVEL) + ")") + ");\n";
     // a coarser run's notes are absent (their statements folded to 0)
     t += "        int nn = m > s ? 0 : int(" + r_params.table(count, "min(s, " + ov::itos(Cascade::MAX_LEVEL) + ")") + ");\n";
     ov::str w = "vec4(0.0), vec4(0.0), vec4(0.0)";
@@ -197,14 +239,27 @@ ov::str note_loop(const LevelProgram &p_prog, const std::vector<int> &p_band, co
         w = "nw[3 * e], nw[3 * e + 1], nw[3 * e + 2]";
     }
     t += ov::format("        vec4 nv[%d];\n        for (int e = 0; e < nn; e++) {\n", int64_t(most));
-    return t + "            nv[e] = tp_note(p, m, s, bands[nf + e], " + w + ");\n        }\n";
+    const ov::str call = "nv[e] = tp_note(p, m, s, bands[nf + e], " + w + ");";
+    if (p_on.empty()) {
+        return t + "            " + call + "\n        }\n";
+    }
+    // Each band table entry's guard bit (0: none), a note of a biome off 0, as its statement would make it.
+    std::vector<float> guards(note_order(p_prog).size(), 0.0f);
+    for (size_t i = 0; i < p_prog.nodes.size(); i++) {
+        if (p_band[i] >= 0 && p_prog.nodes[i].guard >= 0) {
+            guards[size_t(p_band[i])] = float(biome_bit(p_prog.nodes[i].guard));
+        }
+    }
+    t += "            uint ng = uint(" + r_params.table(guards, "nf + e") + ");\n";
+    return t + "            if (ng == 0u || (on & ng) != 0u) {\n                " + call + "\n            } else {\n                nv[e] = vec4(0.0);\n            }\n        }\n";
 }
 
 ov::str specialised(const LevelProgram &p_prog, const GpuLayout &p_layout, ShaderParams &r_params) {
     const std::vector<int> band = band_index(p_prog);
     const std::vector<int64_t> curves = curve_records(p_prog, r_params);
     std::vector<int> slot;
-    const ov::str notes = note_loop(p_prog, band, p_layout, r_params, slot);
+    const ov::str on = on_word(p_prog, p_layout);
+    const ov::str notes = note_loop(p_prog, band, p_layout, on, r_params, slot);
     ov::str loads, code, stores;
     for (int s = p_prog.top; s >= 0; s--) {
         const std::vector<int> &in = s < p_prog.top ? p_layout.chan[size_t(s + 1)] : std::vector<int>();
@@ -237,9 +292,12 @@ ov::str specialised(const LevelProgram &p_prog, const GpuLayout &p_layout, Shade
                            "// channels out (the last level: the output, then the pick).\nCh level_run(Ch ch, WorldPos p, int m, bool last) {\n    vec4 r[%d];\n"
                            "    int lv = min(m, %d);\n",
             int64_t(p_layout.regs), int64_t(p_prog.top));
+    if (!on.empty()) {
+        t += "    uint mask = last ? 0u : biome_mask[g_item];\n";
+    }
     t += "    switch (lv) {\n" + loads + empty + "    }\n";
     const ov::str stop = "int(" + r_params.table(last_stops(p_prog), ov::format("min(m, %d)", int64_t(Cascade::MAX_LEVEL))) + ")";
-    t += "    for (int s = lv; s >= (last ? " + stop + " : lv); s--) {\n" + notes + "        switch (s) {\n" + code + "        default:\n            break;\n        }\n    }\n";
+    t += "    for (int s = lv; s >= (last ? " + stop + " : lv); s--) {\n" + (notes.empty() ? on : notes) + "        switch (s) {\n" + code + "        default:\n            break;\n        }\n    }\n";
     const auto root = [&](int p_n) { return folded_value(p_prog.nodes[size_t(p_n)], reg(p_layout.reg[size_t(p_n)]), r_params); };
     t += "    Ch o = ch_zero();\n    if (last) {\n" + ch_put("0", root(p_prog.output)) + ov::format("        o.c[4] = %s.w;\n", root(p_prog.pick)) + "        return o;\n    }\n";
     return t + "    switch (lv) {\n" + stores + empty + "    }\n    return o;\n}\n";
@@ -247,10 +305,14 @@ ov::str specialised(const LevelProgram &p_prog, const GpuLayout &p_layout, Shade
 
 // The generic interpreter's records (heap): level m's [inputs, outputs, instructions, first instruction, input registers,
 // output registers] at the directory's entry m (values), each instruction [op, register, inputs, constants, aux0,
-// aux1, const_lod, live_lod, folded, input registers, constants] (aux: a NOTE's band and level, a CURVE's record; the
-// fold: Node's, as the specialised statement reads it).
+// aux1, const_lod, live_lod, folded, guard bit, mark bit, input registers, constants] (aux: a NOTE's band and level, a
+// CURVE's record; the fold and the guard: Node's, as the specialised statement reads them; mark: a weight's bit).
+// The floats of a generic record's head, before its input registers and constants (generic_records; the text gets it
+// by substitution).
+constexpr size_t RECORD_HEAD = 11;
+
 struct GenericRecords {
-    int64_t dir = 0, top = 0, output = 0, pick = 0, stop = 0;
+    int64_t dir = 0, top = 0, output = 0, pick = 0, stop = 0, weights = 0;
 };
 
 GenericRecords generic_records(const LevelProgram &p_prog, const GpuLayout &p_layout, ShaderParams &r_params) {
@@ -263,8 +325,10 @@ GenericRecords generic_records(const LevelProgram &p_prog, const GpuLayout &p_la
         for (const int n : p_prog.levels[size_t(s)].code) {
             const Node &node = p_prog.nodes[size_t(n)];
             const float aux0 = node.op == Op::NOTE ? float(band[size_t(n)]) : (node.op == Op::CURVE ? float(curves[size_t(node.curve)]) : 0.0f);
-            code.insert(code.end(),
-                    { float(node.op), float(p_layout.reg[size_t(n)]), float(node.in.size()), float(node.k.size()), aux0, float(node.level), float(node.const_lod), float(node.live_lod), node.folded });
+            const float head[] = { float(node.op), float(p_layout.reg[size_t(n)]), float(node.in.size()), float(node.k.size()), aux0, float(node.level), float(node.const_lod),
+                float(node.live_lod), node.folded, node.guard >= 0 ? float(biome_bit(node.guard)) : 0.0f, float(node.mark) };
+            static_assert(std::size(head) == RECORD_HEAD, "Terrain: a generic record's head is RECORD_HEAD floats.");
+            code.insert(code.end(), std::begin(head), std::end(head));
             for (const int in : node.in) {
                 code.push_back(float(p_layout.reg[size_t(in)]));
             }
@@ -292,6 +356,14 @@ GenericRecords generic_records(const LevelProgram &p_prog, const GpuLayout &p_la
     g.output = root(p_prog.output);
     g.pick = root(p_prog.pick);
     g.stop = r_params.append(last_stops(p_prog));
+    // The on word's: count, then MAX_BIOMES registers (the unused ones 0), a fixed size like every appended list (the
+    // text holds their offsets).
+    std::vector<float> weights(size_t(Climate::MAX_BIOMES) + 1, 0.0f);
+    for (size_t b = 0; b < p_prog.weights.size() && p_prog.weights.size() > 1; b++) {
+        weights[0] = float(p_prog.weights.size());
+        weights[b + 1] = float(p_layout.reg[size_t(p_prog.weights[b])]);
+    }
+    g.weights = r_params.append(weights);
     return g;
 }
 
@@ -305,17 +377,28 @@ Ch level_run(Ch ch, WorldPos p, int m, bool last) {
     for (int k = 0; k < nin; k++) {
         r[int(cl_heap(d + 4 + k))] = CH_GET;
     }
+    uint mask = last ? 0u : biome_mask[g_item];
     for (int s = lv; s >= (last ? int(cl_param(FINEST + min(m, MAX_LEVEL))) : lv); s--) {
+        uint on = mask;
+        if (last) {
+            on = 0u;
+            for (int b = 0; b < int(cl_param(WEIGHTS)); b++) {
+                on |= r[int(cl_param(WEIGHTS + 1 + b))] != vec4(0.0) ? 1u << uint(b) : 0u;
+            }
+        }
         int e = int(cl_param(DIR + s));
         int q = int(cl_heap(e + 3));
         int count = int(cl_heap(e + 2));
         for (int i = 0; i < count; i++) {
             int op = int(cl_heap(q));
             int na = int(cl_heap(q + 2));
-            int kq = q + 9 + na;
+            int kq = q + RECORD_HEAD + na;
             int qn = kq + int(cl_heap(q + 3));
+            uint gb = uint(cl_heap(q + 9));
             if (last && float(m) > cl_heap(q + 7)) {
                 // unread on this last level
+            } else if (gb != 0u && (on & gb) == 0u) {
+                r[int(cl_heap(q + 1))] = vec4(0.0);
             } else if (float(m) >= cl_heap(q + 6)) {
                 r[int(cl_heap(q + 1))] = vec4(0.0, 0.0, 0.0, cl_heap(q + 8));
             } else {
@@ -323,7 +406,7 @@ Ch level_run(Ch ch, WorldPos p, int m, bool last) {
                 for (int j = 0; j < 3; j++) {
                     a[j] = vec4(0.0);
                     if (j < na) {
-                        a[j] = r[int(cl_heap(q + 9 + j))];
+                        a[j] = r[int(cl_heap(q + RECORD_HEAD + j))];
                     }
                 }
                 vec4 v = vec4(0.0);
@@ -332,6 +415,10 @@ CASES                default:
                     break;
                 }
                 r[int(cl_heap(q + 1))] = v;
+            }
+            uint mk = uint(cl_heap(q + 10));
+            if (mk != 0u && !last && r[int(cl_heap(q + 1))] != vec4(0.0) && (biome_mask[g_item] & mk) != mk) {
+                atomicOr(biome_mask[g_item], mk);
             }
             q = qn;
         }
@@ -357,7 +444,7 @@ ov::str generic(const LevelProgram &p_prog, const GpuLayout &p_layout, ShaderPar
     const GenericRecords g = generic_records(p_prog, p_layout, r_params);
     const auto in = [](int p_i) { return ov::format("a[%d]", int64_t(p_i)); };
     const auto k = [](int p_i) { return ov::format("cl_heap(kq + %d)", int64_t(p_i)); };
-    const ov::str in_j = "r[int(cl_heap(q + 9 + j))]";
+    const ov::str in_j = "r[int(cl_heap(q + RECORD_HEAD + j))]";
     ov::str cases;
     for (int op = 0; op < int(Op::COUNT); op++) {
         const char *glsl = op_def(Op(op)).glsl;
@@ -376,7 +463,7 @@ ov::str generic(const LevelProgram &p_prog, const GpuLayout &p_layout, ShaderPar
         cases += ov::format("            case %d: {\n", int64_t(op)) + body + "                break;\n            }\n";
     }
     ov::str t = ov::replace_all(GENERIC_RUN, { { "CASES", cases }, { "CH_GET", ch_get("k") }, { "PUT_OUTPUT", ch_put("0", generic_root("OUTPUT")) }, { "ROOT_PICK", generic_root("PICK") }, { "PUT_CHANNEL", ch_put("k", "r[int(cl_heap(d + 4 + nin + k))]") } });
-    return ov::replace_all(t, { { "MAX_REGISTERS", ov::itos(MAX_REGISTERS) }, { "TOP", ov::itos(g.top) }, { "DIR", ov::itos(g.dir) }, { "OUTPUT", ov::itos(g.output) }, { "PICK", ov::itos(g.pick) }, { "FINEST", ov::itos(g.stop) }, { "MAX_LEVEL", ov::itos(Cascade::MAX_LEVEL) } });
+    return ov::replace_all(t, { { "MAX_REGISTERS", ov::itos(MAX_REGISTERS) }, { "RECORD_HEAD", ov::itos(RECORD_HEAD) }, { "TOP", ov::itos(g.top) }, { "DIR", ov::itos(g.dir) }, { "OUTPUT", ov::itos(g.output) }, { "PICK", ov::itos(g.pick) }, { "FINEST", ov::itos(g.stop) }, { "WEIGHTS", ov::itos(g.weights) }, { "MAX_LEVEL", ov::itos(Cascade::MAX_LEVEL) } });
 }
 
 // Each node's first and last event over the stream (levels top .. 0: the inputs' loads, the code, the outputs' stores;
@@ -528,8 +615,17 @@ ov::str level_flags_glsl(const LevelProgram &p_prog, const GpuLayout &p_layout, 
     return code + "\nvoid level_flags(int m) {\n    g_in = uint(level_in(m));\n    g_pick = level_pick(m) != 0;\n    g_out = uint(level_out(m));\n}\n";
 }
 
+bool uses_biome_mask(const LevelProgram &p_prog) {
+    return p_prog.generic || std::any_of(p_prog.nodes.begin(), p_prog.nodes.end(), [](const Node &p_n) { return p_n.guard >= 0; });
+}
+
 ov::str level_glsl(const LevelProgram &p_prog, const GpuLayout &p_layout, ShaderParams &r_params) {
-    return p_prog.generic ? generic(p_prog, p_layout, r_params) : specialised(p_prog, p_layout, r_params);
+    const ov::str mask = uses_biome_mask(p_prog)
+            ? ov::format("\n// Terrain::guard_biomes: the run's biome mask per item (zeroed per batch), the item level_run reads it for.\n"
+                         "layout(set = 0, binding = %d, std430) restrict buffer BiomeMask { uint biome_mask[]; };\nuint g_item = 0u;\n",
+                      int64_t(CascadeGLSL::BIOME_MASK_BINDING))
+            : ov::str();
+    return mask + (p_prog.generic ? generic(p_prog, p_layout, r_params) : specialised(p_prog, p_layout, r_params));
 }
 
 } // namespace Terrain
