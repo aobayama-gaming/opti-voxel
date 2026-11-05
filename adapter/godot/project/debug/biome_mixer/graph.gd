@@ -91,25 +91,6 @@ static func unlink(p_graph: Dictionary, p_to: String, p_port: int) -> void:
 	n.erase(EngineInfo.kind(n.kind).inputs[p_port])
 
 
-# Whether p_from reads p_to (through its inputs, at any depth): a link from p_from into p_to would close a loop.
-static func reads(p_graph: Dictionary, p_from: String, p_to: String) -> bool:
-	var stack := [p_from]
-	var seen := {}
-	while not stack.is_empty():
-		var id: String = stack.pop_back()
-		if id == p_to:
-			return true
-		if seen.has(id):
-			continue
-		seen[id] = true
-		var n := node(p_graph, id)
-		if n.is_empty():
-			continue
-		for port in input_count(n):
-			stack.append(input_of(n, port))
-	return false
-
-
 # A parameter's value for a new node: its default, else one of its type's.
 static func default_value(p_param: Dictionary, p_fields: Array) -> Variant:
 	var d = p_param.get("default")

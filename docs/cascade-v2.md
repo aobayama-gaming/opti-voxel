@@ -1,9 +1,11 @@
 # Cascade v2: one graph, coarse to fine
 
-Status: **design, not implemented.** This note says what the terrain evaluation becomes, what it deletes and in which
-order; it is the contract the v2 PRs (C to G below) are reviewed against. Until v2 lands, `docs/cascade.md` and
-`docs/climate.md` describe the code. v2 deliberately breaks the bits of every existing world once: the old terrain is
-not an oracle, and nothing below exists to reproduce it.
+Status: **implemented** (stages A to F, below): `SDFCascade` runs `LevelProgram` (`level_program.*`), compiled by
+`graph_compile.*`, its GLSL forms in `level_glsl.*`; the old machinery is deleted; the biome mixer edits v2 graphs.
+Stage G (guards, fold tuning, the bench table) is open. This note says what the terrain evaluation became, what it deleted
+and in which order; it is the contract the v2 PRs were reviewed against. `docs/cascade.md` and `docs/climate.md`
+describe the code as it is. v2 deliberately broke the bits of every existing world once: the old terrain is not an
+oracle, and nothing below exists to reproduce it. (The *Why* and *What goes* sections name v1's code, now gone.)
 
 ## Why
 
@@ -168,6 +170,7 @@ It drops the ones that only protected the record layouts.
 | notes per octave | `MAX_LEVEL_NOTES` 8 | none (instructions) |
 | instructions | `MAX_SAMPLE_INSTRS` 64 at the samples | one cap per level |
 | biomes | `MAX_BIOMES` 16 | kept if the weights' channels need it |
+| shader params | 16 KB | `MAX_PARAM_BYTES` 32 KB: the generic records of `example.json` take 17.7 KB (registers: `MAX_REGISTERS` 96) |
 
 ## What stays
 
@@ -183,7 +186,7 @@ It drops the ones that only protected the record layouts.
   don't change.
 - **The JSON format,** apart from the changes above.
 
-## What goes
+## What goes (gone)
 
 - **Modulation and bands:**
   - `climate_modulator.cpp`, `cascade_shaped_glsl.*`;
@@ -200,14 +203,21 @@ It drops the ones that only protected the record layouts.
 - **Climate glue:** `Climate::state`, `apply_terms`, `derive`, `ground_value` / `climate_ground` as separate paths; the
   ground term of fields.
 - **Refusal rules** that only protected the layouts (listed in *The rule*).
-- **Engine settings that are data:** `SDFCascade::Preset::FLAT` and `terrain_mode` (the flat ground is a world file whose
-  output is a constant); the template biome built in C++ (`template_graph`), which becomes a world file.
+- **Engine settings that are data:** the template biome built in C++ (`template_graph`) became world files
+  (`worlds/template_5cm.world.json`, `template_50cm.world.json`: a file per voxel size, since its octaves are counted in
+  voxels; `SDFCascade::template_path` picks it, a missing or refused one falls back to the flat table with an ERR). Its
+  cap on a small planet is data too: the template's 3.3 km octaves are over a 2 km planet's relief and refused there,
+  so `tiny.world.json` carries its own ground, the template's octaves stopped under the relief. `SDFCascade::Preset::
+  FLAT` and `terrain_mode` stay: the flat ground is already a constant table (`flat_table`), and the preset also picks
+  the shapes gallery's ground height, skirts and spawn in World and `player.gd`; folding those into world files is
+  left for later.
 - **Pins of the old terrain:**
   - `plain.json`'s hashes;
-  - the default-terrain hash (`test_sdf_cascade.cpp`);
   - the generic == specialised pins on the old tables;
   - "neutral modulation leaves the ground bit for bit";
   - the FrameCheck probes of deleted functions.
+  (The default-terrain hash of `test_sdf_cascade.cpp` kept its v1 value: the template is a plain fBm, one linear
+  channel, so v2 gives it v1's bits, and its world files are the old C++ graph node for node.)
 - **The legacy mesher and its oracle** (this PR, below).
 
 ## Checks after v2
@@ -215,11 +225,11 @@ It drops the ones that only protected the record layouts.
 | Check | Becomes |
 |---|---|
 | CascadeCheck G1 (GPU == CPU every level) | the same on `LevelProgram`: every channel, every level, bits |
-| G3 (LOD relation) | per channel: V_L is the subdivision of V_{L+1} plus level L's instructions |
+| G3 (LOD relation) | per chunk: the GPU's level L + 1 channels subdivided on the CPU, then `last_code(L)`, against the GPU's output and pick |
 | G9 (fold samples), G10 (materials), D1 (points) | unchanged in meaning, on v2 |
-| `--generic=1` | generic == specialised, bits, on every set |
+| `--generic=1` | every check on the generic text (GPU generic == CPU generic program, bits); generic vs specialised differ by blend factoring, so a doctest bounds them on the CPU (a few float steps of the output's bound) |
 | unit tests | level rule, gate refusals, linear fold (an fBm is one channel), blend factoring, box == point, the L / L+1 step within the skirt on every test table, a ridged multifractal parent |
-| new pins | one hash per test table, taken once v2 is reviewed: they guard v2 against itself, not against the old terrain |
+| new pins | one hash per test table (`test_level_program.cpp`, taken at stage E): they guard v2 against itself, not against the old terrain |
 | `--walk_verify`, `--discovery_compare`, origin parity, `--destroy_verify`, audits | unchanged |
 
 ## What looks different
@@ -252,15 +262,16 @@ Measured, not assumed: PR G carries a `tools/bench_ab.sh` table against dev (the
 
 | PR | Content |
 |---|---|
-| **A + B** (this one) | the legacy mesher and `--validate` deleted (GPU Direct is the only pipeline); this note |
-| C | `LevelProgram`, the op table's CPU form, the compiler; doctests above. Not wired in. |
-| D | the GLSL forms (specialised, generic); `SDFCascade` on v2; CascadeCheck on v2 |
-| E | deletion of *What goes*; tests ported, test tables re-checked, template biome and flat preset as world files |
-| F | biome mixer: node kinds from the engine's catalogue (no hard-coded rules in `graph.gd` / `nodes.gd` / `checks.gd`), warp ports, any multifractal parent, autosave migrated |
+| **A + B** (done) | the legacy mesher and `--validate` deleted (GPU Direct is the only pipeline); this note |
+| **C** (done) | `LevelProgram`, the op table's CPU form, the compiler; doctests above |
+| **D** (done) | the GLSL forms (specialised, generic); `SDFCascade` on v2; CascadeCheck on v2 |
+| **E** (done) | deletion of *What goes*; tests ported, test tables re-checked and pinned, the template biome as world files (the flat preset kept, above) |
+| **F** (done) | biome mixer: node kinds from the engine's catalogue (it already built its nodes from `graph_kinds`; its own loop refusal deleted, the engine's error names the node; the tooltips' v1 rules rewritten), the warp's `x` / `y` / `z` ports in `graph_kinds` (all three or `in`, each gated), any multifractal parent, worlds migrated on read (a field's ground term dropped) |
 | G | guards and fold tuning; the bench table; `docs/perf.md` |
 
 Each PR updates the docs it makes wrong: `cascade.md`, `climate.md`, `terrain.md`, `testing.md`, `gotchas.md`,
-`integer-frame.md`, `instance-stream.md`, and the CLAUDE.md invariants (the "CPU mirrors" rule now points at the op table).
+`integer-frame.md`, `instance-stream.md`, and the CLAUDE.md invariants (the "CPU mirrors" rule points at the op table
+since stage E).
 
 ## Open questions
 

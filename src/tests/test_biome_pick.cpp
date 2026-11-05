@@ -42,7 +42,7 @@ TEST_CASE("BiomePick: one biome or none is 0; a site's biome is a pure function 
     CHECK(none.at(VoxelPos(123, 4, 5), 99u) == 0);
     ClimateTest::ClimateSDF c(two_biomes("[]", ""), 15);
     CLIMATE_REQUIRE(c.sdf.get_climate() != nullptr);
-    const BiomePick pick(c.sdf.get_climate(), &c.sdf.get_spec());
+    const BiomePick pick(c.sdf.get_climate(), &c.sdf.program());
     CHECK(pick.biomes() == 2);
     CHECK(pick.level() == 9 - 3); // t's finest octave (25 m at 5 cm: k = 9)
     // A voxel where the two blend, then many seeds there: each biome's share within 2% of its weight.
@@ -55,12 +55,12 @@ TEST_CASE("BiomePick: one biome or none is 0; a site's biome is a pure function 
         found = w[0] > 0.3f && w[0] < 0.7f;
     }
     CLIMATE_REQUIRE(found);
-    // Its fields-only cascade (no field reads the ground here) gives the full cascade's weights, bit for bit.
+    // The weights' cone alone gives the full program's weights at their lattice, bit for bit.
     for (int i = 0; i < 64; i++) {
         const VoxelPos v(int64_t(i) * 977 - 9000, c.sdf.get_datum_y() + i, int64_t(i) * -613);
-        ExactNoise::Float4 fields[Climate::MAX_FIELDS], full[Climate::MAX_BIOMES];
-        Climate::fields_at(*c.sdf.get_climate(), c.sdf.get_spec(), WorldCoord::floor_div(v, int64_t(1) << pick.level()), pick.level(), fields);
-        Climate::weights(*c.sdf.get_climate(), fields, full);
+        ExactNoise::Float4 fields[Climate::MAX_FIELDS], full[Climate::MAX_BIOMES], ground;
+        int picked = 0;
+        c.sdf.climate_at(WorldCoord::floor_div(v, int64_t(1) << pick.level()), pick.level(), ground, picked, fields, full);
         float mine[Climate::MAX_BIOMES];
         pick.weights(v, mine);
         CHECK(ExactNoise::float_bits(mine[0]) == ExactNoise::float_bits(full[0].w));

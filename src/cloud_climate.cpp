@@ -31,12 +31,10 @@ Texel of_weights(const Climate::Table &p_table, const Climate::Float4 p_w[Climat
     return t;
 }
 
-Texel at(const Climate::Table &p_table, const Cascade::Spec &p_spec, const VoxelPos &p_voxel, int p_m) {
-    const int m = ov::max(0, ov::min(p_m, p_spec.top_level(true)));
-    Climate::Float4 fields[Climate::MAX_FIELDS];
-    Climate::fields_at(p_table, p_spec, WorldCoord::floor_div(p_voxel, int64_t(1) << m), m, fields);
-    Climate::Float4 w[Climate::MAX_BIOMES];
-    Climate::weights(p_table, fields, w);
+Texel at(const Climate::Table &p_table, const Terrain::LevelProgram &p_prog, const VoxelPos &p_voxel, int p_m) {
+    const int m = ov::max(0, ov::min(p_m, p_prog.top));
+    Climate::Float4 w[Climate::MAX_BIOMES] = {};
+    Terrain::point_nodes(p_prog, WorldCoord::floor_div(p_voxel, int64_t(1) << m), m, p_prog.weights.data(), int(p_prog.weights.size()), w);
     return of_weights(p_table, w);
 }
 

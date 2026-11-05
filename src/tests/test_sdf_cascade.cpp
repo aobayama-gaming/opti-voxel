@@ -1,10 +1,9 @@
-#include "test_common.hpp"
+#include "test_climate_common.hpp"
 
 #include "godot_conv.hpp"
 
 #include "cascade.hpp"
 #include "cascade_glsl.hpp"
-#include "cascade_measure.hpp"
 #include "cascade_terrain.hpp"
 #include "gpu_frame.hpp"
 #include "sdf_cascade.hpp"
@@ -59,7 +58,7 @@ TEST_CASE("Cascade: closed-form level boxes equal the iterated parent boxes, wit
     const ChunkParam param;
     int reached[8] = {};
     for (int i = 0; i < 64; i++) {
-        const Box c = chunk_box(CascadeMeasure::random_chunk(i % 7, 9, i), param);
+        const Box c = chunk_box(random_chunk(i % 7, 9, i), param);
         for (int j = 0; j < 8; j++) {
             const Box l = level_box(c, j);
             for (int a = 0; a < 3; a++) {
@@ -73,21 +72,20 @@ TEST_CASE("Cascade: closed-form level boxes equal the iterated parent boxes, wit
     }
 }
 
-// SDFCascade::evaluate is Cascade::point + height_sdf over its base + metres, bit for bit, on lattice points of every LOD.
-TEST_CASE("SDFCascade: evaluate equals Cascade::point and height_sdf, bit for bit") {
+// SDFCascade::evaluate is Terrain::point + height_sdf over its base + metres, bit for bit, on lattice points of every LOD.
+TEST_CASE("SDFCascade: evaluate equals Terrain::point and height_sdf, bit for bit") {
     for (const int lods : { 15, 25 }) {
         ChunkParam param;
         SDFCascade sdf;
         sdf.configure(param, lods);
-        const Spec &spec = sdf.get_spec();
-        // The template's top: k = 16 at 0.5 m (26.2 km), whatever the LOD count past it.
-        const int k_top = std::min(lods + 4, Climate::template_top(param.voxel_size));
-        CHECK(k_top == 16);
-        CHECK(spec.top_level() == k_top - 3);
-        CHECK(spec.bands.size() == size_t(k_top - 2));
-        CHECK(spec.bands.back().k == 3);
+        const Terrain::LevelProgram &prog = sdf.program();
+        // The template's top (template_50cm.world.json): k = 16 at 0.5 m (26.2 km), whatever the LOD count past it.
+        const int k_top = 16;
+        CHECK(prog.top == k_top - 3);
+        CHECK(ClimateTest::note_count(prog) == k_top - 2);
+        CHECK(ClimateTest::note_top_k(prog) == k_top);
         // Capped at 3.3 km: 6553.6 voxels at 0.5 m.
-        CHECK(spec.bands.front().amp == float(Climate::TEMPLATE_MAX_AMP_M / 0.5));
+        CHECK(ClimateTest::note_amp(prog) == float(3276.8 / 0.5));
         int compared = 0;
         int differing = 0;
         const int64_t bases[] = { 0, 600, (int64_t(1) << 32) - 3, -(int64_t(1) << 60) + 1000, (int64_t(1) << 60) - 4000 };
@@ -98,8 +96,8 @@ TEST_CASE("SDFCascade: evaluate equals Cascade::point and height_sdf, bit for bi
                 WorldPos pos;
                 pos.voxel = lattice * step;
                 const float got = sdf.evaluate(pos, lod);
-                float ch[CHANNELS];
-                point(spec, lattice, lod, ch);
+                const ExactNoise::Float4 g = Terrain::point(prog, lattice, lod).ground;
+                const float ch[CHANNELS] = { g.w, g.x, g.y, g.z };
                 const ExactNoise::Float4 h = CascadeTerrain::height_sdf(ch, lod, sdf.get_base().at(pos.voxel, lod));
                 const float want = h.w * (param.voxel_size * exact_pow2(lod));
                 compared++;
@@ -111,11 +109,11 @@ TEST_CASE("SDFCascade: evaluate equals Cascade::point and height_sdf, bit for bi
     }
 }
 
-TEST_CASE("SDFCascade: the shader stub and get_cascade") {
+TEST_CASE("SDFCascade: the shader stub and get_program") {
     ChunkParam param;
     SDFCascade sdf;
     sdf.configure(param, 25);
-    CHECK(sdf.get_cascade() == &sdf.get_spec());
+    CHECK(sdf.get_program() == &sdf.program());
     Cascade::ShaderParams params;
     const String glsl = godot_str(sdf.get_glsl_code(params));
     CHECK(glsl.contains("vec4 cascade_terrain_sdf(vec4 c0, WorldPos p, int lod)"));
@@ -143,17 +141,13 @@ TEST_CASE("SDFCascade: the flat preset is the plane y = FLAT_GROUND_M at every L
 // The template ground stops at the first octave at the 3.3 km cap (26.2 km at 5 cm): past 15 LODs the ground is the
 // same octaves, so the same bits.
 TEST_CASE("SDFCascade: the template ground stops at its top, the same at any LOD count past it") {
-    CHECK(Climate::template_top(0.05) == 19);
-    CHECK(Climate::template_top(0.5) == 16);
+    // Each template file's first note is its top: 2^19 voxels at 5 cm, 2^16 at 0.5 m.
+    const ov::Value fine = ClimateTest::template_graph(0.05), coarse = ClimateTest::template_graph(0.5);
+    CHECK(fine["nodes"][size_t(0)]["wavelength_m"].as_double() == 26214.4);
+    CHECK(coarse["nodes"][size_t(0)]["wavelength_m"].as_double() == 32768.0);
     ChunkParam param;
     param.voxel_size = 0.05f;
-    auto top = [&](const SDFCascade &p_sdf) {
-        int k = 0;
-        for (const Cascade::Band &b : p_sdf.get_spec().bands) {
-            k = std::max(k, b.k);
-        }
-        return k;
-    };
+    auto top = [&](const SDFCascade &p_sdf) { return ClimateTest::note_top_k(p_sdf.program()); };
     SDFCascade s15, s25;
     s15.configure(param, 15);
     s25.configure(param, 25);
@@ -174,30 +168,25 @@ TEST_CASE("SDFCascade: the template ground stops at its top, the same at any LOD
     }
 }
 
-TEST_CASE("CascadeGLSL: the band table holds every band at its level, with the CPU's factors") {
+TEST_CASE("Terrain: the band table holds every note in note order") {
     ChunkParam param;
     SDFCascade sdf;
     sdf.configure(param, 25);
-    const Spec &spec = sdf.get_spec();
-    const PackedByteArray table = godot_bytes(CascadeGLSL::band_table(spec));
-    CHECK(table.size() == CascadeGLSL::BAND_ENTRIES * int64_t(CascadeGLSL::BAND_BYTES));
-    int present = 0;
-    for (int m = 0; m < CascadeGLSL::BAND_ENTRIES; m++) {
-        present += table.decode_u32(m * CascadeGLSL::BAND_BYTES + 48) != 0;
-    }
-    CHECK(present == int(spec.bands.size()));
-    for (const Band &b : spec.bands) {
-        const int64_t base = int64_t(spec.insert_level(b)) * CascadeGLSL::BAND_BYTES;
-        CHECK(table.decode_u32(base + 56) == uint32_t(b.k));
-        CHECK(table.decode_u32(base + 52) == b.seed);
-        CHECK(table.decode_u32(base + 16) == WorldCoord::lo32(b.offset.x));
-        CHECK(table.decode_s32(base + 40) == WorldCoord::hi32(b.offset.z));
-        float o[CHANNELS];
-        band_channels(spec, b, Vector3i64(3, -7, 11), o);
-        // factor[order] * channel == band_channels, bit for bit (one product each).
-        const ExactNoise::Float4 n = ExactNoise::perlin3(WorldPos{ Vector3i64(3, -7, 11) * (int64_t(1) << spec.insert_level(b)), Float3() }, b.k, b.seed, b.offset);
-        CHECK(float_bits(n.w * table.decode_float(base)) == float_bits(o[VALUE]));
-        CHECK(float_bits(n.x * table.decode_float(base + 4)) == float_bits(o[DX]));
+    const Terrain::LevelProgram &prog = sdf.program();
+    const PackedByteArray table = godot_bytes(Terrain::band_table(prog));
+    CHECK(table.size() == ClimateTest::note_count(prog) * int64_t(CascadeGLSL::BAND_BYTES));
+    const std::vector<int> order = Terrain::note_order(prog);
+    CHECK(int64_t(order.size()) == ClimateTest::note_count(prog));
+    int64_t base = 0;
+    for (const int i : order) {
+        const Terrain::Node &n = prog.nodes[size_t(i)];
+        CHECK(n.op == Terrain::Op::NOTE);
+        CHECK(table.decode_u32(base + 48) == 1u);
+        CHECK(table.decode_u32(base + 52) == n.band.seed);
+        CHECK(table.decode_u32(base + 56) == uint32_t(n.band.k));
+        CHECK(table.decode_u32(base + 16) == WorldCoord::lo32(n.band.offset.x));
+        CHECK(table.decode_s32(base + 40) == WorldCoord::hi32(n.band.offset.z));
+        base += CascadeGLSL::BAND_BYTES;
     }
 }
 

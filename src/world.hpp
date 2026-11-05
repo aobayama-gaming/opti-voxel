@@ -109,12 +109,10 @@ public:
     void frame(const Float3 *p_camera_pos, const Float3 *p_camera_forward, double p_camera_far_m = 0.0, const Float3 *p_load_centre = nullptr);
     // What a stopped world hands to the next one's start (stop(&kept), reuse(kept)), so that a restart on the same
     // device and host neither frees nor makes them: GPU Direct's page pool (a pool handed to reuse, or null), the GPU
-    // discoverer's device on its thread (or null) and the climate's generic capacities (SDFCascade::caps: an edit needing
-    // no more compiles nothing).
+    // discoverer's device on its thread (or null).
     struct Kept {
         QuadPagePool *pages = nullptr;
         std::unique_ptr<LocalGpuThread> points_gpu;
-        Climate::Caps caps;
     };
     // Frees the loaded chunks, the mesher (its GPU objects on the device's thread) and the discoverer. r_kept: what it
     // keeps for the next world goes there instead (Kept).
@@ -123,7 +121,6 @@ public:
     void reuse(Kept &&p_kept) {
         reused_pages = p_kept.pages;
         points_gpu = std::move(p_kept.points_gpu);
-        reused_caps = p_kept.caps;
     }
     bool is_started() const { return started; }
     // The LOD the view's rule gives at p_distance_m from the camera (ChunkDiscoverer::lod_at_distance); 0 before start.
@@ -212,7 +209,6 @@ private:
     ChunkDiscoverer *chunk_discoverer = nullptr;
     GPUDirectMesher *direct_mesher = nullptr;
     QuadPagePool *reused_pages = nullptr; // reuse's, until start's mesher takes it
-    Climate::Caps reused_caps; // reuse's: the climate's capacities at least these
     std::unique_ptr<LocalGpuThread> points_gpu; // the GPU discoverer's device (reuse's or start's), outlives the discoverer
     Atmosphere *atmosphere = nullptr; // deletes itself on the device's thread (destroy)
     Clouds *clouds = nullptr; // the same; reads the atmosphere's textures, so goes first

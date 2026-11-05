@@ -1,34 +1,32 @@
 #pragma once
 
-#include "cascade.hpp"
 #include "climate.hpp"
+#include "level_program.hpp"
 #include "world_coord.hpp"
 
 #include <cstdint>
 #include <vector>
 
 // Which biome a site belongs to (the instances' species, the features): the climate's biome weights at the site, read
-// once on the CPU (Climate::fields_at, then weights) on the coarsest lattice its placement fields resolve, and a hash of
+// once on the CPU (the program's weight nodes, Terrain::point_nodes) on their own lattice, and a hash of
 // the site against them, so where biomes blend each takes about its weight's share of the sites. A pure function of
 // the site's voxel and seed: the same from any box, chunk or thread.
 struct BiomePick {
     BiomePick() = default;
-    // p_table's biomes over p_spec (the combined cascade, Climate::combined_spec); null, or one biome: always 0.
-    BiomePick(const Climate::Table *p_table, const Cascade::Spec *p_spec);
+    // p_table's biomes, their weights p_prog's (Terrain::compile's); null, or one biome: always 0.
+    BiomePick(const Climate::Table *p_table, const Terrain::LevelProgram *p_prog);
 
     // The biome of a site at p_voxel of seed p_seed.
     int at(const VoxelPos &p_voxel, uint32_t p_seed) const;
     // The biome weights' values there (r_w[b], 0 past the table's biomes).
     void weights(const VoxelPos &p_voxel, float r_w[Climate::MAX_BIOMES]) const;
     int biomes() const { return table ? int(table->biomes.size()) : 1; }
-    // The lattice the weights are read on (Λ_level: the finest insertion level of the fields the biomes' places name).
+    // The lattice the weights are read on (Λ_level: the weights' level, their finest field note's).
     int level() const { return lattice; }
 
 private:
     const Climate::Table *table = nullptr;
-    // The fields' cascade: the combined one without the ground's notes and their modulation when no field term reads
-    // the ground (the fields' bits are the same; a site's read skips the ground's levels).
-    Cascade::Spec spec;
+    const Terrain::LevelProgram *prog = nullptr;
     int lattice = 0;
 };
 

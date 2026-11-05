@@ -2,35 +2,9 @@
 
 #include "cascade.hpp"
 
-// The cascade's terrain (SDFCascade meshes it; the tests use it directly): a 3D height field
-// h(x, y, z) of perlin3 octaves, every octave with the same steepness (amplitude = steepness * wavelength,
-// in LOD0 voxels), surface at altitude h over the base surface (BaseSurface).
+// The cascade's terrain: a program's output h (value + gradient, LOD0 voxels) is a height over the base surface
+// (BaseSurface), and height_sdf turns it into the distance SDFCascade meshes.
 namespace CascadeTerrain {
-
-// Octaves from p_k_top down to the finest one LOD 0 inserts (k = insert_shift, on Λ_0), octave k's seed and offset
-// ExactNoise::make_octave(p_seed, k): the same octave whatever the top (a climate field's rule).
-inline Cascade::Spec make_spec(uint32_t p_seed, int p_k_top, double p_steepness, int p_insert_shift) {
-    Cascade::Spec spec;
-    spec.insert_shift = p_insert_shift;
-    for (int k = p_k_top; k >= p_insert_shift; k--) {
-        spec.bands.push_back(ExactNoise::make_octave(p_seed, uint32_t(k), k, float(p_steepness * std::ldexp(1.0, k))));
-    }
-    return spec;
-}
-
-// The design's Earth: octaves up to k = 29, 8 samples per wavelength, top lattice Λ_26, steepness 1/8
-// with amplitudes capped at EARTH_MAX_AMP. The value channel is a float32 height in LOD0 voxels: its
-// resolution is 2^-23 of the largest height, so the planet's base shape stays out of the bands (a per-chunk
-// bias in the integer frame, see the design) and continent bands keep km-scale amplitudes.
-inline constexpr double EARTH_MAX_AMP = 65536.0; // 2^16 voxels: 3.3 km at 5 cm
-
-inline Cascade::Spec earth() {
-    Cascade::Spec spec = make_spec(0xEA27u, 29, 0.125, 3);
-    for (Cascade::Band &b : spec.bands) {
-        b.amp = float(std::min(double(b.amp), EARTH_MAX_AMP));
-    }
-    return spec;
-}
 
 // SDF of the height field over the base surface from cascade channels on Λ_L (value in LOD0 voxels, slopes per
 // LOD-L voxel), in voxels of LOD L. p_base: BaseSurface::at, (up n, altitude) in voxels of LOD L. t = n - grad h

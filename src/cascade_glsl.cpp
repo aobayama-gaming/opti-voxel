@@ -1,6 +1,7 @@
 #include "cascade_glsl.hpp"
 
-#include "cascade_shaped_glsl.hpp"
+#include "climate.hpp"
+#include "level_glsl.hpp"
 
 #include "exact_noise.hpp"
 #include "exact_noise_glsl.hpp"
@@ -58,7 +59,8 @@ void main() {
     uvec3 i = uvec3(local % n, (local / n) % n, local / (n * n));
 /*ITEM_FRAME*/    int lod = f.lod;
     int m = lod + pc.j;
-/*FIELDS_FLAG*/    int top = max(pc.top, lod/*TOP_ABOVE*/);
+    level_flags(m);
+    int top = max(pc.top, lod);
     if (m > top) {
         /*SKIP*/ // above T: zero, nothing stored, the chunk starts lower
     }
@@ -122,7 +124,8 @@ void main() {
     i64_shl(p.lo, p.hi, m);
     p.frac = vec3(0.0);
 
-/*INSERT_BANDS*/    ch = flush(ch);
+    ch = flush(ch);
+    ch = level_run(ch, p, m, pc.j == 0);
     uint slot = c * n * n * n + local;
     if (pc.j > 0) {
         store(pc.j & 1, slot, ch);
@@ -218,23 +221,13 @@ WorldPos level_point(uvec3 m_lo, ivec3 m_hi, uvec3 i, int m) {
 }
 )glsl";
 
-// `int <p_name>(int lod)`: p_value(lod) for lod 0 .. MAX_LEVEL, a C++ rule as a table of r_params (no formula retyped;
-// the climate's levels are its values, not its text).
-template <typename Value>
-ov::str level_table(const char *p_name, Value p_value, ShaderParams &r_params) {
-    std::vector<float> values;
-    for (int l = 0; l <= MAX_LEVEL; l++) {
-        values.push_back(float(p_value(l)));
-    }
-    return ov::format("\nint %s(int lod) {\n    return int(%s);\n}\n", p_name, r_params.table(values, ov::format("min(lod, %d)", MAX_LEVEL)));
-}
-
-// Ch and hermite_x/y/z for a spec's groups and, p_carried (a run's last level), its carry groups (the CPU's axis_rules): the first g_carry_n, the ones the level reads.
-ov::str hermite_functions(const Spec &p_spec, bool p_carried) {
-    const int nch = p_spec.gpu_channels();
-    ov::str code = ov::format("struct Ch { float c[%d]; };\n\n", nch);
+// Ch (p_nch channels of 4 floats, Cascade::Channel order each) and hermite_x/y/z (Cascade::axis_rule, op for op): the
+// first g_in channels, the level's inputs (Terrain::level_flags), the first one copied from the floor parent where it is
+// the pick (g_pick).
+ov::str hermite_functions(int p_nch) {
+    ov::str code = ov::format("struct Ch { float c[%d]; };\n\n", 4 * p_nch);
     code += "Ch ch_zero() {\n    Ch r;\n";
-    for (int c = 0; c < nch; c++) {
+    for (int c = 0; c < 4 * p_nch; c++) {
         code += ov::format("    r.c[%d] = 0.0;\n", c);
     }
     code += "    return r;\n}\n\n";
@@ -257,131 +250,81 @@ void hmid(float a, float b, float sa, float sb, out float v, out float s) {
     for (int axis = 0; axis < 3; axis++) {
         ov::str mid_code;
         ov::str copy_code;
-        auto pair = [&](int p_v, int p_s) {
-            mid_code += ov::format("        hmid(a.c[%d], b.c[%d], a.c[%d], b.c[%d], r.c[%d], r.c[%d]);\n", p_v, p_v, p_s, p_s, p_v, p_s);
-            copy_code += ov::format("        hcopy(a.c[%d], a.c[%d], r.c[%d], r.c[%d]);\n", p_v, p_s, p_v, p_s);
-        };
-        // The group at GPU channel p_base: value + the axis slope by the Hermite rule, the transverse slopes linear.
-        auto linear4 = [&](int p_base) {
-            pair(p_base + VALUE, p_base + DX + axis);
+        // Channel p_base: value + the axis slope by the Hermite rule, the transverse slopes linear.
+        auto linear4 = [&](int p_base, const char *p_indent) {
+            mid_code += ov::format("%shmid(a.c[%d], b.c[%d], a.c[%d], b.c[%d], r.c[%d], r.c[%d]);\n", p_indent, p_base + VALUE, p_base + VALUE, p_base + DX + axis,
+                    p_base + DX + axis, p_base + VALUE, p_base + DX + axis);
+            copy_code += ov::format("%shcopy(a.c[%d], a.c[%d], r.c[%d], r.c[%d]);\n", p_indent, p_base + VALUE, p_base + DX + axis, p_base + VALUE, p_base + DX + axis);
             for (int s = p_base + DX; s <= p_base + DZ; s++) {
                 if (s != p_base + DX + axis) {
-                    mid_code += ov::format("        { precise float t = (a.c[%d] + b.c[%d]) * 0.5; r.c[%d] = t; }\n", s, s, s);
-                    copy_code += ov::format("        r.c[%d] = a.c[%d];\n", s, s);
+                    mid_code += ov::format("%s{ precise float t = (a.c[%d] + b.c[%d]) * 0.5; r.c[%d] = t; }\n", p_indent, s, s, s);
+                    copy_code += ov::format("%sr.c[%d] = a.c[%d];\n", p_indent, s, s);
                 }
             }
         };
-        // The fields and the carry only where something reads them (Cascade::FieldRange).
-        auto open = [&](const ov::str &p_flag) {
-            mid_code += ov::format("        if (%s) {\n", p_flag);
-            copy_code += ov::format("        if (%s) {\n", p_flag);
-        };
-        auto close = [&]() {
+        for (int k = 0; k < p_nch; k++) {
+            mid_code += ov::format("        if (g_in > %du) {\n", k);
+            copy_code += ov::format("        if (g_in > %du) {\n", k);
+            if (k == 0) {
+                const ov::str copied = "            if (g_pick) {\n                r.c[0] = a.c[0];\n                r.c[1] = a.c[1];\n                r.c[2] = a.c[2];\n"
+                                       "                r.c[3] = a.c[3];\n            } else {\n";
+                mid_code += copied;
+                copy_code += copied;
+                linear4(0, "                ");
+                mid_code += "            }\n";
+                copy_code += "            }\n";
+            } else {
+                linear4(4 * k, "            ");
+            }
             mid_code += "        }\n";
             copy_code += "        }\n";
-        };
-        for (int g = 0; g < p_spec.group_count(); g++) {
-            const int base = p_spec.gpu_base(g);
-            if (g == 1) {
-                open("g_fields");
-            }
-            linear4(base);
         }
-        if (p_spec.group_count() > 1) {
-            close();
-        }
-        const int copied = p_spec.copied_carry();
-        for (int k = 0; p_carried && k < p_spec.gpu_carry_groups(); k++) {
-            const int base = p_spec.gpu_carry(k);
-            open(ov::format("g_carry_n > %du", k));
-            if (k != copied) {
-                linear4(base);
-            } else {
-                // The copied carry group: the floor parent's (Cascade's axis_rules).
-                for (int s = base; s < base + FIELD_CHANNELS; s++) {
-                    mid_code += ov::format("        r.c[%d] = a.c[%d];\n", s, s);
-                    copy_code += ov::format("        r.c[%d] = a.c[%d];\n", s, s);
-                }
-            }
-            close();
-        }
-        // Not carried here: 0 until a derive writes it (Cascade::Level::add_carry).
-        for (int s = p_spec.gpu_carry(0); !p_carried && s < p_spec.gpu_channels(); s++) {
-            mid_code += ov::format("        r.c[%d] = 0.0;\n", s);
-            copy_code += ov::format("        r.c[%d] = 0.0;\n", s);
-        }
-        code += ov::format("Ch hermite_%s(Ch a, Ch b, bool mid) {\n    Ch r;\n    if (mid) {\n%s    } else {\n%s    }\n    return r;\n}\n\n", AXIS_NAMES[axis],
+        code += ov::format("Ch hermite_%s(Ch a, Ch b, bool mid) {\n    Ch r = ch_zero();\n    if (mid) {\n%s    } else {\n%s    }\n    return r;\n}\n\n", AXIS_NAMES[axis],
                 mid_code, copy_code);
     }
-    return code;
+    code += "Ch flush(Ch ch) {\n";
+    for (int c = 0; c < 4 * p_nch; c++) {
+        const ov::str v = ov::format("ch.c[%d]", c);
+        code += "    " + v + " = " + glsl_flush_of(v) + ";\n";
+    }
+    return code + "    return ch;\n}\n\n";
 }
 
-// vec4s holding p_channels floats: the scratch's and Ch's packing.
-uint32_t vec4s_for(int p_channels) {
-    return uint32_t(p_channels + 3) / 4;
-}
-
-// Scratch and debug buffer access (nv vec4s per point) and the x pass at a parent position. The scratch is planar:
-// vec4 v of slot s at v * plane + s, plane = the buffer's vec4s / p_stride, so the ground's loads stay contiguous
-// whatever the fields; the debug channels are per point (slot * p_stride + v). p_stride: vec4s_per_point of the whole
-// spec, p_whole_fields its field groups (the ground-only view reads and writes the ground's planes of the same buffers,
-// the samples' view the ground's and the carry's). The carry: its first g_carry_n groups, loaded where p_carried (a run's
-// last level), stored by the level above it (the fields' view, where it derives).
-ov::str storage_functions(const Spec &p_spec, int p_stride, int p_whole_fields, bool p_carried) {
-    const int nch = p_spec.gpu_channels();
-    const int nv = int(vec4s_for(nch)); // this variant's channels (the view: fields only in the fields variant)
-    // vec4s from ground_vecs on are the fields' (one per group), read only where g_fields, then the carry's (g_carry).
-    const int ground_vecs = p_spec.gpu_base(1) / 4;
-    const int field_vecs = int(p_spec.fields.size());
-    auto plane = [&](int p_v) { return p_v < ground_vecs + field_vecs ? p_v : p_v - field_vecs + p_whole_fields; };
-    auto flag = [&](int p_v) {
-        if (p_v < ground_vecs + field_vecs) {
-            return p_v < ground_vecs ? ov::str() : ov::str("g_fields");
-        }
-        return ov::format("g_carry_n > %du", p_v - ground_vecs - field_vecs);
-    };
+// Scratch and debug buffer access (p_nch vec4s per point: channel k one vec4) and the x pass at a parent position. The
+// scratch is planar: vec4 k of slot s at k * plane + s, plane = the buffer's vec4s / p_nch; a level loads its g_in
+// channels and stores its g_out. The debug channels are per point (slot * p_nch + k).
+ov::str storage_functions(int p_nch) {
     ov::str code = "Ch unpack(";
-    for (int v = 0; v < nv; v++) {
+    for (int v = 0; v < p_nch; v++) {
         code += ov::format("%svec4 v%d", v ? ", " : "", v);
     }
     code += ") {\n    Ch r;\n";
-    for (int c = 0; c < nch; c++) {
+    for (int c = 0; c < 4 * p_nch; c++) {
         code += ov::format("    r.c[%d] = v%d[%d];\n", c, c / 4, c % 4);
     }
     code += "    return r;\n}\n\n";
-    code += "Ch load(bool from_a, uint slot) {\n";
     ov::str args_a;
     ov::str args_b;
-    for (int v = 0; v < nv; v++) {
+    for (int v = 0; v < p_nch; v++) {
         const char *sep = v ? ", " : "";
-        if (v < ground_vecs) {
-            args_a += ov::format("%sscratch_a[%du * plane_a + slot]", sep, v);
-            args_b += ov::format("%sscratch_b[%du * plane_b + slot]", sep, v);
-        } else if (v >= ground_vecs + field_vecs && !p_carried) {
-            args_a += ov::str(sep) + "vec4(0.0)"; // the derive writes it
-            args_b += ov::str(sep) + "vec4(0.0)";
-        } else {
-            args_a += ov::format("%s(%s ? scratch_a[%du * plane_a + slot] : vec4(0.0))", sep, flag(v), plane(v));
-            args_b += ov::format("%s(%s ? scratch_b[%du * plane_b + slot] : vec4(0.0))", sep, flag(v), plane(v));
-        }
+        args_a += ov::format("%s(g_in > %du ? scratch_a[%du * plane_a + slot] : vec4(0.0))", sep, v, v);
+        args_b += ov::format("%s(g_in > %du ? scratch_b[%du * plane_b + slot] : vec4(0.0))", sep, v, v);
     }
-    const ov::str planes = ov::format("    uint plane_a = uint(scratch_a.length()) / %du;\n    uint plane_b = uint(scratch_b.length()) / %du;\n", p_stride, p_stride);
-    code += planes + ov::format("    if (from_a) {\n        return unpack(%s);\n    }\n    return unpack(%s);\n}\n\n", args_a, args_b);
+    const ov::str planes = ov::format("    uint plane_a = uint(scratch_a.length()) / %du;\n    uint plane_b = uint(scratch_b.length()) / %du;\n", p_nch, p_nch);
+    code += "Ch load(bool from_a, uint slot) {\n" + planes + ov::format("    if (from_a) {\n        return unpack(%s);\n    }\n    return unpack(%s);\n}\n\n", args_a, args_b);
     ov::str vecs;
-    for (int v = 0; v < nv; v++) {
+    for (int v = 0; v < p_nch; v++) {
         vecs += ov::format("    vec4 v%d = vec4(r.c[%d], r.c[%d], r.c[%d], r.c[%d]);\n", v, 4 * v, 4 * v + 1, 4 * v + 2, 4 * v + 3);
     }
     code += "void store(int odd, uint slot, Ch r) {\n" + planes + vecs;
-    for (int v = 0; v < nv; v++) {
-        // The fields stored where the level below loads them (g_fields there: FieldRange::inserted here).
-        const ov::str f = v >= ground_vecs && v < ground_vecs + field_vecs ? ov::str("g_field_bands") : flag(v);
-        const ov::str guard = v < ground_vecs ? ov::str() : "    if (" + f + ov::str(")\n");
-        code += guard + ov::format("    if (odd != 0) {\n        scratch_a[%du * plane_a + slot] = v%d;\n    } else {\n        scratch_b[%du * plane_b + slot] = v%d;\n    }\n", plane(v), v, plane(v), v);
+    for (int v = 0; v < p_nch; v++) {
+        code += ov::format("    if (g_out > %du) {\n        if (odd != 0) {\n            scratch_a[%du * plane_a + slot] = v%d;\n        } else {\n"
+                           "            scratch_b[%du * plane_b + slot] = v%d;\n        }\n    }\n",
+                v, v, v, v, v);
     }
-    code += "}\n\n";
-    code += "void store_debug(uint slot, Ch r) {\n" + vecs;
-    for (int v = 0; v < nv; v++) {
-        code += ov::format("    debug_channels[slot * %du + %du] = v%d;\n", p_stride, plane(v), v);
+    code += "}\n\nvoid store_debug(uint slot, Ch r) {\n" + vecs;
+    for (int v = 0; v < p_nch; v++) {
+        code += ov::format("    debug_channels[slot * %du + %du] = v%d;\n", p_nch, v, v);
     }
     code += "}\n\n";
     // The x pass at parent position q (and q + x on a midpoint).
@@ -395,101 +338,6 @@ ov::str storage_functions(const Spec &p_spec, int p_stride, int p_whole_fields, 
 }
 
 )glsl";
-    return code;
-}
-
-using CascadeShapedGLSL::noise_code;
-using CascadeShapedGLSL::shaped_band_function;
-using CascadeShapedGLSL::shaped_helpers;
-
-// Cascade's insert_point for group g's band: insert_band_<g> at its constant amplitude (o = channel * factor[order],
-// ch = ch + o: two roundings, precise), insert_band_shaped_<g> at a modulated one (Cascade::modulated_channels, the
-// same order); and Cascade::flush_value.
-ov::str band_functions(const Spec &p_spec) {
-    const int nch = p_spec.gpu_channels();
-    ov::str code = p_spec.stretched() ? CascadeShapedGLSL::stretch_helper(p_spec) : ov::str();
-    for (int g = 0; g < p_spec.group_count(); g++) {
-        const int base = p_spec.gpu_base(g);
-        code += ov::format("Ch insert_band_%d(Ch ch, WorldPos p, CascadeBand band) {\n", g);
-        // perlin3 returns (d/dx, d/dy, d/dz, value).
-        code += noise_code(p_spec, g, "p");
-        code += "    float n[4] = float[4](g.w, g.x, g.y, g.z);\n";
-        for (int c = 0; c < CHANNELS; c++) {
-            code += ov::format("    { precise float o = n[%d] * band.factor[%d]; precise float s = ch.c[%d] + o; ch.c[%d] = s; }\n", c, channel_order(c), base + c,
-                    base + c);
-        }
-        code += "    return ch;\n}\n\n";
-        code += p_spec.modulation ? shaped_band_function(p_spec, g) : ov::str();
-    }
-    code += "Ch flush(Ch ch) {\n";
-    for (int c = 0; c < nch; c++) {
-        const ov::str v = ov::format("ch.c[%d]", c);
-        code += "    " + v + " = " + glsl_flush_of(v) + ";\n";
-    }
-    code += "    return ch;\n}\n";
-    return code;
-}
-
-// The ground's other notes of each level (Spec::level_notes past the first) in the band table: level m's at
-// bands[first[m] .. first[m] + count[m]), past every group's BAND_ENTRIES, levels in order; each group's first bands at
-// group_base. Level m's range is data (its ground entry's offset_lo.w and offset_hi.w), so the text holds no note count.
-struct ExtraNotes {
-    int first[MAX_LEVEL + 1] = {};
-    int count[MAX_LEVEL + 1] = {};
-    int total = 0;
-
-    explicit ExtraNotes(const Spec &p_spec) {
-        int at = p_spec.group_count() * CascadeGLSL::BAND_ENTRIES;
-        for (int m = 0; m <= MAX_LEVEL; m++) {
-            first[m] = at;
-            count[m] = ov::max(0, p_spec.level_notes(m) - 1);
-            at += count[m];
-        }
-        total = at - p_spec.group_count() * CascadeGLSL::BAND_ENTRIES;
-    }
-    // Group p_g's first entry: a view without the fields reads the ground's at the same offsets.
-    static int group_base(int p_g) { return p_g * CascadeGLSL::BAND_ENTRIES; }
-};
-
-// Group g's band insertion: the constant one, or the modulated one from mod[p_mod] where the modulated mask has g.
-ov::str band_call(const Spec &p_spec, int p_g, const ov::str &p_mod) {
-    if (p_spec.modulation) {
-        return ov::format("ch = ((modulated >> %du) & 1u) != 0u ? insert_band_shaped_%d(ch, p, band, mod[%s], m) : insert_band_%d(ch, p, band);\n", p_g, p_g, p_mod, p_g);
-    }
-    return ov::format("ch = insert_band_%d(ch, p, band);\n", p_g);
-}
-
-// The ground's other notes of level m after its first (insert_point's order): ExtraNotes' range, read from level m's
-// ground entry; note e's BandMod slot note_mod(1 + e). Nothing where a level holds one note (Spec::max_level_notes).
-ov::str extra_notes_code(const Spec &p_spec) {
-    if (p_spec.max_level_notes() < 2) {
-        return ov::str();
-    }
-    // From the table, not literals: the extra notes sit past every group's entries, so a view without the fields
-    // (whose group count differs) reads the same range.
-    ov::str code = "    {\n        CascadeBand lead = bands[m];\n        int first = int(lead.offset_lo.w);\n        int count = int(lead.offset_hi.w);\n";
-    code += "        for (int e = 0; e < count; e++) {\n            CascadeBand band = bands[first + e];\n            ";
-    return code + band_call(p_spec, 0, ov::format("%d + e", p_spec.note_mod(1))) + "        }\n    }\n";
-}
-
-// The level's insertions (the template's /*INSERT_BANDS*/): the modulated amplitudes from the channels before any
-// insertion (p_derive: and the carry derived from them, into ch), then each group's band of level m
-// (bands[ExtraNotes::group_base(group) + m]), the ground's other notes after its first.
-ov::str insert_code(const Spec &p_spec, bool p_derive) {
-    ov::str code;
-    const char *at = p_derive ? ", p" : "";
-    if (p_spec.modulation) {
-        code += ov::format("    BandMod mod[%d];\n    uint modulated = cascade_mods(m, ch, mod%s);\n", p_spec.mod_count(), at);
-    }
-    for (int g = 0; g < p_spec.group_count(); g++) {
-        if (p_spec.group_bands(g).empty() && !p_spec.generic) {
-            continue; // a generic text inserts every group: the band table holds each one's entries, empty ones skipped
-        }
-        code += ov::format("    %s{\n        CascadeBand band = bands[%d + m];\n        if (band.info.x != 0u) {\n", g > 0 ? "if (g_field_bands) " : "",
-                ExtraNotes::group_base(g));
-        code += "            " + band_call(p_spec, g, ov::itos(p_spec.group_mod(g))) + "        }\n    }\n";
-        code += g == 0 ? extra_notes_code(p_spec) : ov::str();
-    }
     return code;
 }
 
@@ -540,43 +388,6 @@ uint cascade_vertex_material(uvec3 gid) {
 
 } // namespace
 
-ov::bytes band_table(const Spec &p_spec) {
-    using namespace WorldCoord;
-    const ExtraNotes extra(p_spec);
-    ov::bytes bytes((size_t(p_spec.group_count()) * BAND_ENTRIES + size_t(extra.total)) * BAND_BYTES, 0);
-    for (int g = 0; g < p_spec.group_count(); g++) {
-        for (const Band &b : p_spec.group_bands(g)) {
-            const int m = p_spec.insert_level(b);
-            OV_ERR_CONTINUE_MSG(m < 0 || m >= BAND_ENTRIES, ov::format("CascadeGLSL: band k=%d inserted outside the lattice table.", b.k));
-            const int rank = g == 0 ? p_spec.note_rank(b) : 0;
-            // A level's first band at its group's entry, the ground's other notes after the groups' (ExtraNotes).
-            const size_t base = (rank == 0 ? size_t(ExtraNotes::group_base(g) + m) : size_t(extra.first[m] + rank - 1)) * BAND_BYTES;
-            uint8_t *slot = bytes.data() + base;
-            OV_ERR_CONTINUE_MSG(ov::get_u32(slot + 48) != 0, ov::format("CascadeGLSL: two bands of a field on lattice %d (the GPU table holds one per level).", m));
-            for (int o = 0; o < 4; o++) {
-                // Cascade's BandFactors, the same float product.
-                ov::put_f32(slot + 4 * o, b.amp * ExactNoise::exact_pow2(-p_spec.insert_shift * o));
-            }
-            ov::put_u32(slot + 16, lo32(b.offset.x));
-            ov::put_u32(slot + 20, lo32(b.offset.y));
-            ov::put_u32(slot + 24, lo32(b.offset.z));
-            ov::put_s32(slot + 32, hi32(b.offset.x));
-            ov::put_s32(slot + 36, hi32(b.offset.y));
-            ov::put_s32(slot + 40, hi32(b.offset.z));
-            ov::put_u32(slot + 48, 1);
-            ov::put_u32(slot + 52, b.seed);
-            ov::put_u32(slot + 56, uint32_t(b.k));
-            ov::put_u32(slot + 60, uint32_t(b.stretch));
-        }
-    }
-    for (int m = 0; m < BAND_ENTRIES; m++) {
-        uint8_t *lead = bytes.data() + size_t(m) * BAND_BYTES; // the ground's entry of level m: its other notes' range
-        ov::put_u32(lead + 28, uint32_t(extra.first[m]));
-        ov::put_s32(lead + 44, extra.count[m]);
-    }
-    return bytes;
-}
-
 uint32_t scratch_points_a(int p_item_size) {
     const uint32_t n = uint32_t(level_bound(p_item_size, 1));
     return n * n * n;
@@ -587,14 +398,13 @@ uint32_t scratch_points_b(int p_item_size) {
     return n * n * n;
 }
 
-uint32_t vec4s_per_point(const Spec &p_spec, const FieldRange &p_range) {
-    // Fields carried nowhere (an empty FieldRange) take no scratch.
-    const int channels = p_range.empty() ? CHANNELS : p_spec.gpu_channels();
-    return vec4s_for(channels);
+uint32_t vec4s_per_point(const CascadeSource *p_sdf) {
+    ov::str err;
+    return uint32_t(Terrain::gpu_layout(*p_sdf->get_program(), err).channels);
 }
 
 void scratch_bytes(const CascadeSource *p_sdf, int p_item_size, uint64_t p_items, uint64_t &r_a, uint64_t &r_b) {
-    const uint64_t vec4_bytes = 16 * uint64_t(vec4s_per_point(*p_sdf->get_cascade(), field_range(p_sdf, p_item_size == 1)));
+    const uint64_t vec4_bytes = 16 * uint64_t(vec4s_per_point(p_sdf));
     r_a = p_items * scratch_points_a(p_item_size) * vec4_bytes;
     r_b = p_items * scratch_points_b(p_item_size) * vec4_bytes;
 }
@@ -603,66 +413,13 @@ bool ground_materials(const CascadeSource *p_sdf) {
     return p_sdf->samples_carry_materials();
 }
 
-FieldRange field_range(const CascadeSource *p_sdf, bool p_points) {
-    // The spec's (its modulation's levels, its ground terms' samples: point items too), and the chunks' pick.
-    FieldRange range = p_sdf->get_cascade()->field_range();
-    range.sample = range.sample || (!p_points && ground_materials(p_sdf));
-    return range;
-}
-
-namespace {
-
-// level_shader's cascade code for p_view's Ch (p_spec, on the whole spec's scratch planes): the flags of what the level
-// carries (Cascade::FieldRange p_range: the fields, and the carry groups g_carry_n the last level reads, loaded in the
-// samples' view, derived and stored in the fields' view at j = 1), the passes, the bands, the modulation and the derive,
-// then p_tail.
-ov::str view_code(const ov::str &p_code, const CascadeSource *p_sdf, const Spec &p_spec, const FieldRange &p_range, View p_view, const ov::str &p_tail,
-        ShaderParams &r_params) {
-    const Spec &whole = *p_sdf->get_cascade();
-    const bool climate = p_spec.modulation != nullptr;
-    const bool fields = p_view == View::FIELDS && climate;
-    const bool carry = climate && p_spec.gpu_carry_groups() > 0;
-    const bool carried = p_view == View::SAMPLES;
-    const bool derive = fields && carry;
-    ov::str flags;
-    ov::str flag_values;
-    if (fields) {
-        // FieldRange::carried(lod, m): m >= lowest(lod).
-        flags += "bool g_fields = true; // the fields are carried at this level (Cascade::FieldRange)\n";
-        flags += "bool g_field_bands = true; // and their bands inserted (FieldRange::inserted)\n";
-        flags += level_table("cascade_lowest_fields", [&](int p_lod) { return p_range.lowest(p_lod); }, r_params);
-        flag_values += "    g_fields = m >= cascade_lowest_fields(lod);\n    g_field_bands = m > cascade_lowest_fields(lod);\n";
-    }
-    if (carry) {
-        // FieldRange::carries: read on the last level, derived above it (the groups Modulation::carry_used says).
-        flags += "uint g_carry_n = 0u; // the carry groups the run's last level reads\n";
-        flags += level_table("cascade_carry_used", [&](int p_lod) { return p_range.reads_carry(p_lod) ? p_spec.modulation->carry_used(p_lod) : 0; }, r_params);
-        flag_values += ov::format("    g_carry_n = pc.j == %d ? uint(cascade_carry_used(lod)) : 0u;\n", carried ? 0 : 1);
-    }
-    const ov::str modulation = climate ? p_spec.modulation->glsl(p_spec, carried, derive, r_params) : ov::str();
-    // The climate's shared helpers (with a modulation or ground terms) and the shaped inserts' (BandMod), before every
-    // generated function that uses them.
-    const ov::str helpers = climate ? p_sdf->get_climate_helpers_glsl() + shaped_helpers() : ov::str();
-    const ov::str storage = storage_functions(p_spec, int(vec4s_per_point(whole, p_range)), int(whole.fields.size()), carried);
-    ov::str code = ov::replace_all(p_code, "/*CASCADE*/", (flags.empty() ? ov::str() : flags + "\n") + helpers + hermite_functions(p_spec, carried) + storage + band_functions(p_spec) + modulation + p_tail);
-    code = ov::replace_all(code, "/*INSERT_BANDS*/", insert_code(p_spec, derive));
-    code = ov::replace_all(code, "/*FIELDS_FLAG*/", flag_values);
-    // A chunk above the top band reading the carry starts one level higher, to derive it (Spec::run_top; an empty level,
-    // the same bits for one that doesn't).
-    return ov::replace_all(code, "/*TOP_ABOVE*/", carry ? " + 1" : "");
-}
-
-} // namespace
-
-ov::str level_shader(const CascadeSource *p_sdf, bool p_debug, bool p_points, bool p_fold, bool p_material, View p_view, bool p_cubes,
-        ShaderParams *r_params) {
+ov::str level_shader(const CascadeSource *p_sdf, bool p_debug, bool p_points, bool p_fold, bool p_material, bool p_cubes, ShaderParams *r_params) {
     ShaderParams own;
     ShaderParams &params = r_params != nullptr ? *r_params : own;
-    const Spec &whole = *p_sdf->get_cascade();
-    // The view's Ch on the whole spec's scratch planes: the ground alone (its bands, no modulation), or without the fields.
-    const Spec view = p_view == View::FIELDS ? whole : (p_view == View::SAMPLES ? whole.without_fields() : whole.ground_only());
-    const Spec *spec = &view;
-    const bool climate = spec->modulation != nullptr;
+    const Terrain::LevelProgram &prog = *p_sdf->get_program();
+    ov::str layout_error;
+    const Terrain::GpuLayout layout = Terrain::gpu_layout(prog, layout_error);
+    OV_ERR_FAIL_COND_V_MSG(!layout_error.empty(), ov::str(), "CascadeGLSL: " + layout_error);
     OV_ERR_FAIL_COND_V_MSG(p_debug && p_points, ov::str(), "CascadeGLSL: point items have no debug variant.");
     OV_ERR_FAIL_COND_V_MSG((p_fold || p_material) && p_points, ov::str(), "CascadeGLSL: only chunk items fold or carry a material.");
     const ItemFills &fills = p_points ? POINT_FILLS : CHUNK_FILLS;
@@ -679,10 +436,8 @@ ov::str level_shader(const CascadeSource *p_sdf, bool p_debug, bool p_points, bo
     code = ov::replace_all(code, "/*ITEM_EXTENT*/", fills.item_extent);
     code = ov::replace_all(code, "/*LEVEL0_OUTPUT*/", fills.level0_output);
     code = ov::replace_all(code, "/*AFTER_SAMPLE*/", cubes ? "\n    if (!sample_live) {\n        return; // past the fold's barriers\n    }" : "");
-    // The sample's ground channels: the cascade's, or climate_ground's with ground terms (a climate view: their field
-    // range reaches every sample, so no ground-only view is compiled).
-    const ov::str ground = climate && p_sdf->has_ground_terms() ? p_sdf->get_ground_glsl(*spec, params) : ov::str();
-    const ov::str c0 = ground.empty() ? ov::str("vec4(ch.c[0], ch.c[1], ch.c[2], ch.c[3])") : ov::str("climate_ground(ch, p, lod)");
+    // The run's last level returns the output in channel 0 (Terrain::level_run).
+    const ov::str c0 = "vec4(ch.c[0], ch.c[1], ch.c[2], ch.c[3])";
     code = ov::replace_all(code, "/*GROUND_C0*/", c0);
     const ov::str channels = c0 + ov::str(", p, lod");
     // The fold's workgroup box: its cube's first and last samples (the sample itself per sample).
@@ -690,16 +445,15 @@ ov::str level_shader(const CascadeSource *p_sdf, bool p_debug, bool p_points, bo
     code = ov::replace_all(code, "/*SAMPLE_SDF*/", p_fold ? ov::format("cascade_sample_sdf(%s, %s, pc.chunk_base + c, material, skirt_extra)", channels, cube_box) : ov::format("cascade_terrain_sdf(%s)", channels));
     // Without ground materials only the fold writes materials, and only for chunks with a list: a chunk without one is
     // ground, and the meshers don't read its samples' materials (its palette is the ground block, or its list is empty).
-    // With them every chunk's samples get one: the winner's, or the ground's pick, derived on the level above (field_range
-    // then carries the climate to every sample, so no ground-only view is compiled).
+    // With them every chunk's samples get one: the winner's, or the ground's pick (channel 1 of the last level).
     const bool grounds = ground_materials(p_sdf) && !p_points;
     const bool store = p_material && (p_fold || grounds);
-    const bool pick = grounds && climate && !whole.fields.empty();
+    const ov::str ground_material = grounds ? p_sdf->get_ground_material_glsl() : ov::str();
     code = ov::replace_all(code, "/*MATERIAL_BUFFER*/", store ? glsl_material_buffer(MATERIAL_BINDING, "writeonly") : ov::str());
     ov::str material_store;
     if (store && grounds) {
         // Air samples (w > 0, after the skirt) keep 0: the meshers read a vertex's material from its cell's solid corners.
-        material_store = ov::str(pick ? "if (material == 0u && !(r.w > 0.0)) {\n        material = cascade_ground_material(ch);\n    }\n    " : "") +
+        material_store = ov::str(!ground_material.empty() ? "if (material == 0u && !(r.w > 0.0)) {\n        material = cascade_ground_material(ch);\n    }\n    " : "") +
                 "sdf_material[sample_index] = material;";
     } else if (store) {
         material_store = "if (g_sdf_chunk.anchor_hi.w > 0) {\n        sdf_material[sample_index] = material;\n    }";
@@ -709,15 +463,19 @@ ov::str level_shader(const CascadeSource *p_sdf, bool p_debug, bool p_points, bo
     code = ov::replace_all(code, "/*TABLE_BUFFERS*/", p_fold ? p_sdf->get_table_glsl(TABLE_RECORD_BINDING, TABLE_LIST_BINDING) : ov::str());
     code = ov::replace_all(code, "/*HELPERS*/", ov::str(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + (p_points ? GPUFrame::glsl_point_frame() : ov::str()) + GPUFrame::glsl_int64() + ov::str(GLSL_EXACT_NOISE));
     code = ov::replace_all(code, "/*TERRAIN_SDF*/", p_sdf->get_glsl_code(params) + (p_fold ? (cubes ? ov::str(LEVEL_POINT) : ov::str()) + p_sdf->get_sample_fold_glsl(cubes ? LOCAL_SIZE : 0) : ov::str()));
-    const ov::str tail = (pick ? p_sdf->get_ground_material_glsl(*spec) : ov::str()) + ground;
-    code = view_code(code, p_sdf, *spec, field_range(p_sdf, p_points), p_view, tail, params);
+    // The op table's helpers (the climate's duals, smooth min, curves, the forms' own; the base's stretch is get_glsl_code's), the level
+    // flags, Ch and its passes, then the program.
+    const ov::str helpers = Climate::shared_helpers_glsl() + Climate::smooth_min_glsl() + Climate::curve_at_glsl() + Terrain::glsl_helpers();
+    const ov::str program = Terrain::level_flags_glsl(prog, layout, params) + "\n" + helpers + hermite_functions(layout.channels) + storage_functions(layout.channels) +
+            Terrain::level_glsl(prog, layout, params) + ground_material;
+    code = ov::replace_all(code, "/*CASCADE*/", program);
     const ov::str debug_store = ov::str(cubes ? "if (sample_live) " : "") + "store_debug(sample_index, ch); // CascadeSpike variant";
     code = ov::replace_all(code, "/*DEBUG_STORE*/", p_debug ? debug_store : ov::str());
-    // Last: the block holds every number the generators took (a generic climate's at its largest: its size in the text).
+    // Last: the block holds every number the generators took (a generic program's at its largest: its size in the text).
     const int64_t heap = int64_t(params.values.size());
     params.values.insert(params.values.end(), params.heap.begin(), params.heap.end());
     params.heap.clear();
-    if (whole.generic) {
+    if (prog.generic) {
         OV_ERR_FAIL_COND_V_MSG(params.values.size() * sizeof(float) > MAX_PARAM_BYTES, ov::str(), "CascadeGLSL: more shader params than a uniform block holds.");
         params.values.resize(MAX_PARAM_BYTES / sizeof(float), 0.0f);
     }

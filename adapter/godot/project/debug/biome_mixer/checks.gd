@@ -1,7 +1,7 @@
 extends RefCounted
 ## The biome mixer's headless self-test (mixer.gd --check): every engine kind has the mixer's UI; world.json read as the
 ## mixer's world is the same file; every biome, and a graph of every kind, drawn by the engine and every node's GraphNode
-## built; edits (a row out, a node out, a loop refused, mute) still drawn; the export written, read back the same, and
+## built; edits (a row out, a node out, a loop the engine refuses, mute) still drawn; the export written, read back the same, and
 ## refused when the engine refuses. run() returns the report (its "ok" the verdict).
 
 const EngineInfo := preload("res://debug/biome_mixer/engine_info.gd")
@@ -81,7 +81,8 @@ static func whole(p_world: Dictionary) -> Dictionary:
 
 
 # p_world with one biome more, the last (the default): a graph of every kind of node the engine has, wired as it reads
-# them (notes, one warped by a coarser one, shapes, a multifractal, a mix, then every sample op, a curve, the output).
+# them (notes, one warped by a coarser one, one by a warp's x, y, z ports, shapes, a multifractal of a shaped parent, a
+# mix, then every other op, a curve, the output).
 static func every_kind(p_world: Dictionary) -> Dictionary:
 	var w: Dictionary = p_world.duplicate(true)
 	var g := {"nodes": []}
@@ -90,16 +91,20 @@ static func every_kind(p_world: Dictionary) -> Dictionary:
 	var n0: String = add.call("note", {"wavelength_m": 1638.4, "seed": 5, "amp_m": 0.5})
 	var wp: String = add.call("warp", {"in": n0, "amount_m": 30.0})
 	var n1: String = add.call("note", {"wavelength_m": 409.6, "seed": 1, "amp_m": 20.0, "warp": wp})
-	var n2: String = add.call("note", {"wavelength_m": 102.4, "seed": 2, "amp_m": 5.0, "stretch_y": 2})
+	var r0: String = add.call("shape", {"in": n0, "shape": "ridged"})
+	var xyz: String = add.call("warp", {"x": n0, "y": r0, "z": n1, "amount_m": 4.0})
+	var n2: String = add.call("note", {"wavelength_m": 102.4, "seed": 2, "amp_m": 5.0, "stretch_y": 2, "warp": xyz})
 	var s1: String = add.call("shape", {"in": n1, "shape": "ridged"})
-	var mf: String = add.call("multifractal", {"in": s1, "parent": n0, "low_m": -0.5, "high_m": 0.5})
+	var mf: String = add.call("multifractal", {"in": s1, "parent": r0, "low_m": 0.0, "high_m": 0.5})
 	var s2: String = add.call("shape", {"in": n2, "coeffs": [0.0, 0.0, 1.0, 0.0]})
 	var mix: String = add.call("mix", {"rows": [{"in": mf, "x": 1.0}, {"in": s2, "x": 0.5}]})
 	var c: String = add.call("constant", {"value_m": 10.0})
 	var fd: String = add.call("field", {})
+	# A cave's form: smin of the ground and up minus a depth.
+	var cave: String = add.call("subtract", {"a": add.call("up", {}), "b": c})
 	var last := mix
 	for op in ["add", "subtract", "multiply", "min", "max", "smin", "smax"]:
-		var b := c if op != "multiply" else fd
+		var b := fd if op == "multiply" else cave if op == "smin" else c
 		last = add.call(op, {"a": last, "b": b, "k_m": 5.0} if op.begins_with("s") and op != "subtract" else {"a": last, "b": b})
 	var cv: String = add.call("curve", {"in": last, "points": Kinds.identity_curve(500.0)})
 	add.call("output", {"height": cv})
@@ -114,7 +119,8 @@ static func every_kind(p_world: Dictionary) -> Dictionary:
 
 
 # Edits on world.json's biomes, each still drawn by the engine: the mountain's first mix row out (one row less, its note
-# stays), a shape node out (what read it reads its note), a loop refused, a muted row heard at volume 0.
+# stays), a shape node out (what read it reads its note), a loop linked and refused by the engine then taken out, a
+# muted row heard at volume 0.
 static func edits(p_mixer: Object) -> Dictionary:
 	var w := World.read(EngineInfo.WORLD)
 	var i: int = w.biomes.map(func(b): return b.name).find("warped")
@@ -134,7 +140,12 @@ static func edits(p_mixer: Object) -> Dictionary:
 	var under := String(Graph.node(g, shape).get("in", ""))
 	Graph.delete(g, [shape])
 	r.node = Graph.node(g, shape).is_empty() and not Graph.links(g).any(func(l): return l.from == shape) and Graph.links(g).any(func(l): return l.from == under)
-	r.loop_refused = Graph.reads(g, mix, under) and not Graph.reads(g, under, mix)
+	var sum := Graph.add(g, "add", Vector2.ZERO, w.fields, {"a": mix, "b": under})
+	Graph.link(g, sum, mix, Graph.rows(Graph.node(g, mix)).size())
+	var looped := drawn(p_mixer, w, i)
+	r.loop_refused = not looped.ok and String(looped.engine).contains("loops")
+	r.loop_message = looped.engine
+	Graph.delete(g, [sum])
 	r.drawn = drawn(p_mixer, w, i).ok
 	p_mixer.model = w.biomes[i]
 	p_mixer.set_row_flag(mix, 0, "mute", true)

@@ -40,7 +40,7 @@ static func param(p_kind: String, p_name: String) -> Dictionary:
 	return {}
 
 
-# A new biome named p_name: the engine's template (Climate::template_biome).
+# A new biome named p_name: the engine's template (its world file, SDFCascade::template_path).
 static func template_biome(p_name: String) -> Dictionary:
 	return ClassDB.class_call_static("ClimateReportNode", "template_biome", voxel_m, p_name)
 

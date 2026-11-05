@@ -3,10 +3,12 @@
 #include "cascade.hpp"
 #include "cascade_check_points.hpp"
 #include "cascade_check_sets.hpp"
-#include "cascade_measure.hpp"
+
 #include "cascade_passes.hpp"
 #include "debug_log.hpp"
 #include "gpu_frame.hpp"
+#include "level_glsl.hpp"
+#include "parallel_for.hpp"
 #include "sdf_cascade.hpp"
 
 #include "ov/clock.hpp"
@@ -32,6 +34,9 @@ constexpr uint32_t MAX_BATCH = 128;
 constexpr int CHUNKS_PER_PLACE = 14;
 constexpr int CHILDREN = 8;
 constexpr uint32_t TIMING_CHUNKS = 128;
+// The most bytes of last-level channels a slice of a batch reads back (SetChecker::run): the generic text's Ch holds
+// MAX_CHANNELS channels, and a whole batch of them took gigabytes on the host beside the CPU levels.
+constexpr uint64_t SLICE_BYTES = uint64_t(256) << 20;
 
 struct TestChunk {
     ChunkId id;
@@ -98,7 +103,6 @@ struct Checks {
     int64_t samples_differing = 0;
     int64_t relation_points = 0;
     int64_t relation_differing = 0;
-    int64_t relation_modulated = 0; // G3 pairs at a modulated level: no prediction (check_relation)
     int64_t chunks = 0;
     int64_t levels = 0;
     std::vector<int64_t> chunks_per_lod;
@@ -112,20 +116,31 @@ struct Checks {
             examples.push_back(p_text);
         }
     }
+    // A chunk's tally (its comparisons run in parallel, one tally per chunk, merged in chunk order).
+    void merge(const Checks &p_t) {
+        values += p_t.values;
+        differing += p_t.differing;
+        samples += p_t.samples;
+        samples_differing += p_t.samples_differing;
+        relation_points += p_t.relation_points;
+        relation_differing += p_t.relation_differing;
+        levels += p_t.levels;
+        for (size_t i = 0; i < p_t.examples.size(); i++) {
+            example(p_t.examples[i].as_str());
+        }
+    }
 };
 
-// One set: every batch through the GPU passes level by level, compared with Cascade::run.
+// One set: every batch through the GPU passes level by level, compared with Terrain::run (G1: every channel of every
+// level, bits) and the GPU's own level relation (G3).
 class SetChecker {
 public:
     SetChecker(ov::gpu::Device *p_device, SpikeSet p_set, const ov::str &p_world, const ChunkParam &p_param, Checks &r_checks) :
             device(p_device), set(p_set), param(p_param), checks(r_checks) {
         lods = configure_variant(sdf, p_set, p_world, param);
-        // The channels the GPU carries (an empty FieldRange: the ground's only): the chunk passes' range, every level with
-        // the biome pick (CascadeGLSL::field_range); the CPU's runs carry the same.
-        range = CascadeGLSL::field_range(&sdf, false);
-        all_fields = range.everywhere();
-        nch = range.empty() ? CHANNELS : sdf.get_spec().gpu_channels();
-        nv = CascadeGLSL::vec4s_per_point(sdf.get_spec(), range);
+        ov::str err;
+        layout = Terrain::gpu_layout(sdf.program(), err);
+        nv = uint32_t(layout.channels);
         cs = p_param.chunk_size;
         cells = uint64_t(cs) * cs * cs;
         input = device->create_buffer(ov::gpu::BufferKind::STORAGE, MAX_BATCH * GPUFrame::CHUNK_INPUT_BYTES);
@@ -155,8 +170,15 @@ public:
         }
         checks.chunks_per_lod.resize(lods);
         checks.differing_per_lod.resize(lods);
+        const uint64_t n = uint64_t(level_bound(cs, 0));
+        const size_t slice = size_t(ov::max(uint64_t(1), SLICE_BYTES / (n * n * n * nv * 16)));
         for (int lod = 0; lod < lods; lod++) {
-            run_batch(lod);
+            std::vector<Pair> pairs;
+            const std::vector<TestChunk> batch = batch_chunks(lod, lods, param, pairs);
+            for (size_t at = 0; at < batch.size(); at += slice) {
+                const size_t end = ov::min(at + slice, batch.size());
+                run_batch(std::vector<TestChunk>(batch.begin() + std::ptrdiff_t(at), batch.begin() + std::ptrdiff_t(end)));
+            }
         }
     }
 
@@ -167,10 +189,8 @@ private:
     ChunkParam param;
     Checks &checks;
     SDFCascade sdf;
-    int nch = 0;
+    Terrain::GpuLayout layout;
     uint32_t nv = 0;
-    FieldRange range;
-    bool all_fields = false;
     int cs = 0;
     uint64_t cells = 0;
     ov::gpu::Buffer input;
@@ -181,24 +201,51 @@ private:
     CascadePasses passes;
     CascadePasses debug_passes;
 
-    // The batch being checked: its chunks, their Λ_L boxes and every CPU level (top first).
+    // The slice of a batch being checked: its chunks, their Λ_L boxes and every CPU level (top first), each holding only
+    // the nodes the checks read (keep_compared).
     std::vector<TestChunk> chunks;
     std::vector<Box> boxes;
-    std::vector<std::vector<Level>> cpu;
+    std::vector<std::vector<Terrain::Values>> cpu;
 
-    void run_batch(int p_lod) {
-        std::vector<Pair> pairs;
-        chunks = batch_chunks(p_lod, lods, param, pairs);
+    // Frees p_level's slots no check reads: a CPU level holds every node it computes (hundreds on a climate), the checks
+    // only its GPU channels (channel_node).
+    void keep_compared(Terrain::Values &r_level, int p_lod) const {
+        // ch: CHANNELS vectors per slot (Terrain::Values::at)
+        std::vector<bool> keep(r_level.ch.size() / CHANNELS, false);
+        for (size_t k = 0;; k++) {
+            const int node = channel_node(p_lod, r_level.m, k);
+            if (node < 0) {
+                break;
+            }
+            if (r_level.has(node)) {
+                keep[size_t(r_level.slot[size_t(node)])] = true;
+            }
+        }
+        for (size_t i = 0; i < r_level.ch.size(); i++) {
+            if (!keep[i / CHANNELS]) {
+                std::vector<float>().swap(r_level.ch[i]);
+            }
+        }
+    }
+
+    void run_batch(std::vector<TestChunk> p_chunks) {
+        chunks = std::move(p_chunks);
         const uint32_t count = uint32_t(chunks.size());
-        cpu.assign(count, std::vector<Level>());
+        cpu.assign(count, std::vector<Terrain::Values>());
         boxes.assign(count, Box());
         ov::bytes ids;
         ids.resize(count * GPUFrame::CHUNK_INPUT_BYTES);
         int min_lod = 64;
         int max_lod = 0;
+        // The CPU levels, a chunk per task (a climate's run takes 0.1 to 0.3 s a chunk).
+        parallel_for(count, "CascadeCheck::cpu", [&](uint32_t p_c) {
+            boxes[p_c] = chunk_box(chunks[p_c].id, param);
+            Terrain::run(sdf.program(), boxes[p_c], chunks[p_c].lod, &cpu[p_c]);
+            for (Terrain::Values &level : cpu[p_c]) {
+                keep_compared(level, chunks[p_c].lod);
+            }
+        });
         for (uint32_t c = 0; c < count; c++) {
-            boxes[c] = chunk_box(chunks[c].id, param);
-            Cascade::run(sdf.get_spec(), boxes[c], chunks[c].lod, &cpu[c], all_fields);
             GPUFrame::encode_chunk_input(ids, c, chunks[c].id, param);
             min_lod = ov::min(min_lod, chunks[c].lod);
             max_lod = ov::max(max_lod, chunks[c].lod);
@@ -207,108 +254,119 @@ private:
         checks.chunks += count;
         passes.upload_items(ids.data(), count);
         debug_passes.upload_items(ids.data(), count); // the same input: its own regions
-        ov::bytes final_channels;
+        ov::bytes above; // level j = 1's scratch (G3)
         for (int j = passes.level_count(min_lod) - 1; j >= 0; j--) {
             passes.record_level(j, 0, count, ov::ivec2(min_lod, max_lod));
             if (j == 0) {
                 debug_passes.record_level(0, 0, count, ov::ivec2(min_lod, max_lod));
             }
             device->sync();
-            const uint64_t n = uint64_t(level_bound(cs, j));
-            const uint64_t bytes = count * n * n * n * nv * 16;
             if (j > 0) {
                 // The scratch is planar (vec4 v of every slot together): the whole buffer.
                 const ov::bytes scratch = read_bytes(device, (j & 1) ? passes.get_scratch_a() : passes.get_scratch_b());
                 compare_level(j, scratch, ov::bytes(), uint64_t(scratch.size()) / 16 / nv);
+                above = j == 1 ? scratch : above;
                 continue;
             }
-            final_channels = read_bytes(device, debug, 0, bytes);
+            const uint64_t n = uint64_t(level_bound(cs, 0));
+            const ov::bytes final_channels = read_bytes(device, debug, 0, count * n * n * n * nv * 16);
             const ov::bytes final_samples = read_bytes(device, samples, 0, count * cells * 16);
             // The debug variant's samples must be the same bits as the meshers' variant's.
             if (read_bytes(device, debug_samples, 0, count * cells * 16) != final_samples) {
                 checks.samples_differing++;
-                checks.example("set " + set_label(set) + ov::format(" LOD %d batch: the debug variant's samples differ from the meshers' variant's", p_lod));
+                checks.example("set " + set_label(set) + ov::format(" LOD %d batch: the debug variant's samples differ from the meshers' variant's", min_lod));
             }
             compare_level(0, final_channels, final_samples);
-        }
-        for (const Pair &pair : pairs) {
-            check_relation(pair, reinterpret_cast<const float *>(final_channels.data()));
+            if (!above.empty()) {
+                check_relation(above, final_channels);
+            }
         }
     }
 
+    // The nodes GPU channel k of level m holds (Terrain::GpuLayout::chan; a run's last level: the output, then the pick).
+    int channel_node(int p_lod, int p_m, size_t p_k) const {
+        if (p_m == p_lod) {
+            return p_k == 0 ? sdf.program().output : (p_k == 1 ? sdf.program().pick : -1);
+        }
+        const std::vector<int> &c = layout.chan[size_t(p_m)];
+        return p_k < c.size() ? c[p_k] : -1;
+    }
+
+    // A GPU channel's 4 floats (Cascade::Channel order) of slot p_slot: planar scratch (p_plane vec4s per plane) or the
+    // per-point debug channels (p_plane 0).
+    const float *gpu_channel(const float *p_gpu, uint64_t p_slot, size_t p_k, uint64_t p_plane) const {
+        return p_plane > 0 ? p_gpu + (uint64_t(p_k) * p_plane + p_slot) * 4 : p_gpu + (p_slot * nv + p_k) * 4;
+    }
+
     // Level j of every chunk of the batch (GPU layout: x fastest, stride level_bound(j)) against the CPU's
-    // (x slowest); at j = 0 also the samples against SDFCascade::sdf + skirt of the CPU channels. p_plane: the planar
-    // scratch's plane (vec4s), 0 for the per-point debug channels.
+    // (x slowest): every channel the level carries (the last level: the output and the pick's value); at j = 0 also the
+    // samples against SDFCascade::sdf + skirt of the CPU output.
     void compare_level(int p_j, const ov::bytes &p_data, const ov::bytes &p_samples, uint64_t p_plane = 0) {
         const float *gpu = reinterpret_cast<const float *>(p_data.data());
         const uint64_t n = uint64_t(level_bound(cs, p_j));
         const uint64_t points = n * n * n;
-        const Spec &spec = sdf.get_spec();
-        // The ground everywhere, the fields where the range carries them, the carry groups the last level reads on it and on
-        // the level above, which derives them (the GPU stores no other).
-        auto compared = [&](int p_lod, int p_m, int p_ch) {
-            if (p_ch < CHANNELS) {
-                return true;
-            }
-            if (p_ch < spec.gpu_carry(0)) {
-                // Stored where a level below loads them (the CPU's all_fields run inserts them on the lowest level too).
-                return range.inserted(p_lod, p_m);
-            }
-            return range.carries(p_lod, p_m) && (p_ch - spec.gpu_carry(0)) / FIELD_CHANNELS < spec.modulation->carry_used(p_lod);
-        };
-        for (uint32_t c = 0; c < uint32_t(chunks.size()); c++) {
+        std::vector<Checks> tally(chunks.size());
+        parallel_for(uint32_t(chunks.size()), "CascadeCheck::compare_level", [&](uint32_t c) {
+            Checks &t = tally[c];
             const int lod_c = chunks[c].lod;
-            const int top_c = spec.run_top(lod_c, all_fields);
+            const int top_c = ov::max(sdf.program().top, lod_c);
             const int m = lod_c + p_j;
             if (m > top_c) {
-                continue;
+                return;
             }
-            const Level &level = cpu[c][size_t(top_c - m)];
-            OV_ERR_CONTINUE(level.m != m);
-            checks.levels++;
+            const Terrain::Values &level = cpu[c][size_t(top_c - m)];
+            OV_ERR_FAIL_COND(level.m != m);
+            t.levels++;
             const Box &box = level.box;
             int64_t differing = 0;
             for_each_point(box, [&](const Vector3i64 &p_p, int64_t p_cpu_i) {
                 const Vector3i64 i = p_p - Vector3i64(box.lo[0], box.lo[1], box.lo[2]);
                 const uint64_t slot = c * points + uint64_t(i.x) + n * (uint64_t(i.y) + n * uint64_t(i.z));
-                for (int ch = 0; ch < nch; ch++) {
-                    if (!compared(lod_c, m, ch)) {
-                        continue;
+                for (size_t k = 0;; k++) {
+                    const int node = channel_node(lod_c, m, k);
+                    if (node < 0) {
+                        break;
                     }
-                    const float want = level.ch[spec.slot_of_gpu(ch)][size_t(p_cpu_i)];
-                    const float got = p_plane > 0 ? gpu[(uint64_t(ch / 4) * p_plane + slot) * 4 + ch % 4] : gpu[slot * nv * 4 + ch];
-                    checks.values++;
-                    if (float_bits(want) != float_bits(got)) {
-                        differing++;
-                        if (checks.wants_example()) {
-                            checks.example(ov::format("set %s LOD %d chunk %s (%s) level m=%d point %s channel %d: gpu %s cpu %s (bits %x / %x)", set_label(set), lod_c,
-                                    WorldCoord::to_string(chunks[c].id), chunks[c].place, m, WorldCoord::to_string(p_p), ch, got, want, float_bits(got), float_bits(want)));
+                    float want[CHANNELS];
+                    level.channels(node, p_cpu_i, want);
+                    const float *got = gpu_channel(gpu, slot, k, p_plane);
+                    for (int ch = 0; ch < (p_j == 0 && k == 1 ? 1 : CHANNELS); ch++) {
+                        t.values++;
+                        if (float_bits(want[ch]) != float_bits(got[ch])) {
+                            differing++;
+                            if (t.wants_example()) {
+                                t.example(ov::format("set %s LOD %d chunk %s (%s) level m=%d point %s node %d channel %d: gpu %s cpu %s (bits %x / %x)", set_label(set), lod_c,
+                                        WorldCoord::to_string(chunks[c].id), chunks[c].place, m, WorldCoord::to_string(p_p), node, ch, got[ch], want[ch], float_bits(got[ch]),
+                                        float_bits(want[ch])));
+                            }
                         }
                     }
                 }
                 if (p_j == 0) {
-                    compare_sample(c, level, p_p, i, size_t(p_cpu_i), reinterpret_cast<const float *>(p_samples.data()) + slot * 4);
+                    compare_sample(c, level, p_p, i, p_cpu_i, reinterpret_cast<const float *>(p_samples.data()) + slot * 4, t);
                 }
             });
-            checks.differing += differing;
-            checks.differing_per_lod[size_t(lod_c)] += differing;
+            t.differing += differing;
+        });
+        for (size_t c = 0; c < tally.size(); c++) {
+            checks.merge(tally[c]);
+            checks.differing_per_lod[size_t(chunks[c].lod)] += tally[c].differing;
         }
     }
 
-    void compare_sample(uint32_t p_chunk, const Level &p_level, const Vector3i64 &p_p, const Vector3i64 &p_grid, size_t p_cpu_i, const float *p_got) {
-        // The sample's ground channels (the climate's ground terms on the slots, SDFCascade::ground_channels).
-        float slots[SLOTS], ch[CHANNELS];
-        p_level.slots_at(int64_t(p_cpu_i), slots);
+    void compare_sample(uint32_t p_chunk, const Terrain::Values &p_level, const Vector3i64 &p_p, const Vector3i64 &p_grid, int64_t p_cpu_i, const float *p_got,
+            Checks &r_t) const {
+        float ch[CHANNELS];
+        p_level.channels(sdf.program().output, p_cpu_i, ch);
         const int lod = chunks[p_chunk].lod;
-        sdf.ground_channels(slots, p_p * (int64_t(1) << lod), lod, ch);
         const ExactNoise::Float4 want = sdf.with_skirt(sdf.sdf(ch, p_p * (int64_t(1) << lod), lod), lod, Float3{ float(p_grid.x), float(p_grid.y), float(p_grid.z) });
         const float w[4] = { want.x, want.y, want.z, want.w };
-        checks.samples++;
+        r_t.samples++;
         for (int k = 0; k < 4; k++) {
             if (float_bits(w[k]) != float_bits(p_got[k])) {
-                checks.samples_differing++;
-                if (checks.wants_example()) {
-                    checks.example(ov::format("set %s LOD %d chunk %s sample %s: gpu (%s %s %s %s) cpu (%s %s %s %s)", set_label(set), lod,
+                r_t.samples_differing++;
+                if (r_t.wants_example()) {
+                    r_t.example(ov::format("set %s LOD %d chunk %s sample %s: gpu (%s %s %s %s) cpu (%s %s %s %s)", set_label(set), lod,
                             WorldCoord::to_string(chunks[p_chunk].id), WorldCoord::to_string(p_grid), p_got[0], p_got[1], p_got[2], p_got[3], w[0], w[1], w[2], w[3]));
                 }
                 return;
@@ -316,48 +374,66 @@ private:
         }
     }
 
-    // G3: the GPU's Λ_L channels of a child against its parent's Λ_{L+1} channels at the points they share:
-    // V_L = flush(V_{L+1} * 2^-order + O_L).
-    void check_relation(const Pair &p_pair, const float *p_channels) {
-        const Spec &spec = sdf.get_spec();
-        const Box &cb = boxes[p_pair.child];
-        const Box &pb = boxes[p_pair.parent];
-        const int lod = chunks[p_pair.child].lod;
-        // A child modulated at its own level reads the carry its level L + 1 derives from the fields, which the parent
-        // chunk's samples (LOD L + 1) don't carry: no prediction from its readback there.
-        if (spec.modulation && spec.modulation->modulated(lod) != 0u) {
-            checks.relation_modulated++;
-            return;
-        }
-        auto at = [&](size_t p_chunk, const Box &p_box, const Vector3i64 &p_p, int p_ch) {
-            const uint64_t slot = p_chunk * cells + uint64_t(p_p.x - p_box.lo[0]) + uint64_t(cs) * (uint64_t(p_p.y - p_box.lo[1]) + uint64_t(cs) * uint64_t(p_p.z - p_box.lo[2]));
-            return p_channels[slot * nv * 4 + p_ch];
-        };
-        for_each_point(cb, [&](const Vector3i64 &p_p, int64_t) {
-            const Vector3i64 q(p_p.x / 2, p_p.y / 2, p_p.z / 2);
-            if (((p_p.x | p_p.y | p_p.z) & 1) != 0 || !pb.contains(q)) {
-                return;
+    // G3, per channel, on the GPU's own values: at the copy points of each chunk's Λ_L (even indices), V_L is the GPU's
+    // Λ_{L+1} channels copied (Hermite's copy: each slope halved per axis, the pick as it is), flushed, then level L's
+    // code (LevelProgram::last_code, the op table's CPU forms): its output and pick must be the GPU's, bit for bit.
+    void check_relation(const ov::bytes &p_above, const ov::bytes &p_final) {
+        const Terrain::LevelProgram &prog = sdf.program();
+        const float *above = reinterpret_cast<const float *>(p_above.data());
+        const float *last = reinterpret_cast<const float *>(p_final.data());
+        const uint64_t plane = uint64_t(p_above.size()) / 16 / nv;
+        const uint64_t n1 = uint64_t(level_bound(cs, 1));
+        std::vector<Checks> tally(chunks.size());
+        parallel_for(uint32_t(chunks.size()), "CascadeCheck::check_relation", [&](uint32_t c) {
+            Checks &t = tally[c];
+            std::vector<ExactNoise::Float4> v(prog.nodes.size());
+            const int lod = chunks[c].lod;
+            if (lod >= prog.top) {
+                return; // no level above it
             }
-            // H(V_{L+1}) at a copy point (every slot, the fields' too), then Λ_L's insertions (Cascade::insert_at).
-            float expect[SLOTS] = {};
-            for (int ch = 0; ch < nch; ch++) {
-                const int local = ch % CHANNELS;
-                expect[spec.slot_of_gpu(ch)] = at(p_pair.parent, pb, q, ch) * exact_pow2(-channel_order(local));
-            }
-            insert_at(spec, lod, p_p, expect);
-            checks.relation_points++;
-            // The ground: a run's last level carries no field, and its carry is derived from the level above's.
-            for (int ch = 0; ch < CHANNELS; ch++) {
-                if (float_bits(flush_value(expect[spec.slot_of_gpu(ch)])) != float_bits(at(p_pair.child, cb, p_p, ch))) {
-                    checks.relation_differing++;
-                    if (checks.wants_example()) {
-                        checks.example(ov::format("set %s G3 LOD %d child %s point %s channel %d", set_label(set), lod, WorldCoord::to_string(chunks[p_pair.child].id),
-                                WorldCoord::to_string(p_p), ch));
-                    }
+            const std::vector<int> code = prog.last_code(lod);
+            const Box &cb = boxes[c];
+            const Box pb = level_box(cb, 1);
+            for_each_point(cb, [&](const Vector3i64 &p_p, int64_t) {
+                if (((p_p.x | p_p.y | p_p.z) & 1) != 0) {
                     return;
                 }
-            }
+                const Vector3i64 q(p_p.x / 2 - pb.lo[0], p_p.y / 2 - pb.lo[1], p_p.z / 2 - pb.lo[2]);
+                const uint64_t pslot = c * n1 * n1 * n1 + uint64_t(q.x) + n1 * (uint64_t(q.y) + n1 * uint64_t(q.z));
+                const std::vector<int> &in = layout.chan[size_t(lod + 1)];
+                for (size_t k = 0; k < in.size(); k++) {
+                    const float *g = gpu_channel(above, pslot, k, plane);
+                    const bool pick = int(in[k]) == layout.pick_node;
+                    const float s = pick ? 1.0f : 0.5f;
+                    v[size_t(in[k])] = ExactNoise::Float4{ flush_value(g[DX] * s), flush_value(g[DY] * s), flush_value(g[DZ] * s), flush_value(g[VALUE]) };
+                }
+                std::vector<ExactNoise::Float4> args;
+                for (const int node : code) {
+                    const Terrain::Node &nd = prog.nodes[size_t(node)];
+                    args.clear();
+                    for (const int i : nd.in) {
+                        args.push_back(v[size_t(i)]);
+                    }
+                    v[size_t(node)] = Terrain::eval_node(prog, nd, args.data(), Terrain::OpPoint{ p_p, lod });
+                }
+                const Vector3i64 i = p_p - Vector3i64(cb.lo[0], cb.lo[1], cb.lo[2]);
+                const uint64_t slot = c * cells + uint64_t(i.x) + uint64_t(cs) * (uint64_t(i.y) + uint64_t(cs) * uint64_t(i.z));
+                const float *out = gpu_channel(last, slot, 0, 0);
+                const ExactNoise::Float4 &o = v[size_t(prog.output)];
+                t.relation_points++;
+                const bool same = float_bits(o.w) == float_bits(out[VALUE]) && float_bits(o.x) == float_bits(out[DX]) && float_bits(o.y) == float_bits(out[DY]) &&
+                        float_bits(o.z) == float_bits(out[DZ]) && float_bits(v[size_t(prog.pick)].w) == float_bits(gpu_channel(last, slot, 1, 0)[VALUE]);
+                if (!same) {
+                    t.relation_differing++;
+                    if (t.wants_example()) {
+                        t.example(ov::format("set %s G3 LOD %d chunk %s point %s", set_label(set), lod, WorldCoord::to_string(chunks[c].id), WorldCoord::to_string(p_p)));
+                    }
+                }
+            });
         });
+        for (const Checks &t : tally) {
+            checks.merge(t);
+        }
     }
 };
 
@@ -398,16 +474,12 @@ void compare_table_chunk(const SDFCascade &p_sdf, const Archetype::InstanceSnaps
     std::vector<uint32_t> list;
     p_snap.chunk_list(p_id, list);
     const Box box = chunk_box(p_id, p_param);
-    std::vector<Level> levels;
-    Cascade::run(p_sdf.get_spec(), box, p_lod, &levels);
-    const Level &level = levels.back();
+    const Terrain::Values level = Terrain::run(p_sdf.program(), box, p_lod);
     const uint64_t cs = uint64_t(p_param.chunk_size);
     for_each_point(box, [&](const Vector3i64 &p_p, int64_t p_cpu_i) {
         const Vector3i64 i = p_p - Vector3i64(box.lo[0], box.lo[1], box.lo[2]);
         float ch[CHANNELS] = {};
-        for (int k = 0; k < CHANNELS; k++) {
-            ch[k] = level.ch[k][size_t(p_cpu_i)];
-        }
+        level.channels(p_sdf.program().output, p_cpu_i, ch);
         WorldPos p;
         p.voxel = VoxelPos(p_p.x << p_lod, p_p.y << p_lod, p_p.z << p_lod);
         const Float3 grid{ float(i.x), float(i.y), float(i.z) };
@@ -540,16 +612,14 @@ ov::Value check_biomes(ov::gpu::Device *p_device, SpikeSet p_set, const ov::str 
         for (size_t c = 0; c < chunks.size(); c++) {
             const int l = chunks[c].lod;
             const Box box = chunk_box(chunks[c].id, param);
-            const Level level = Cascade::run(sdf.get_spec(), box, l, nullptr, true);
+            const Terrain::Values level = Terrain::run(sdf.program(), box, l);
             for_each_point(box, [&](const Vector3i64 &p_p, int64_t p_cpu_i) {
                 const Vector3i64 i = p_p - Vector3i64(box.lo[0], box.lo[1], box.lo[2]);
-                float slots[SLOTS];
-                level.slots_at(p_cpu_i, slots);
                 // Air samples (the sample with its skirt above 0) keep 0: no vertex reads them.
                 float ch[CHANNELS];
-                sdf.ground_channels(slots, p_p * (int64_t(1) << l), l, ch);
+                level.channels(sdf.program().output, p_cpu_i, ch);
                 const ExactNoise::Float4 r = sdf.with_skirt(sdf.sdf(ch, p_p * (int64_t(1) << l), l), l, Float3{ float(i.x), float(i.y), float(i.z) });
-                const uint32_t want = r.w > 0.0f ? 0u : sdf.ground_material(slots);
+                const uint32_t want = r.w > 0.0f ? 0u : sdf.ground_material(int(level.at(sdf.program().pick, p_cpu_i).w));
                 const uint32_t g = got[c * cells + uint64_t(i.x) + uint64_t(cs) * (uint64_t(i.y) + uint64_t(cs) * uint64_t(i.z))];
                 seen[ov::min(want, uint32_t(Climate::MAX_BIOMES))]++;
                 checks.samples++;
@@ -674,7 +744,7 @@ ov::Value timing(ov::gpu::Device *p_device, const std::vector<SpikeSet> &p_sets,
             ov::bytes ids;
             ids.resize(TIMING_CHUNKS * GPUFrame::CHUNK_INPUT_BYTES);
             for (uint32_t c = 0; c < TIMING_CHUNKS; c++) {
-                GPUFrame::encode_chunk_input(ids, c, CascadeMeasure::random_chunk(lod, 0x7133u + uint32_t(r + 2), int(c)), p_param);
+                GPUFrame::encode_chunk_input(ids, c, Cascade::random_chunk(lod, 0x7133u + uint32_t(r + 2), int(c)), p_param);
             }
             for (const auto &ps : passes) {
                 ps->upload_items(ids.data(), TIMING_CHUNKS); // one input: each set its own regions
@@ -772,7 +842,6 @@ ov::Value CascadeCheck::run(ov::gpu::Device &p_device, const ov::Value &p_option
             d["samples_differing"] = checks.samples_differing;
             d["relation_points"] = checks.relation_points;
             d["relation_differing"] = checks.relation_differing;
-            d["relation_modulated"] = checks.relation_modulated;
             d["chunks_per_lod"] = ov::Value::array_of(checks.chunks_per_lod);
             d["differing_per_lod"] = ov::Value::array_of(checks.differing_per_lod);
             d["examples"] = checks.examples;
@@ -782,7 +851,7 @@ ov::Value CascadeCheck::run(ov::gpu::Device &p_device, const ov::Value &p_option
                 min_chunks = ov::min(min_chunks, v);
             }
             d["min_chunks_per_lod"] = min_chunks;
-            const bool set_ok = checks.values > 0 && checks.samples > 0 && (checks.relation_points > 0 || checks.relation_modulated > 0) && min_chunks >= 64 && checks.differing == 0 &&
+            const bool set_ok = checks.values > 0 && checks.samples > 0 && checks.relation_points > 0 && min_chunks >= 64 && checks.differing == 0 &&
                     checks.samples_differing == 0 && checks.relation_differing == 0;
             d["ok"] = set_ok;
             ok = ok && set_ok;

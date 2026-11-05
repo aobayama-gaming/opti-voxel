@@ -1,6 +1,6 @@
 #pragma once
 
-#include "biome_compiler.hpp"
+#include "climate.hpp"
 #include "sdf_table.hpp"
 #include "species.hpp"
 
@@ -26,7 +26,7 @@
 //
 // A path is relative to the file naming it, or absolute (res://, /...). "fields" and "biomes" are the climate table of
 // climate_parse.cpp (each biome a graph of notes, what it grows, its features), merged here and compiled there (at the
-// engine's values). Without biomes, the ground is the template biome's (Climate::template_biome). "species" are what the
+// engine's values). Without biomes, the ground is the template's (SDFCascade::template_path). "species" are what the
 // instances name (species.hpp; Archetype::default_species without the key); "instances" what grows where no biome lists
 // its own (and on a world without biomes), each entry a species, its cell and its share (Climate::parse_instances), over
 // the "zone" (SDFTable::Zone: a square of side_m metres round centre_m, x and z; side 0: none); "features" likewise what
@@ -37,7 +37,7 @@ struct WorldFile {
 
     double voxel_m = 0.5; // LOD 0
     int lods = 15; // LODs 0 .. lods - 1 (at most ChunkMath::MAX_LOD_NUMBERS)
-    ov::Value climate_table = ov::Value::object(); // Climate::parse's input, empty for none
+    ov::Value climate_table = ov::Value::object(); // Terrain::compile's input, empty for none
     double planet_radius_m = 0.0; // > 0: a planet of this radius centred on the voxel (0, 0, 0), its +y pole at y = radius; 0 flat
     double planet_ring_m = 0.0; // > 0 with a planet: a torus round y, this ring's radius, planet_radius_m its tube's
     // The volumetric atmosphere over the base (Atmosphere) and its scale (AtmosphereMedium::for_base: 0 from the base).
@@ -46,7 +46,8 @@ struct WorldFile {
     bool clouds = true; // the volumetric clouds in it (Clouds), their layer's scale as the atmosphere's
     // The relief the sky stays above (metres; AtmosphereMedium::for_base, CloudLayer::for_base), a planet's
     // SDFCascade::PLANET_RELIEF of its radius at most (SDFCascade::relief_m): the template ground's 3.3 km cap.
-    double relief_m = Climate::TEMPLATE_MAX_AMP_M;
+    static constexpr double DEFAULT_RELIEF_M = 3276.8;
+    double relief_m = DEFAULT_RELIEF_M;
     SDFTable::Zone zone; // SDFTable::set_zone
     std::vector<Climate::InstanceShare> instances; // SDFTable::set_instances
     std::vector<Climate::FeatureShare> features; // SDFTable::set_features

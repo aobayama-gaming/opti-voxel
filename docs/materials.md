@@ -63,10 +63,10 @@ Per-chunk palettes and per-biome ground materials.
   debug colour). Every chunk palette starts with the **base palette** (`SDFGpuTable::base_palette`: GROUND, then biome
   b at 1 + b; `ChunkPalette::build(base, ...)`), held by the palette pool's ground block (seeded at `rt_create`). The
   cascade's level 0 writes a material for **every** chunk: the fold's winner, else at a solid sample (air keeps 0: a
-  vertex reads its cell's solid corners) `cascade_ground_material` = 1 + `Climate::pick` of the sample's fields
-  (`Climate::pick_glsl`, `climate_glsl.cpp`, generated from the table op for op, ties by
-  `hash_cell`; CPU `SDFCascade::ground_material`), so the chunk passes carry the fields at every level of every LOD
-  (`CascadeGLSL::field_range`: point items keep the spec's FieldRange, the ground bits are the same). The mesher reads
+  vertex reads its cell's solid corners) `cascade_ground_material` = 1 + the program's pick (its `PICK` node: the
+  largest weight, ties by `hash_cell`, computed at the weights' level and copied down, never interpolated; CPU
+  `SDFCascade::ground_material`, `Climate::pick_of`), so every level of every LOD carries the pick's channel
+  (`docs/cascade.md`). The mesher reads
   every chunk's materials when the base is longer than one (`ChunkPalette::glsl_base`); on the ground block a record's
   index past the base reads as ground. Unit-tested (box run == point query per sample); CascadeSpike G10
   (`--biomes`): GPU == CPU on every sample of every LOD (58.7 M, all 7 example biomes seen). Cost (128-chunk

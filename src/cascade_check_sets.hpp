@@ -8,19 +8,19 @@
 
 #include <algorithm>
 #include <iterator>
+#include <utility>
 #include <vector>
 
 // The terrains CascadeSpike (cascade_spike.cpp) checks and times, each a world file (voxel and LODs from its engine): "4" the
-// bare ground of the check's own world, "4c" the example climate carried and modulating the ground, "4f" its fields
-// without multipliers (carried only for the biome pick: the cost of the ground materials alone), "4p" the plain climate
-// (the example before shaped bands: amplitudes only), "4s" the shaped test table (every operation: shapes, the multifractal
-// state, warps, the biomes' curves, stretched octaves), "4d" fieldless_test.json (one biome multiplying the ground's
-// octaves, no field: a modulation with no field group), "4w" the game's world.json (eight biomes on three climate axes, 8
-// groups), "4g" an Earth-sized sphere (the base's regions, BaseRegions, below its switch LOD), "4n" notes_test.json (several
-// notes per octave, modulated: the band table's other notes, their BandMod slots), "4e" programs_test.json (sample
-// programs: smooth and hard min / max, a field read at the samples, a curve of a program), "4r" graph_test.json (free graphs as
-// the relaxer plays them: a warp moved before its shape, shapes past the notes at the samples, sub-mix fields, a mix row
-// past the notes), "4v" caves_test.json (caves: smin(mix, up - C) under a band's tent, the base read at the samples).
+// bare ground of the check's own world (the template's), "4c" the example climate, "4f" its biomes on the template's notes
+// with their curves (the weights carried for the curves and the biome pick: the cost of the climate alone), "4p" the plain
+// climate (amplitudes only), "4s" the shaped test table (shapes, multifractals, warps, curves, stretched octaves), "4d"
+// fieldless_test.json (one biome, no field), "4w" eight_biomes_test.json (eight biomes on three climate axes), "4g" an
+// Earth-sized sphere (the base's regions, BaseRegions, below its switch LOD), "4n" notes_test.json (several notes per
+// octave), "4e" programs_test.json (smooth and hard min / max, a field read in a graph, a curve of a node), "4r"
+// graph_test.json (free graphs: a warp before its shape, shapes past the notes, a mix row past the notes), "4v"
+// caves_test.json (caves: smin(mix, up - C) under a band's tent, the base's up read). Each runs on the cascade v2
+// program the world compiles to (docs/cascade-v2.md).
 namespace CascadeCheckSets {
 
 enum class SpikeSet {
@@ -110,11 +110,13 @@ inline int configure_variant(SDFCascade &p_sdf, SpikeSet p_v, const ov::str &p_w
     r_param.voxel_size = float(world.voxel_m);
     p_sdf.planet_radius_m = world.planet_radius_m;
     p_sdf.planet_ring_m = world.planet_ring_m;
-    if (base_set(p_v) == SpikeSet::L4F && err.empty()) {
-        // Every biome on the template's notes (constant: no modulation), its curve kept (the fields carried).
+    ov::Value ground;
+    if (base_set(p_v) == SpikeSet::L4F && err.empty() && SDFCascade::template_table(world.voxel_m, ground).empty()) {
+        // Every biome on the template's notes (every biome alike: blend factoring takes them out of the weights), its
+        // curve kept (the fields carried).
         ov::Value &biomes = world.climate_table["biomes"];
         for (size_t i = 0; i < biomes.size(); i++) {
-            ov::Value graph = Climate::template_graph(world.voxel_m);
+            ov::Value graph = std::as_const(ground)["biomes"][size_t(0)]["graph"];
             const ov::Value &nodes = biomes[i]["graph"]["nodes"];
             for (size_t n = 0; n < nodes.size(); n++) {
                 if (nodes[n]["kind"].as_str() == "curve") {

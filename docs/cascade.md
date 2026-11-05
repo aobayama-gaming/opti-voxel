@@ -1,57 +1,52 @@
 # Hermite cascade
 
-CPU reference (`src/cascade.hpp`) and GPU passes (`src/cascade_glsl.*`), bit-identical. Run `tools/cascade_test.sh` after touching them.
+The kernel (`src/cascade.hpp`), the programs it runs (`src/level_program.*`, compiled by `src/graph_compile.*`: cascade
+v2, `docs/cascade-v2.md`) and the GPU passes (`src/cascade_glsl.*`, `src/level_glsl.*`), bit-identical. Run
+`tools/cascade_test.sh` after touching them.
 
-- Hermite cascade (`src/cascade.hpp`: CPU reference, the oracle; `src/cascade_glsl.{hpp,cpp}`: the GPU
-  passes, bit-identical to it): each noise band (octave k) is inserted once on the lattice Λ_{k-3}
-  (multiples of 2^(k-3) voxels: 8 samples per wavelength), then carried down by tricubic Hermite
-  subdivision. Channels in units of the lattice spacing: value + gradient, the slope along the axis by the
-  Hermite rule, the transverse slopes linear. A LOD-L chunk
-  stops at Λ_L, so `V_m(p)` is a pure function of the point: every LOD gets the same bits where they share
-  points (a climate's last level reads its octave's amplitude from the level above: Carry groups, below). Fixed order x, y, z; only + - * by 0.5, 0.125, 0.75; after each level |c| < 2^-64 is flushed to 0
-  (without it a band carried far down makes denormals). `Cascade::point` = the same run on a one-point box.
-  4 samples per wavelength (worst case 2.2% value error) was rejected. An 8-channel set (cross slopes from a
-  `perlin3_cross`) cost 1.30x the GPU time of 4 against a 1.15 threshold; it and its report tool are in git history.
-- GPU cascade: one dispatch per level for the whole batch (level L + j of every chunk, j from T minus the
-  batch's smallest LOD down to 0), boxes in closed form from the chunk's anchor on (lo, hi) words
-  (`GLSL_FRAME_INT64`, `Cascade::level_box`), a child point replays the CPU's x, y, z passes on its 2x2x2
-  parents (code generated from the same axis rule), ping-pong scratch A (odd j, 17^3 points per chunk) / B
-  (even j >= 2, 10^3), j = 0 straight to `sdf_sample`. Bands come from a table indexed by level
-  (`CascadeGLSL::band_table`): one band per group and level, then the ground's other notes of each level (several
-  notes may share an octave, `Cascade::MAX_LEVEL_NOTES` = 8: the biome compiler's other seeds and stretches), inserted
-  after the level's first in spec order on the CPU (`LevelBands`) and the GPU (a generated per-level range), each with
-  its own `BandMod` (`Spec::note_mod`); a level's ground notes are modulated or constant together. A spec with one note
-  per level generates the text it had before. The climate's numbers are data too (`Cascade::ShaderParams`): every
-  value its generated code reads (the biomes' centres and spans, the field terms, the bands' amplitudes, shape
-  coefficients, gains and warp amounts, the curves' segments, the programs' constants and smooth k, and the skirt depth
-  per LOD, which follows the amplitudes) is a slot of a per-variant uniform block of vec4s at
-  `CascadeGLSL::PARAM_BINDING` (the value's bits; constant indices, as cheap as literals, the skirt table read at the
-  LOD's; not a storage buffer, which WebGPU caps per stage; at most 16 KB, world.json's largest 1,019 values), never a
-  literal. So the
-  text depends on the world's structure only. Specialised (`SDFCascade::specialize`, the game's), the structure is
-  which coefficients are non-zero: the text has the terms the CPU computes, no test. Generic (the biome mixer's,
-  `Climate::Table::generic`), it is which nodes the graphs have: the text has every term a node may make non-zero and
-  tests its value where the CPU does, so a value reaching 0, a shape's type or notes turning constant keep the text.
-  The same code generates both: the specialised text is the generic one with those tests folded, and the bits are the
-  same (`docs/climate.md`). An edit of a value compiles nothing (the Godot device keeps the SPIR-V of every text by
-  text, `RDDevice`). Engine constants (the kernel's fade, the noise's means) stay literals. `CascadePasses` owns the passes per device (`ov::gpu::Device`); the mesher runs
-  them in place of its sdf pass (and in the discovery audit).
-- **Carry groups** (`Cascade::carry_slot`, `Modulation::derive`): 4 slots each after the field groups that a run's
-  level above its last derives from its channels before its insertions (the climate its own bands read: one climate per
-  point) and holds after its flush, and H carries to the last level like a field (the
-  `copied_carry` group takes its floor parent's channels instead of a blend: a value that can't be interpolated, the
-  climate's pick). The climate uses them so that a run's last level, its samples, computes no climate at all
-  (`docs/climate.md`). `FieldRange` says where the fields (`carried`, their octaves `inserted` one level higher) and the carry
-  (`carries`: Λ_{L+1} and Λ_L) are,
-  CPU and GPU alike; the GPU compiles a view per kind of level (`CascadeGLSL::View`: the ground alone, ground + fields,
-  which derives at j = 1, ground + carry at j = 0) on the same planar scratch, the carry loaded and stored only up to
-  the groups the last level reads without the fields (`Modulation::carry_used`: the samples' terms and the ground's
-  parts; the GPU's carry, `Spec::gpu_carry_groups`; the CPU derives the fields' too, for `fields_at`), the fields
-  stored on every level that carries them. The rules reach the GLSL as per-LOD tables generated from `FieldRange`
-  (no formula retyped). A run whose last level reads the carry starts at least one level above it, empty above the
-  highest band (`Spec::run_top`, `checked_top`, the GPU's `top`).
+- **The kernel.** A node of a world's `Terrain::LevelProgram` is computed on its level's lattice Λ_m (multiples of 2^m
+  voxels; a note of octave k on Λ_{k-3}: 8 samples per wavelength) and carried down by tricubic Hermite subdivision.
+  Channels in units of the lattice spacing: value + gradient, the slope along the axis by the Hermite rule, the
+  transverse slopes linear. A LOD-L chunk stops at Λ_L, so `V_m(p)` is a pure function of the point: every LOD gets the
+  same bits where they share points. Fixed order x, y, z; only + - * by 0.5, 0.125, 0.75; after each level |c| < 2^-64
+  is flushed to 0 (without it a node carried far down makes denormals). 4 samples per wavelength (worst case 2.2% value
+  error) was rejected. An 8-channel set (cross slopes from a `perlin3_cross`) cost 1.30x the GPU time of 4 against a
+  1.15 threshold; it and its report tool are in git history.
+- **CPU runs.** `Terrain::run(prog, box, lod)` runs a program from its top level down to Λ_lod over a box (level m: its
+  inputs, the level above's live channels, subdivided and flushed, then level m's code); the last level runs
+  `last_code(lod)`, the code of every level from lod down to 0, so the output (and the pick) exist there.
+  `Terrain::point` is the same run on a one-point box, allocation-free once warm and limited to the nodes its targets
+  read: a box and a point give the same bits. The op table (`op_def`: each op's CPU and GLSL form side by side) is the
+  only definition of every op.
+- **GPU cascade.** One dispatch per level for the whole batch (level L + j of every chunk, j from T minus the batch's
+  smallest LOD down to 0), boxes in closed form from the chunk's anchor on (lo, hi) words (`GLSL_FRAME_INT64`,
+  `Cascade::level_box`), a child point replays the CPU's x, y, z passes on its 2x2x2 parents (code generated from the
+  same axis rule), ping-pong scratch A (odd j, 17^3 points per chunk) / B (even j >= 2, 10^3), j = 0 straight to
+  `sdf_sample`. The level's own work is `level_run` (`level_glsl.hpp`): the channels it receives loaded into
+  registers, its code, the channels it carries stored back; the pick's channel is copied from the floor parent, never
+  interpolated. The notes reach the GPU as a table (`Terrain::band_table`, binding 5).
+- **Specialised and generic.** The world's numbers are data (`Cascade::ShaderParams`): every value the generated code
+  reads (the biomes' centres and spans, the amplitudes, shape coefficients, warp amounts, the curves' segments, the
+  constants and smooth k, and the skirt depth per LOD) is a slot of a per-variant uniform block of vec4s at
+  `CascadeGLSL::PARAM_BINDING` (the value's bits, constant indices, as cheap as literals; not a storage buffer, which
+  WebGPU caps per stage; at most `MAX_PARAM_BYTES`), never a literal. Specialised (`SDFCascade::specialize`, the
+  game's), the text is each level's code straight, with the program's value-dependent folds, except its notes: a
+  level's notes are one loop over their range of the band table (`Terrain::note_order`) at the level's start, so the
+  text holds one `perlin3` whatever the note count (one inlined call per note took the NVIDIA compiler minutes and
+  9 GB on the example table's 80 notes; a doctest pins one `tp_note` call per text). Generic (the biome
+  mixer's, `Terrain::Mode::GENERIC`), it is a fixed interpreter over the program's records: its text depends on the op
+  set and the caps only (`MAX_CHANNELS`, `MAX_REGISTERS`), so an edit of a value compiles nothing, and the same
+  generic program gives the same bits on the CPU. The two modes differ by blend factoring (a few float steps of the
+  output's bound, a doctest bounds them). The Godot device keeps the SPIR-V of every text by text (`RDDevice`).
+  Engine constants (the kernel's fade, the noise's means) stay literals. `CascadePasses` owns the passes per device
+  (`ov::gpu::Device`); the mesher runs them in place of its sdf pass (and in the discovery audit).
 - **The cascade only exists on lattice points.** `SDFCascade::evaluate(p, lod)` takes `frac == 0` and a voxel
   multiple of 2^lod only (ERR and 0 otherwise); the discoverer's corners and the mesher's cell corners are
   such points, `get_sdf_at` snaps to the LOD0 voxel. There is no off-lattice evaluation and no GLSL
   `terrain_sdf`: vertex normals are the trilinear blend of the cell's 8 sample gradients
   (`CascadeGLSL::GLSL_VERTEX_GRADIENT`). A new cascade terrain keeps this rule.
+- **Tests.** `test_cascade.cpp`: the boxes, the Hermite copy below the notes bit for bit, slopes against finite
+  differences, the fidelity of one octave against perlin3, no denormal and FTZ/DAZ changing no bit;
+  `test_level_program.cpp`: a level's purity across runs, box == point on every test table, the LOD step within the
+  skirt, the weights op for op, one bit pin per test table; `test_sdf_cascade.cpp`: `evaluate` = `point` +
+  `height_sdf`, the default terrain's pin.

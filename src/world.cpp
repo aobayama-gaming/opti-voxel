@@ -122,7 +122,6 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
     }
     sdf->climate_data = content.climate_table; // parsed and checked by configure() (an ERR there: no climate)
     sdf->specialize = config.specialize_shaders;
-    sdf->caps = reused_caps;
     sdf->set_instance_band(config.archetype_band && config.terrain_mode != 4); // the gallery: a crease test at every LOD, never eroded
     sdf->set_moment_blobs(config.archetype_moments);
     sdf->set_instance_erode(config.archetype_erode);
@@ -188,7 +187,7 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
                 // The table and the spec stay as they are while the world runs (configure is before start).
                 const SDFCascade *cascade = sdf.get();
                 clouds->set_climate([climate, cascade](const VoxelPos &p_voxel, int p_m) {
-                    return CloudClimate::at(*climate, cascade->get_spec(), p_voxel, p_m);
+                    return CloudClimate::at(*climate, cascade->program(), p_voxel, p_m);
                 });
             }
             clouds->start(hosts.device, atmosphere, sdf->get_base(), double(chunk_param.voxel_size), sdf->relief_m(content.relief_m), content.atmosphere_scale,
@@ -676,7 +675,8 @@ ov::Value World::debug_stats() {
         c["path"] = config.world_json.empty() ? config.world_path : "(text from " + config.world_dir + ")"; // set_world_json: no file
         c["fields"] = int64_t(climate->fields.size());
         c["biomes"] = int64_t(climate->biomes.size());
-        c["modulated"] = sdf->get_cascade()->modulation != nullptr;
+        ov::str layout_error;
+        c["channels"] = int64_t(Terrain::gpu_layout(sdf->program(), layout_error).channels); // the program's Ch
         d["climate"] = c;
     }
     d["frames"] = int64_t(exec_time);
@@ -754,9 +754,6 @@ ov::Value World::debug_stats() {
 
 void World::stop(Kept *r_kept) {
     QuadPagePool *pages = std::exchange(reused_pages, nullptr); // no mesher took them: start failed or never ran
-    if (r_kept != nullptr) {
-        r_kept->caps = sdf ? sdf->generic_caps() : reused_caps;
-    }
     if (!started) {
         if (r_kept != nullptr) {
             r_kept->pages = pages;

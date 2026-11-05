@@ -14,7 +14,7 @@ static_assert(sizeof(ExactNoise::Float4) == 16, "the point passes' register is a
 using ov::gpu::BufferKind;
 
 bool CascadePointsGPU::create(ov::gpu::Device *p_device, const SDFBase *p_sdf, const ChunkParam &p_param, uint32_t p_max_points) {
-    OV_ERR_FAIL_COND_V_MSG(p_device == nullptr || p_sdf->get_cascade() == nullptr || p_max_points == 0, false,
+    OV_ERR_FAIL_COND_V_MSG(p_device == nullptr || p_sdf->get_program() == nullptr || p_max_points == 0, false,
             "CascadePointsGPU: needs a device, a cascade terrain and a batch size.");
     device = p_device;
     voxel_size = p_param.voxel_size;

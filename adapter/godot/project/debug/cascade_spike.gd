@@ -1,6 +1,6 @@
 extends Node
 ## GPU cascade harness (CascadeSpike, src/cascade_spike.cpp): the cascade passes of the meshers against the
-## CPU oracle (Cascade::run), bit for bit, every level of chunks of every LOD, plus their GPU timing.
+## CPU oracle (Terrain::run), bit for bit, every level of chunks of every LOD, plus their GPU timing.
 ## Needs a GPU (not --headless). Run:
 ##   tools/cascade_test.sh       (or: godot --path project res://debug/cascade_spike.tscn -- --out=x.json)
 ## Args: --world=<the bare set's world, res://worlds/lods25.world.json>, --check=0|1, --points=0|1, --timing=0|1, --runs=N (10), --sets=4,4c (4c: the example climate, 4f: its fields only), --generic=0|1 (the climates compiled generic),

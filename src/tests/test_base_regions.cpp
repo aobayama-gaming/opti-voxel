@@ -1,4 +1,4 @@
-#include "test_common.hpp"
+#include "test_climate_common.hpp"
 
 #include "base_regions.hpp"
 #include "cascade.hpp"
@@ -209,37 +209,49 @@ TEST_CASE("SDFCascade::planet_base: a small planet lowers its switch LOD, down t
 TEST_CASE("SDFCascade: a planet's relief is capped at PLANET_RELIEF of its radius, Earth's and the flat world's untouched") {
     ChunkParam param;
     param.voxel_size = 0.05f;
-    auto max_amp = [&](double p_radius_m) {
+    auto max_amp = [&](double p_radius_m, const char *p_world) {
         SDFCascade sdf;
+        if (p_world != nullptr) {
+            CHECK(load_table(p_world, sdf.climate_data) == ov::str());
+        }
         sdf.planet_radius_m = p_radius_m;
         sdf.configure(param, 16);
-        float amp = 0.0f;
-        for (const Cascade::Band &b : sdf.get_spec().bands) {
-            amp = ov::max(amp, b.amp);
-        }
-        return double(amp);
+        return double(ClimateTest::note_amp(sdf.program()));
     };
-    const double flat = max_amp(0.0);
-    CHECK(flat == doctest::Approx(Climate::TEMPLATE_MAX_AMP_M / 0.05));
-    CHECK(max_amp(6371000.0) == flat);
-    CHECK(max_amp(2000.0) == doctest::Approx(SDFCascade::PLANET_RELIEF / SDFCascade::PLANET_HEADROOM * 2000.0 / 0.05));
+    const double flat = max_amp(0.0, nullptr);
+    CHECK(flat == doctest::Approx(3276.8 / 0.05)); // the template's cap (its world files)
+    CHECK(max_amp(6371000.0, nullptr) == flat);
+    // The template's 3.3 km octaves are over a 2 km planet's note cap: its own ground (tiny.world.json) stops under it.
+    CHECK(max_amp(2000.0, "res://worlds/tiny.world.json") <= SDFCascade::PLANET_RELIEF / SDFCascade::PLANET_HEADROOM * 2000.0 / 0.05);
 }
 
-TEST_CASE("SDFCascade: a climate's biome multipliers fit under a 2 km planet's relief; its curves in metres don't") {
-    auto error = [](const char *p_path) {
-        SDFCascade sdf;
-        CHECK(load_table(p_path, sdf.climate_data) == ov::str());
-        sdf.planet_radius_m = 2000.0;
+TEST_CASE("SDFCascade: on a 2 km planet its own ground fits its relief; the template's and the example's metres don't") {
+    auto configured = [](SDFCascade &r_sdf, const char *p_path) {
+        if (p_path != nullptr) {
+            CHECK(load_table(p_path, r_sdf.climate_data) == ov::str());
+        }
+        r_sdf.planet_radius_m = 2000.0;
         ChunkParam param;
         param.voxel_size = 0.05f;
-        sdf.configure(param, 16);
-        CHECK((sdf.get_climate() != nullptr) == sdf.get_climate_error().empty());
-        return sdf.get_climate_error();
+        r_sdf.configure(param, 16);
+        CHECK((r_sdf.get_climate() != nullptr) == (p_path != nullptr && r_sdf.get_climate_error().empty()));
     };
-    // Biome multipliers up to 2.5 (it was refused at 1: the octaves started at the relief itself).
-    CHECK(error("res://climate/plain.json") == ov::str());
-    // The mountains' 1.1 km curve: more than the planet's 62.5 m relief.
-    CHECK(error("res://climate/example.json").find("its curve moves the ground") != ov::str::npos);
+    // tiny.world.json: the template's octaves stopped under the relief, the program's output bound within the 62.5 m cap.
+    SDFCascade tiny;
+    configured(tiny, "res://worlds/tiny.world.json");
+    CHECK(tiny.get_climate_error() == ov::str());
+    const Terrain::LevelProgram &prog = tiny.program();
+    const size_t out = size_t(prog.output);
+    CHECK(ov::max(std::fabs(prog.lo[out]), std::fabs(prog.hi[out])) <= SDFCascade::PLANET_RELIEF * 2000.0 / 0.05);
+    CHECK(ClimateTest::note_top_k(prog) == 16);
+    // The template itself (no climate): refused over the cap, a flat ground.
+    SDFCascade bare;
+    configured(bare, nullptr);
+    CHECK(ClimateTest::note_count(bare.program()) == 0);
+    // The example's mountains (km of relief): more than the planet's 62.5 m.
+    SDFCascade example;
+    configured(example, "res://climate/example.json");
+    CHECK(example.get_climate_error().find("over the cap") != ov::str::npos);
 }
 
 TEST_CASE("BaseSurface::on_base: the base's point along the up, on any side of a planet") {

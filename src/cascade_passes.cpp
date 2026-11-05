@@ -2,6 +2,7 @@
 
 #include "gpu_frame.hpp"
 #include "gpu_shader.hpp"
+#include "level_glsl.hpp"
 
 #include "ov/bytes.hpp"
 #include "ov/math.hpp"
@@ -35,41 +36,29 @@ bool CascadePasses::create_points(ov::gpu::Device *p_device, const SDFBase *p_sd
 bool CascadePasses::_create(ov::gpu::Device *p_device, const SDFBase *p_sdf, int p_item_size, uint32_t p_max_items, Buffer p_input,
         Buffer p_param_ubo, Buffer p_output, Buffer p_debug, const CascadePasses *p_share_scratch, Buffer p_table_records, Buffer p_table_list,
         Buffer p_material, uint32_t p_batch_items) {
-    const Spec *spec = p_sdf->get_cascade();
     device = p_device;
     input = p_input;
     item_size = p_item_size;
     max_chunks = p_max_items;
     const bool points = item_size == 1;
-    fields = CascadeGLSL::field_range(p_sdf, points);
-    top = spec->top_level(!fields.empty());
-    carry = !fields.empty() && spec->gpu_carry_groups() > 0;
+    top = p_sdf->get_program()->top;
 
-    // Variant 2 * view + (fold ? 1 : 0): the bare cascade at level 0 or the instance fold (given the table's buffers), with
-    // the ground alone, the fields and the carry, or the carry alone (CascadeGLSL::View; the climate's views where the
-    // FieldRange carries any: none if empty).
+    // Variant 0: the bare cascade at level 0; 1: the instance fold (given the table's buffers).
     const bool table = p_table_records.is_valid() && p_table_list.is_valid();
     OV_ERR_FAIL_COND_V_MSG((table || p_material.is_valid()) && points, false, "CascadePasses: point items don't fold or carry a material.");
     // The fold variant's workgroups are cubes of level-0 samples, given whole cubes; else it folds per sample.
     const bool cubes = item_size % int(CascadeGLSL::FOLD_CUBE) == 0;
-    static const char *VIEW_NAMES[] = { "", "_fields", "_samples" };
-    // A climate everywhere: the ground-only variants would never run. The fields' view is never a last level: no fold.
-    for (int c = fields.everywhere() ? 1 : 0; c < (fields.empty() ? 1 : 3); c++) {
-        for (int f = 0; f < (table && CascadeGLSL::View(c) != CascadeGLSL::View::FIELDS ? 2 : 1); f++) {
-            const int v = 2 * c + f;
-            Cascade::ShaderParams values;
-            const ov::str code = CascadeGLSL::level_shader(p_sdf, p_debug.is_valid(), points, f == 1, p_material.is_valid(), CascadeGLSL::View(c),
-                    cubes, &values);
-            const ov::str name =
-                    ov::str(points ? "cascade_points" : (p_debug.is_valid() ? "cascade_levels_debug" : "cascade_levels")) + (f == 1 ? "_fold" : "") + VIEW_NAMES[c];
-            pipeline[v] = ov::gpu::compile(*device, name, code);
-            if (!pipeline[v].is_valid() && f == 0) {
-                return false; // a fold variant that fails leaves the bare one working (record_level ERRs once)
-            }
-            values.values.resize(size_t(values.vec4s()) * 4);
-            OV_ERR_FAIL_COND_V_MSG(values.values.size() * sizeof(float) > MAX_PARAM_BYTES, false, "CascadePasses: more shader params than a uniform block holds.");
-            params[v] = device->create_buffer(BufferKind::UNIFORM, values.values.size() * sizeof(float), values.values.data());
+    for (int v = 0; v < (table ? VARIANTS : 1); v++) {
+        Cascade::ShaderParams values;
+        const ov::str code = CascadeGLSL::level_shader(p_sdf, p_debug.is_valid(), points, v == 1, p_material.is_valid(), cubes, &values);
+        const ov::str name = ov::str(points ? "cascade_points" : (p_debug.is_valid() ? "cascade_levels_debug" : "cascade_levels")) + (v == 1 ? "_fold" : "");
+        pipeline[v] = code.empty() ? ov::gpu::Pipeline() : ov::gpu::compile(*device, name, code);
+        if (!pipeline[v].is_valid() && v == 0) {
+            return false; // a fold variant that fails leaves the bare one working (record_level ERRs once)
         }
+        values.values.resize(size_t(values.vec4s()) * 4);
+        OV_ERR_FAIL_COND_V_MSG(values.values.size() * sizeof(float) > MAX_PARAM_BYTES, false, "CascadePasses: more shader params than a uniform block holds.");
+        params[v] = device->create_buffer(BufferKind::UNIFORM, values.values.size() * sizeof(float), values.values.data());
     }
 
     uint64_t bytes_a = 0, bytes_b = 0;
@@ -84,7 +73,7 @@ bool CascadePasses::_create(ov::gpu::Device *p_device, const SDFBase *p_sdf, int
         scratch_b = device->create_buffer(BufferKind::STORAGE, bytes_b);
         scratch_bytes_total = bytes_a + bytes_b;
     }
-    const ov::bytes band_bytes = CascadeGLSL::band_table(*spec);
+    const ov::bytes band_bytes = Terrain::band_table(*p_sdf->get_program());
     bands = device->create_buffer(BufferKind::STORAGE, band_bytes.size(), band_bytes.data());
     Buffer debug = p_debug;
     if (!debug.is_valid()) {
@@ -125,7 +114,7 @@ bool CascadePasses::_create(ov::gpu::Device *p_device, const SDFBase *p_sdf, int
             uniform_set[v] = device->create_bind_set(pipeline[v], own);
         }
     }
-    return (uniform_set[0].is_valid() || fields.everywhere()) && (fields.empty() || (uniform_set[2].is_valid() && uniform_set[4].is_valid()));
+    return uniform_set[0].is_valid();
 }
 
 void CascadePasses::free() {
@@ -184,8 +173,7 @@ void CascadePasses::upload_items(const uint8_t *p_items, uint32_t p_count, uint3
 }
 
 int CascadePasses::level_count(int p_min_lod) const {
-    // With the carry, a level above the batch's LOD even above the top band (its chunks derive there).
-    return ov::max(top - p_min_lod, carry ? 1 : 0) + 1;
+    return ov::max(top - p_min_lod, 0) + 1;
 }
 
 void CascadePasses::record_level(int p_j, uint32_t p_base, uint32_t p_count, const ov::ivec2 &p_lods, bool p_fold) {
@@ -198,20 +186,13 @@ void CascadePasses::record_level(int p_j, uint32_t p_base, uint32_t p_count, con
     ov::put_s32(push + 12, top);
     ov::put_u32(push + 16, n);
     ov::put_u32(push + 20, uint32_t(level_bound(item_size, p_j + 1)));
-    // The fields where a chunk of the batch derives, else the carry where one carries it (monotone in j: a level with
-    // either always finds the fields in its parent level).
-    CascadeGLSL::View view = CascadeGLSL::View::GROUND;
-    if (!fields.empty() && fields.batch(p_lods, p_j)) {
-        view = CascadeGLSL::View::FIELDS;
-    } else if (!fields.empty() && fields.batch_carry(p_lods, p_j)) {
-        view = CascadeGLSL::View::SAMPLES;
-    }
+    (void)p_lods;
     bool fold = p_j == 0 && p_fold;
-    if (fold && !uniform_set[2 * int(view) + 1].is_valid()) {
+    if (fold && !uniform_set[1].is_valid()) {
         OV_ERR_PRINT_ONCE("CascadePasses: a fold without its variant (no table buffers at create, or it failed to compile): the bare cascade instead.");
         fold = false;
     }
-    const int v = 2 * int(view) + (fold ? 1 : 0);
+    const int v = fold ? 1 : 0;
     if (is_points()) {
         // Items flattened over x: item c's points are threads c * n^3 ...
         device->dispatch(pipeline[v], uniform_set[v], push, sizeof(push), (p_count * n * n * n + CascadeGLSL::LOCAL_SIZE - 1) / CascadeGLSL::LOCAL_SIZE, 1, 1);
