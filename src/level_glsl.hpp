@@ -57,7 +57,8 @@ ov::str level_flags_glsl(const LevelProgram &p_prog, const GpuLayout &p_layout, 
 // program with guards (guard_biomes), and every generic one (its text never depends on the graph).
 bool uses_biome_mask(const LevelProgram &p_prog);
 // level_run (after Ch, glsl_helpers and the climate's helpers), led by the mask's declaration when it uses one; its
-// values and records go to r_params.
-ov::str level_glsl(const LevelProgram &p_prog, const GpuLayout &p_layout, Cascade::ShaderParams &r_params);
+// values and records go to r_params. p_upto (specialised only): the text runs levels m <= p_upto alone, the others'
+// cases left out (LevelProgram::fine_cut: the fine levels' own text, with their registers).
+ov::str level_glsl(const LevelProgram &p_prog, const GpuLayout &p_layout, Cascade::ShaderParams &r_params, int p_upto = NO_LEVEL);
 
 } // namespace Terrain

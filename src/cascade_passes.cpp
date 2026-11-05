@@ -41,20 +41,27 @@ bool CascadePasses::_create(ov::gpu::Device *p_device, const SDFBase *p_sdf, int
     item_size = p_item_size;
     max_chunks = p_max_items;
     const bool points = item_size == 1;
-    top = p_sdf->get_program()->top;
+    const Terrain::LevelProgram &prog = *p_sdf->get_program();
+    top = prog.top;
+    fine_cut = prog.generic ? -1 : prog.fine_cut(); // the generic text stays one (the mixer's: an edit compiles nothing)
 
-    // Variant 0: the bare cascade at level 0; 1: the instance fold (given the table's buffers).
+    // Variant 2 * fine + fold (VARIANTS).
     const bool table = p_table_records.is_valid() && p_table_list.is_valid();
     OV_ERR_FAIL_COND_V_MSG((table || p_material.is_valid()) && points, false, "CascadePasses: point items don't fold or carry a material.");
     // The fold variant's workgroups are cubes of level-0 samples, given whole cubes; else it folds per sample.
     const bool cubes = item_size % int(CascadeGLSL::FOLD_CUBE) == 0;
-    for (int v = 0; v < (table ? VARIANTS : 1); v++) {
+    for (int v = 0; v < VARIANTS; v++) {
+        const bool fold = (v & 1) != 0, fine = v >= 2;
+        if ((fold && !table) || (fine && fine_cut < 0)) {
+            continue;
+        }
         Cascade::ShaderParams values;
-        const ov::str code = CascadeGLSL::level_shader(p_sdf, p_debug.is_valid(), points, v == 1, p_material.is_valid(), cubes, &values);
-        const ov::str name = ov::str(points ? "cascade_points" : (p_debug.is_valid() ? "cascade_levels_debug" : "cascade_levels")) + (v == 1 ? "_fold" : "");
+        const ov::str code = CascadeGLSL::level_shader(p_sdf, p_debug.is_valid(), points, fold, p_material.is_valid(), cubes, &values, fine ? fine_cut : -1);
+        const ov::str name =
+                ov::str(points ? "cascade_points" : (p_debug.is_valid() ? "cascade_levels_debug" : "cascade_levels")) + (fold ? "_fold" : "") + (fine ? "_fine" : "");
         pipeline[v] = code.empty() ? ov::gpu::Pipeline() : ov::gpu::compile(*device, name, code);
         if (!pipeline[v].is_valid() && v == 0) {
-            return false; // a fold variant that fails leaves the bare one working (record_level ERRs once)
+            return false; // another variant that fails leaves the bare one working (record_level falls back, ERRs once for a fold)
         }
         values.values.resize(size_t(values.vec4s()) * 4);
         OV_ERR_FAIL_COND_V_MSG(values.values.size() * sizeof(float) > MAX_PARAM_BYTES, false, "CascadePasses: more shader params than a uniform block holds.");
@@ -197,13 +204,14 @@ void CascadePasses::record_level(int p_j, uint32_t p_base, uint32_t p_count, con
     ov::put_s32(push + 12, top);
     ov::put_u32(push + 16, n);
     ov::put_u32(push + 20, uint32_t(level_bound(item_size, p_j + 1)));
-    (void)p_lods;
     bool fold = p_j == 0 && p_fold;
     if (fold && !uniform_set[1].is_valid()) {
         OV_ERR_PRINT_ONCE("CascadePasses: a fold without its variant (no table buffers at create, or it failed to compile): the bare cascade instead.");
         fold = false;
     }
-    const int v = fold ? 1 : 0;
+    // A chunk's level is its LOD + j: the fine text serves the dispatch when the batch's coarsest one sits at fine_cut or below.
+    const int fine = p_lods.y + p_j <= fine_cut && uniform_set[2 + (fold ? 1 : 0)].is_valid() ? 1 : 0;
+    const int v = 2 * fine + (fold ? 1 : 0);
     if (is_points()) {
         // Items flattened over x: item c's points are threads c * n^3 ...
         device->dispatch(pipeline[v], uniform_set[v], push, sizeof(push), (p_count * n * n * n + CascadeGLSL::LOCAL_SIZE - 1) / CascadeGLSL::LOCAL_SIZE, 1, 1);

@@ -78,9 +78,10 @@ bool ground_materials(const CascadeSource *p_sdf);
 // none. p_material: level 0 also writes each sample's material (the fold's winner's palette index, 0 = ground) to
 // sdf_material at MATERIAL_BINDING; with ground materials (ground_materials), for every chunk, a ground sample's being
 // cascade_ground_material's (its biome's). r_params: the values the text reads at PARAM_BINDING (Cascade::ShaderParams).
-// Empty (an ERR) if the program doesn't fit the text (a generic program past its caps).
+// Empty (an ERR) if the program doesn't fit the text (a generic program past its caps). p_upto (>= 0): the text runs
+// levels m <= p_upto alone (Terrain::level_glsl; CascadePasses' fine variant); -1: every level.
 ov::str level_shader(const CascadeSource *p_sdf, bool p_debug, bool p_points = false, bool p_fold = false, bool p_material = false, bool p_cubes = true,
-        Cascade::ShaderParams *r_params = nullptr);
+        Cascade::ShaderParams *r_params = nullptr, int p_upto = -1);
 
 // The point items' ChunkParam: p_param with skirt 0 (with the items' extent 0, an item's box is its point alone).
 ChunkParam point_param(const ChunkParam &p_param);
