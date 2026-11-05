@@ -93,13 +93,18 @@ bool CascadePasses::_create(ov::gpu::Device *p_device, const SDFBase *p_sdf, int
     if (p_material.is_valid()) {
         bindings.push_back({ uint32_t(CascadeGLSL::MATERIAL_BINDING), BufferKind::STORAGE, p_material });
     }
+    batch_items = ov::max(p_batch_items, max_chunks);
     curved = p_sdf->get_curved_base();
     if (curved != nullptr) {
-        batch_items = ov::max(p_batch_items, max_chunks);
         base_regions = device->create_buffer(BufferKind::STORAGE, uint64_t(max_regions()) * BaseRegions::REGION_BYTES);
         base_region_index = device->create_buffer(BufferKind::STORAGE, uint64_t(batch_items) * BaseRegions::SLOTS * sizeof(uint32_t));
         bindings.push_back({ uint32_t(BaseRegions::REGION_BINDING), BufferKind::STORAGE, base_regions });
         bindings.push_back({ uint32_t(BaseRegions::INDEX_BINDING), BufferKind::STORAGE, base_region_index });
+    }
+    // The biome pruning's mask, a uint per item of a batch (zeroed by upload_items).
+    if (Terrain::uses_biome_mask(*p_sdf->get_program())) {
+        biome_mask = device->create_buffer(BufferKind::STORAGE, uint64_t(batch_items) * sizeof(uint32_t));
+        bindings.push_back({ uint32_t(CascadeGLSL::BIOME_MASK_BINDING), BufferKind::STORAGE, biome_mask });
     }
     // The fold variants also bind the table's buffers.
     std::vector<Binding> fold_bindings = bindings;
@@ -128,7 +133,7 @@ void CascadePasses::free() {
             }
         }
     }
-    for (const Buffer b : { bands, debug_placeholder, base_regions, base_region_index }) {
+    for (const Buffer b : { bands, debug_placeholder, base_regions, base_region_index, biome_mask }) {
         if (b.is_valid()) {
             device->free(b);
         }
@@ -151,6 +156,8 @@ void CascadePasses::free() {
     debug_placeholder = Buffer();
     base_regions = Buffer();
     base_region_index = Buffer();
+    biome_mask = Buffer();
+    batch_items = 0;
     input = Buffer();
     curved = nullptr;
     device = nullptr;
@@ -162,7 +169,11 @@ void CascadePasses::upload_items(const uint8_t *p_items, uint32_t p_count, uint3
         return;
     }
     OV_ERR_FAIL_COND_MSG(curved != nullptr && p_count > batch_items, "CascadePasses: more items than the passes were created for.");
+    OV_ERR_FAIL_COND_MSG(biome_mask.is_valid() && slots > batch_items, "CascadePasses: more items than the biome mask holds.");
     device->update_buffer(input, 0, uint64_t(slots) * GPUFrame::CHUNK_INPUT_BYTES, p_items);
+    if (biome_mask.is_valid()) {
+        device->clear_buffer(biome_mask, 0, uint64_t(slots) * sizeof(uint32_t));
+    }
     if (curved == nullptr || p_count == 0) {
         return;
     }

@@ -17,7 +17,8 @@
 // the finest level of its inputs; a constant and `up` have none (exact at every lattice point: computed where they are
 // read). A node is computed on its level's lattice from its inputs' values there and Hermite-subdivided below
 // (Cascade::axis_rule, x then y then z), so every LOD and origin gets the same bits where they share points. A run of
-// LOD L stops at Λ_L: its last level computes the nodes of every level <= L, the notes finer than L reading 0.
+// LOD L stops at Λ_L: its last level computes the nodes of every level <= L, the notes finer than L reading 0 (what is
+// then a constant folded to it: fold_lods).
 //
 // Values are dual numbers (Float4: gradient per lattice spacing of the level, value), every op's result flushed under
 // 2^-64 (Cascade::dflush), each op's CPU form and GLSL form side by side in one table entry (op_table): the same ops in
@@ -72,6 +73,20 @@ struct Node {
     int curve = -1;
     Cascade::Band band; // NOTE: octave, seed, offset, stretch (amp 1)
     int level = NO_LEVEL;
+    // The fold per LOD (fold_lods): on every level of a run of LOD >= const_lod the node is the constant `folded` (its
+    // notes there absent, or a product by such a 0), and a run's last level of LOD > live_lod doesn't compute it (no
+    // node it computes reads it). NO_LEVEL: never constant, always read.
+    int const_lod = NO_LEVEL;
+    int live_lod = NO_LEVEL;
+    float folded = 0.0f;
+    // The biome pruning (guard_biomes): the biome whose weight gates the node (-1: none). The node is 0 where that
+    // weight is 0: on a level below the weight's, in a run whose weight is 0 on the whole box there (the run's mask);
+    // on a run's last level, at a point where the weight is 0.
+    int guard = -1;
+    // The bits this node's value sets in a run's mask above its last level (0 for most): biome b's if the node is
+    // weights[b] and some node is guarded by b (several when biomes share one weight node: the graph hash-conses). The
+    // CPU run and both GPU texts mark from it.
+    uint32_t mark = 0;
 };
 
 // One level's program: the nodes it computes (in order, after the inputs carried from the level above: the level
@@ -104,6 +119,9 @@ struct LevelProgram {
     const std::vector<int> &inputs(int p_m) const;
     // The code a run down to p_lod runs on its last level: that of levels min(p_lod, top) .. 0, coarse to fine.
     std::vector<int> last_code(int p_lod) const;
+    // The finest level that code computes a node on (folded: fold_lods): below it every node is a constant or unread, so
+    // a run's last level stops there (its output and pick, if constants, read as such).
+    int last_stop(int p_lod) const;
     int channels(int p_m) const { return int(levels[size_t(p_m)].out.size()); }
 };
 
@@ -135,6 +153,24 @@ ov::str glsl_helpers();
 // Node p_node's value from its inputs' values p_in at p_at (op_def's CPU form).
 Float4 eval_node(const LevelProgram &p_prog, const Node &p_node, const Float4 *p_in, const OpPoint &p_at);
 
+// The constant relaxation (docs/cascade.md, Folding): a run of LOD L reads its notes finer than L as 0, so a node of
+// such notes and constants only is a constant there, computed once by its own op (and a product by such a 0 is 0),
+// whatever the point: each node's const_lod and folded. The last level then computes only what its non-constant nodes
+// read from the output and the pick (live_lod). The same bits as the unfolded program (every op's result flushed: no
+// -0, a product by +0 is +0), so the CPU and both GPU texts fold alike. Called by compile after lower.
+void fold_lods(LevelProgram &r_prog);
+
+// The biome pruning (docs/cascade.md, Pruning): biome b's ground enters the blend as products by its weight w_b; a
+// node read only by those products (and by other such nodes) is b's, and gated on levels finer than w_b's. Where w_b
+// is 0 (value and gradient) on every point of a run's box on its level, it is 0 on every finer point too (Hermite of
+// zeros), so the products are 0 whatever b's nodes are: they are skipped, 0. The same bits for the output and the pick
+// (a product by +0 is +0); the skipped channels are 0 on the CPU and the GPU alike. Called by compile after fold_lods.
+void guard_biomes(LevelProgram &r_prog);
+// The run's mask's bit of biome b (Values::mask).
+inline uint32_t biome_bit(int p_b) {
+    return uint32_t(1) << uint32_t(p_b);
+}
+
 // The channels of one level of a run: the nodes it holds (slot[node], -1: none), 4 planar channels per slot in
 // Cascade::Channel order (VALUE, DX, DY, DZ) over the box's points (x-major).
 struct Values {
@@ -142,6 +178,9 @@ struct Values {
     Cascade::Box box;
     std::vector<int> slot;
     std::vector<std::vector<float>> ch;
+    // The run's biome mask (guard_biomes): bit b set once biome b's weight isn't 0 somewhere on its level's box (computed
+    // there, a level above the last); read by the levels below.
+    uint32_t mask = 0;
 
     bool has(int p_node) const { return p_node >= 0 && slot[size_t(p_node)] >= 0; }
     Float4 at(int p_node, int64_t p_i) const;

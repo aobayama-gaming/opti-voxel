@@ -11,6 +11,7 @@ using Cascade::dadd;
 using Cascade::dflush;
 using Cascade::dmul;
 using Cascade::dscale;
+using ExactNoise::float_bits;
 
 namespace {
 
@@ -256,25 +257,54 @@ Values subdivide(const LevelProgram &p_prog, const Values &p_parent, const std::
     return v;
 }
 
-// Runs p_code at every point of r_values (its inputs there already).
-void compute(const LevelProgram &p_prog, const std::vector<int> &p_code, Values &r_values) {
+bool is_zero(const Float4 &p_v) {
+    return p_v.x == 0.0f && p_v.y == 0.0f && p_v.z == 0.0f && p_v.w == 0.0f;
+}
+
+// Runs p_code at every point of r_values (its inputs there already), each node in the GPU texts' order: on a run's last
+// level (p_last) a node no computed node reads skipped; on a level above it a node of a biome off in the run's mask
+// 0; a node folded on the level its constant; on the last level a node of a biome whose weight is 0 at the point 0;
+// else its op. Then, above the last level, the mask's bits of the weights computed here.
+void compute(const LevelProgram &p_prog, const std::vector<int> &p_code, bool p_last, Values &r_values) {
     const size_t count = size_t(r_values.box.count());
+    const int m = r_values.m;
+    std::vector<int> code;
     for (const int n : p_code) {
+        const Node &node = p_prog.nodes[size_t(n)];
+        if (p_last && m > node.live_lod) {
+            continue;
+        }
         if (r_values.slot[size_t(n)] < 0) {
             r_values.slot[size_t(n)] = int(r_values.ch.size() / Cascade::CHANNELS);
             r_values.ch.resize(r_values.ch.size() + Cascade::CHANNELS, std::vector<float>(count));
+        }
+        const bool off = !p_last && node.guard >= 0 && (r_values.mask & biome_bit(node.guard)) == 0u;
+        if (off || (m >= node.const_lod && !(p_last && node.guard >= 0))) {
+            const size_t s = size_t(r_values.slot[size_t(n)]) * Cascade::CHANNELS;
+            for (int c = 0; c < Cascade::CHANNELS; c++) {
+                std::fill(r_values.ch[s + size_t(c)].begin(), r_values.ch[s + size_t(c)].end(), c == Cascade::VALUE && !off ? node.folded : 0.0f);
+            }
+        } else {
+            code.push_back(n);
         }
     }
     std::vector<Float4> in;
     Cascade::for_each_point(r_values.box, [&](const Vector3i64 &p_p, int64_t p_i) {
         const OpPoint at{ p_p, r_values.m };
-        for (const int n : p_code) {
+        for (const int n : code) {
             const Node &node = p_prog.nodes[size_t(n)];
-            in.resize(node.in.size());
-            for (size_t i = 0; i < node.in.size(); i++) {
-                in[i] = r_values.at(node.in[i], p_i);
+            Float4 v = ZERO;
+            if (p_last && node.guard >= 0 && is_zero(r_values.at(p_prog.weights[size_t(node.guard)], p_i))) {
+                // its biome's weight 0 here: 0
+            } else if (m >= node.const_lod) {
+                v = Float4{ 0.0f, 0.0f, 0.0f, node.folded };
+            } else {
+                in.resize(node.in.size());
+                for (size_t i = 0; i < node.in.size(); i++) {
+                    in[i] = r_values.at(node.in[i], p_i);
+                }
+                v = eval_node(p_prog, node, in.data(), at);
             }
-            const Float4 v = eval_node(p_prog, node, in.data(), at);
             const size_t s = size_t(r_values.slot[size_t(n)]) * Cascade::CHANNELS;
             r_values.ch[s + Cascade::VALUE][size_t(p_i)] = v.w;
             r_values.ch[s + Cascade::DX][size_t(p_i)] = v.x;
@@ -282,6 +312,15 @@ void compute(const LevelProgram &p_prog, const std::vector<int> &p_code, Values 
             r_values.ch[s + Cascade::DZ][size_t(p_i)] = v.z;
         }
     });
+    for (const int n : p_code) {
+        const uint32_t bits = p_prog.nodes[size_t(n)].mark;
+        if (p_last || bits == 0u || !r_values.has(n)) {
+            continue;
+        }
+        for (int64_t i = 0; i < int64_t(count) && (r_values.mask & bits) != bits; i++) {
+            r_values.mask |= is_zero(r_values.at(n, i)) ? 0u : bits;
+        }
+    }
 }
 
 } // namespace
@@ -302,6 +341,52 @@ Float4 eval_node(const LevelProgram &p_prog, const Node &p_node, const Float4 *p
     return op_def(p_node.op).cpu(p_prog, p_node, p_in, p_at);
 }
 
+void fold_lods(LevelProgram &r_prog) {
+    std::vector<Float4> in;
+    for (Node &node : r_prog.nodes) {
+        node.const_lod = NO_LEVEL;
+        node.folded = 0.0f;
+        int lod = 0;
+        Float4 v = ZERO;
+        if (node.op == Op::NOTE) {
+            lod = node.level + 1; // absent on a coarser run, whatever its warp
+        } else if (node.op == Op::UP || node.op == Op::PICK) {
+            continue; // of the point
+        } else {
+            int zero = NO_LEVEL; // a product's: from where one factor is the constant 0
+            in.clear();
+            for (const int i : node.in) {
+                const Node &a = r_prog.nodes[size_t(i)];
+                lod = ov::max(lod, a.const_lod);
+                zero = a.const_lod < NO_LEVEL && float_bits(a.folded) == 0u ? ov::min(zero, a.const_lod) : zero;
+                in.push_back(Float4{ 0.0f, 0.0f, 0.0f, a.folded });
+            }
+            if (node.op == Op::MUL && zero < lod) {
+                lod = zero; // dmul by +0: every channel a signed 0, flushed to +0
+            } else if (lod < NO_LEVEL) {
+                v = eval_node(r_prog, node, in.data(), OpPoint{ Vector3i64(), lod }); // no op but NOTE, UP, PICK reads the point
+            }
+        }
+        if (lod < NO_LEVEL && (float_bits(v.x) | float_bits(v.y) | float_bits(v.z)) == 0u) {
+            node.const_lod = lod;
+            node.folded = v.w;
+        }
+    }
+    // Liveness on the last level, from the roots up: a node computed there (below its const_lod) reads its inputs.
+    for (Node &node : r_prog.nodes) {
+        node.live_lod = -1;
+    }
+    r_prog.nodes[size_t(r_prog.output)].live_lod = NO_LEVEL;
+    r_prog.nodes[size_t(r_prog.pick)].live_lod = NO_LEVEL;
+    for (size_t i = r_prog.nodes.size(); i-- > 0;) {
+        const Node &node = r_prog.nodes[i];
+        const int reads = node.const_lod < NO_LEVEL ? ov::min(node.live_lod, node.const_lod - 1) : node.live_lod;
+        for (const int a : node.in) {
+            r_prog.nodes[size_t(a)].live_lod = ov::max(r_prog.nodes[size_t(a)].live_lod, reads);
+        }
+    }
+}
+
 const std::vector<int> &LevelProgram::inputs(int p_m) const {
     static const std::vector<int> NONE;
     return p_m + 1 <= top ? levels[size_t(p_m + 1)].out : NONE;
@@ -313,6 +398,61 @@ std::vector<int> LevelProgram::last_code(int p_lod) const {
         code.insert(code.end(), levels[size_t(m)].code.begin(), levels[size_t(m)].code.end());
     }
     return code;
+}
+
+int LevelProgram::last_stop(int p_lod) const {
+    const int lv = ov::min(p_lod, top);
+    int stop = lv;
+    for (int s = lv; s >= 0; s--) {
+        for (const int n : levels[size_t(s)].code) {
+            const Node &node = nodes[size_t(n)];
+            stop = p_lod < node.const_lod && p_lod <= node.live_lod ? s : stop;
+        }
+    }
+    return stop;
+}
+
+void guard_biomes(LevelProgram &r_prog) {
+    const size_t n = r_prog.nodes.size();
+    for (Node &node : r_prog.nodes) {
+        node.guard = -1;
+        node.mark = 0;
+    }
+    if (r_prog.weights.size() < 2) {
+        return;
+    }
+    constexpr int NONE = -2; // no reader seen yet
+    std::vector<int> owner(n, NONE), product(n, -1);
+    std::vector<bool> root(n, false);
+    for (const int r : { r_prog.output, r_prog.pick }) {
+        root[size_t(r)] = true;
+    }
+    for (const std::vector<int> *list : { &r_prog.fields, &r_prog.weights }) {
+        for (const int r : *list) {
+            root[size_t(r)] = true;
+        }
+    }
+    // A product by w_b (the blend's term) is b's whatever reads it: it is 0 where w_b is.
+    for (size_t i = 0; i < n; i++) {
+        const Node &node = r_prog.nodes[i];
+        for (size_t b = 0; b < r_prog.weights.size() && node.op == Op::MUL; b++) {
+            const int w = r_prog.weights[b];
+            product[i] = (node.in[0] == w) != (node.in[1] == w) && r_prog.nodes[size_t(w)].level != NO_LEVEL ? int(b) : product[i];
+        }
+    }
+    // From the readers down: a node is b's if every node reading it is b's (a product of b counting as b's).
+    for (size_t i = n; i-- > 0;) {
+        const Node &node = r_prog.nodes[i];
+        const int own = root[i] ? -1 : (product[i] >= 0 ? product[i] : (owner[i] == NONE ? -1 : owner[i]));
+        for (const int a : node.in) {
+            owner[size_t(a)] = owner[size_t(a)] == NONE || owner[size_t(a)] == own ? own : -1;
+        }
+        const int w = own >= 0 ? r_prog.weights[size_t(own)] : -1;
+        if (own >= 0 && node.level != NO_LEVEL && node.level < r_prog.nodes[size_t(w)].level) {
+            r_prog.nodes[i].guard = own;
+            r_prog.nodes[size_t(w)].mark |= biome_bit(own);
+        }
+    }
 }
 
 Float4 Values::at(int p_node, int64_t p_i) const {
@@ -342,9 +482,10 @@ Values run(const LevelProgram &p_prog, const Cascade::Box &p_box, int p_lod, std
             next.slot.assign(p_prog.nodes.size(), -1);
         } else {
             next = subdivide(p_prog, cur, p_prog.inputs(m), box);
+            next.mask = cur.mask;
         }
         static const std::vector<int> NONE;
-        compute(p_prog, m > p_lod ? (m <= p_prog.top ? p_prog.levels[size_t(m)].code : NONE) : p_prog.last_code(p_lod), next);
+        compute(p_prog, m > p_lod ? (m <= p_prog.top ? p_prog.levels[size_t(m)].code : NONE) : p_prog.last_code(p_lod), m == p_lod, next);
         if (r_levels != nullptr) {
             r_levels->push_back(next);
         }
@@ -401,6 +542,10 @@ void compute_point(const LevelProgram &p_prog, const std::vector<int> &p_code, c
             continue;
         }
         const Node &node = p_prog.nodes[size_t(n)];
+        if (p_m >= node.const_lod) {
+            std::fill_n(r_w.next.begin() + ptrdiff_t(size_t(n) * POINT_BOX), p_box.count(), Float4{ 0.0f, 0.0f, 0.0f, node.folded });
+            continue;
+        }
         r_w.in.resize(ov::max(r_w.in.size(), node.in.size()));
         Cascade::for_each_point(p_box, [&](const Vector3i64 &p_p, int64_t p_i) {
             for (size_t i = 0; i < node.in.size(); i++) {
@@ -423,6 +568,9 @@ void point_nodes(const LevelProgram &p_prog, const Vector3i64 &p_p, int p_lod, c
         w.cone[size_t(p_targets[t])] = 1;
     }
     for (size_t i = n; i-- > 0;) {
+        if (p_prog.nodes[i].const_lod <= p_lod) {
+            continue; // a constant on every level of the run: its inputs unread
+        }
         for (const int in : p_prog.nodes[i].in) {
             w.cone[size_t(in)] |= w.cone[i];
         }

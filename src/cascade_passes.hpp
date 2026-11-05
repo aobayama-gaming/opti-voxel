@@ -71,6 +71,8 @@ private:
     Buffer base_regions;
     Buffer base_region_index;
     uint32_t batch_items = 0;
+    // The biome pruning's per-item mask (Terrain::uses_biome_mask; invalid without), for batch_items items.
+    Buffer biome_mask;
     // At most every slot of every item a distinct region (a point item fills one), plus the zero region.
     uint32_t max_regions() const { return batch_items * (is_points() ? 1u : uint32_t(BaseRegions::SLOTS)) + 1u; }
     int top = 0; // the program's top level

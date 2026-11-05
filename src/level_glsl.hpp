@@ -19,7 +19,8 @@
 // copied from the floor parent), flushes them, then calls `Ch level_run(Ch ch, WorldPos p, int m, bool last)`: the
 // level's channels loaded into registers, its code run (on a run's last level, the code of every level from m down to 0,
 // as LevelProgram::last_code), and the channels it carries stored back in Ch for the level below; on the last level,
-// the output (channel 0) and the pick (channel 1's value) instead.
+// the output (channel 0) and the pick (channel 1's value) instead. Each statement (each generic record) is guarded by
+// its node's fold (Node::const_lod, live_lod: fold_lods), as the CPU run is.
 //
 // Registers: one per node, allocated over the stream of every level's code top to 0 (a node live from its first event
 // to its last: computed, read, loaded on a level, stored for the level below), so a level alone and a run's last level
@@ -52,7 +53,11 @@ ov::bytes band_table(const LevelProgram &p_prog);
 // The globals the Hermite and storage functions read, set per invocation by `void level_flags(int m)`: g_in (the
 // channels level m receives), g_pick (its first one is the pick), g_out (the channels it stores).
 ov::str level_flags_glsl(const LevelProgram &p_prog, const GpuLayout &p_layout, Cascade::ShaderParams &r_params);
-// level_run (after Ch, glsl_helpers and the climate's helpers); its values and records go to r_params.
+// Whether p_prog's level shader reads the biome pruning's mask (CascadeGLSL::BIOME_MASK_BINDING, set g_item): a
+// program with guards (guard_biomes), and every generic one (its text never depends on the graph).
+bool uses_biome_mask(const LevelProgram &p_prog);
+// level_run (after Ch, glsl_helpers and the climate's helpers), led by the mask's declaration when it uses one; its
+// values and records go to r_params.
 ov::str level_glsl(const LevelProgram &p_prog, const GpuLayout &p_layout, Cascade::ShaderParams &r_params);
 
 } // namespace Terrain

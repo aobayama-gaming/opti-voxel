@@ -18,6 +18,28 @@ v2, `docs/cascade-v2.md`) and the GPU passes (`src/cascade_glsl.*`, `src/level_g
   `Terrain::point` is the same run on a one-point box, allocation-free once warm and limited to the nodes its targets
   read: a box and a point give the same bits. The op table (`op_def`: each op's CPU and GLSL form side by side) is the
   only definition of every op.
+- **Folding (the constant relaxation, `Terrain::fold_lods`).** A run of LOD L reads every note finer than L as 0, so
+  the last level used to run every finer level's ops on zeros: LOD 24 cost 6x LOD 0 on the example table. Now a node
+  of absent notes and constants only is a constant from LOD `const_lod` up (computed once by its own op, `folded`), a
+  product by such a 0 is 0, and the last level of LOD L skips what nothing it computes reads (`live_lod`) and stops at
+  the finest level it still computes a node on (`last_stop`; a constant output or pick read as such). The CPU run,
+  the point query and both GPU texts (a guard on the run's LOD per statement, per generic record) read the same
+  fields. Exact: every op's result is flushed (no -0), so x + 0 and x * 0 give what the fold gives; a doctest compares
+  folded and unfolded runs at every LOD of every test table, and CascadeCheck's G3 replays the last level unfolded
+  against the GPU's folded output. Measured (`cascade_test.sh` G6, the example table, 128-chunk batches): the LOD 24
+  batch 238 -> 99 ms (its last level 233 -> 99 ms), LOD 12 182 -> 108 ms, LOD 0 unchanged (51 ms: no finer level);
+  the bare set's coarse LODs 0.88 -> 0.25 ms. What the last level of a coarse LOD still computes is real: the biome
+  blend and its weights on the samples, the sums of its coarse notes (a doctest prints the counts per LOD).
+- **Biome pruning (`Terrain::guard_biomes`).** Biome b's share of the ground is its products `w_b * g_b`; the nodes
+  only those products (or other such nodes) read are b's own, and each gets `guard = b` on the levels finer than
+  `w_b`'s. On every level above a run's last, the weight's statement sets bit b of its item's mask (`Values::mask`;
+  the GPU's `biome_mask`, binding 13, a uint per item zeroed by `upload_items`, `atomicOr`) when `w_b` is nonzero
+  anywhere on the item's box; a guarded node whose bit is off is 0 over the box. On the last level the test is per
+  point (`w_b != 0` there). Exact: a weight that is 0 at every point of its level's box is 0 at every finer point
+  (Hermite of zeros), so the product is +0 either way; the CPU run applies the same mask, and the point query ignores
+  guards (it computes everything, the same bits). Statement order: dead, off, folded, computed. A doctest runs
+  chunk-sized boxes over every test table pruned and not (same output and pick bits) and counts the runs a biome was
+  off. The generic text always binds the mask (`uses_biome_mask`); a specialised program only with guards.
 - **GPU cascade.** One dispatch per level for the whole batch (level L + j of every chunk, j from T minus the batch's
   smallest LOD down to 0), boxes in closed form from the chunk's anchor on (lo, hi) words (`GLSL_FRAME_INT64`,
   `Cascade::level_box`), a child point replays the CPU's x, y, z passes on its 2x2x2 parents (code generated from the

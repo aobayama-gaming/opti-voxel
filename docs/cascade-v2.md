@@ -251,8 +251,9 @@ Every world changes bits. Visible differences are expected where:
 - **The real cost is live channels:** value plus gradient per point per level, in scratch and in registers. The
   compiler's liveness and linear folds keep the count down; `MAX_CHANNELS` bounds it.
 - **Biome blends:** a point in a blend runs each present biome's own nodes. A per-chunk guard keeps a chunk to its
-  biomes: a biome whose weight's bound is 0 over the chunk is skipped. This is new; the old region guards went with the
-  regions in the climate declutter.
+  biomes: a biome whose weight is 0 over the chunk's box at the weight's level is skipped (`guard_biomes`, a mask per
+  item set on the coarse levels, a per-point test on the last; `docs/cascade.md`, Biome pruning). This is new; the old
+  region guards went with the regions in the climate declutter.
 - **Generic mode:** it pays the interpreter, as today; specialised mode emits straight code.
 
 Measured, not assumed: PR G carries a `tools/bench_ab.sh` table against dev (the default bench, and `--preset=forest5cm
@@ -267,7 +268,7 @@ Measured, not assumed: PR G carries a `tools/bench_ab.sh` table against dev (the
 | **D** (done) | the GLSL forms (specialised, generic); `SDFCascade` on v2; CascadeCheck on v2 |
 | **E** (done) | deletion of *What goes*; tests ported, test tables re-checked and pinned, the template biome as world files (the flat preset kept, above) |
 | **F** (done) | biome mixer: node kinds from the engine's catalogue (it already built its nodes from `graph_kinds`; its own loop refusal deleted, the engine's error names the node; the tooltips' v1 rules rewritten), the warp's `x` / `y` / `z` ports in `graph_kinds` (all three or `in`, each gated), any multifractal parent, worlds migrated on read (a field's ground term dropped) |
-| G | guards and fold tuning; the bench table; `docs/perf.md` |
+| G | the constant relaxation per LOD (`fold_lods`, `docs/cascade.md`: a node of absent notes is a constant, the last level skips what nothing reads, #165); the biome pruning (`guard_biomes`: a biome's own nodes skipped where its weight is 0 over the chunk); the bench table; `docs/perf.md` |
 
 Each PR updates the docs it makes wrong: `cascade.md`, `climate.md`, `terrain.md`, `testing.md`, `gotchas.md`,
 `integer-frame.md`, `instance-stream.md`, and the CLAUDE.md invariants (the "CPU mirrors" rule points at the op table

@@ -6,6 +6,7 @@
 
 #include <cmath>
 #include <random>
+#include <regex>
 
 // Cascade v2 (docs/cascade-v2.md): the compiler's passes and the CPU evaluator.
 
@@ -521,4 +522,145 @@ TEST_CASE("Terrain: the specialised text calls tp_note once, whatever the note c
         }
         CHECK(int64_t(note_order(prog).size()) == notes);
     }
+}
+
+namespace {
+
+// p_prog without its fold: every node computed on every level, as before the constant relaxation.
+LevelProgram unfolded(const LevelProgram &p_prog) {
+    LevelProgram u = p_prog;
+    for (Node &n : u.nodes) {
+        n.const_lod = NO_LEVEL;
+        n.live_lod = NO_LEVEL;
+        n.guard = -1;
+        n.mark = 0;
+    }
+    return u;
+}
+
+// The nodes a run's last level of LOD p_lod computes (not folded, read).
+int64_t last_computed(const LevelProgram &p_prog, int p_lod) {
+    int64_t n = 0;
+    for (const int c : p_prog.last_code(p_lod)) {
+        const Node &node = p_prog.nodes[size_t(c)];
+        n += p_lod < node.const_lod && p_lod <= node.live_lod ? 1 : 0;
+    }
+    return n;
+}
+
+} // namespace
+
+// The constant relaxation changes what a run computes, never its bits: a box run and a point query of every LOD, folded
+// and not, on every test table in both modes.
+TEST_CASE("Terrain: the folded program gives the unfolded bits at every LOD, on every test table") {
+    for (const Pin &pin : PINS) {
+        for (const Mode mode : { Mode::SPECIALISED, Mode::GENERIC }) {
+            LevelProgram prog;
+            CHECK_OR_RETURN(compile_table(test_table(pin.path), prog, mode) == ov::str());
+            const LevelProgram plain = unfolded(prog);
+            int64_t bad = 0;
+            ov::str counts;
+            for (int lod = 0; lod <= prog.top + 1; lod++) {
+                const Cascade::Box box = cube(Vector3i64(-1, 3 - lod, 2), 3);
+                const Values a = run(prog, box, lod), b = run(plain, box, lod);
+                Cascade::for_each_point(box, [&](const Vector3i64 &p_p, int64_t p_i) {
+                    bad += ExactNoise::same_bits(a.at(prog.output, p_i), b.at(prog.output, p_i)) ? 0 : 1;
+                    bad += float_bits(a.at(prog.pick, p_i).w) == float_bits(b.at(prog.pick, p_i).w) ? 0 : 1;
+                    const Sample s = point(prog, p_p, lod);
+                    bad += ExactNoise::same_bits(s.ground, b.at(prog.output, p_i)) && s.pick == int(b.at(prog.pick, p_i).w) ? 0 : 1;
+                });
+                counts += ov::format(" %d/%d", last_computed(prog, lod), last_computed(plain, lod));
+            }
+            CAPTURE(std::string(pin.path));
+            MESSAGE((std::string(pin.path) + (mode == Mode::GENERIC ? " (generic)" : "")), ": last level nodes per LOD, folded/unfolded:", std::string(counts.c_str()));
+            CHECK(bad == 0);
+        }
+    }
+}
+
+// The generic text's placeholders are all substituted (one inside another, "STOP" read as "S" + TOP's offset, once
+// broke the GPU compile with an undeclared identifier).
+TEST_CASE("Terrain: the generic text keeps none of its placeholders") {
+    for (const Pin &pin : PINS) {
+        LevelProgram prog;
+        CHECK_OR_RETURN(compile_table(test_table(pin.path), prog, Mode::GENERIC) == ov::str());
+        ov::str err;
+        const GpuLayout layout = gpu_layout(prog, err);
+        Cascade::ShaderParams params;
+        const std::string text = level_glsl(prog, layout, params).c_str();
+        INFO(pin.path);
+        for (const char *word : { "CASES", "CH_GET", "PUT_OUTPUT", "PUT_CHANNEL", "ROOT_PICK", "MAX_REGISTERS", "MAX_LEVEL", "TOP", "DIR", "OUTPUT", "PICK", "FINEST", "WEIGHTS", "RECORD_HEAD" }) {
+            CHECK_MESSAGE(text.find(word) == std::string::npos, word);
+        }
+        std::smatch glued; // a placeholder replaced inside a longer one: an upper-case word glued to a number
+        CHECK_MESSAGE(!std::regex_search(text, glued, std::regex("\\b[A-Z_]+[0-9]+\\b")), (glued.empty() ? std::string() : glued.str()));
+    }
+}
+
+// A multifractal's product on a run coarser than its note is 0 whatever its parent: the parent's ramp isn't computed
+// there.
+TEST_CASE("Terrain: a product by an absent note folds to 0 and its other factor goes unread") {
+    const ov::str nodes = "[" + note("in", 3.2, 1, 1.0) + ", " + note("p", 102.4, 2, 4.0) +
+            R"(, {"id": "r", "kind": "shape", "in": "p", "shape": "ridged"}, {"id": "mf", "kind": "multifractal", "in": "in", "parent": "r", "low_m": -0.8, "high_m": 0.4}, )" +
+            R"({"id": "c", "kind": "constant", "value_m": 2}, {"id": "s", "kind": "add", "a": "mf", "b": "c"}, {"id": "o", "kind": "output", "height": "s"}])";
+    for (const Mode mode : { Mode::SPECIALISED, Mode::GENERIC }) {
+        LevelProgram prog;
+        CHECK_OR_RETURN(compile_table(one_biome(nodes), prog, mode) == ov::str());
+        int mf = -1;
+        for (size_t i = 0; i < prog.nodes.size(); i++) {
+            mf = prog.nodes[i].op == Op::MUL && prog.nodes[i].level == 3 ? int(i) : mf;
+        }
+        CHECK_OR_RETURN(mf >= 0);
+        const Node &mul = prog.nodes[size_t(mf)];
+        CHECK(mul.const_lod == 4); // its note (level 3) absent from LOD 4
+        CHECK(float_bits(mul.folded) == 0u);
+        const int ramp = prog.nodes[size_t(mul.in[0])].op == Op::CURVE ? mul.in[0] : mul.in[1];
+        CHECK(prog.nodes[size_t(ramp)].op == Op::CURVE);
+        CHECK(prog.nodes[size_t(ramp)].live_lod == 3); // read by the product up to LOD 3 only
+        CHECK(prog.nodes[size_t(prog.output)].const_lod == 4); // 0 + 2 m: the whole ground a constant
+        CHECK(last_computed(prog, 9) == 0);
+    }
+}
+
+// The biome pruning changes what a run computes, never its output or pick: runs over chunk-sized boxes spread over the
+// biomes, pruned and not, on every test table in both modes; and somewhere a biome is off a whole box.
+TEST_CASE("Terrain: the pruned program gives the unpruned bits, and prunes") {
+    int64_t pruned_runs = 0;
+    for (const Pin &pin : PINS) {
+        for (const Mode mode : { Mode::SPECIALISED, Mode::GENERIC }) {
+            LevelProgram prog;
+            CHECK_OR_RETURN(compile_table(test_table(pin.path), prog, mode) == ov::str());
+            LevelProgram plain = prog;
+            int64_t guarded = 0;
+            int64_t unmarked = 0; // a guard whose weight doesn't set its bit (biomes sharing a weight node)
+            for (Node &n : plain.nodes) {
+                guarded += n.guard >= 0 ? 1 : 0;
+                unmarked += n.guard >= 0 && (prog.nodes[size_t(prog.weights[size_t(n.guard)])].mark & biome_bit(n.guard)) == 0u ? 1 : 0;
+                n.guard = -1;
+                n.mark = 0;
+            }
+            CHECK(unmarked == 0);
+            int64_t bad = 0;
+            for (const int lod : { 0, 2, 5 }) {
+                for (int i = 0; i < 6; i++) {
+                    const int64_t far = (int64_t(i) * 7919 - 20000) * (int64_t(1) << (12 - lod));
+                    const Cascade::Box box = cube(Vector3i64(far, 3 - (i << 2), -far / 3), 10);
+                    const Values a = run(prog, box, lod), b = run(plain, box, lod);
+                    Cascade::for_each_point(box, [&](const Vector3i64 &, int64_t p_i) {
+                        bad += ExactNoise::same_bits(a.at(prog.output, p_i), b.at(prog.output, p_i)) ? 0 : 1;
+                        bad += float_bits(a.at(prog.pick, p_i).w) == float_bits(b.at(prog.pick, p_i).w) ? 0 : 1;
+                    });
+                    for (size_t w = 0; w < prog.weights.size() && guarded > 0; w++) {
+                        const int level = prog.nodes[size_t(prog.weights[w])].level;
+                        pruned_runs += level != NO_LEVEL && lod < level && (a.mask & biome_bit(int(w))) == 0u ? 1 : 0;
+                    }
+                }
+            }
+            CAPTURE(std::string(pin.path));
+            MESSAGE((std::string(pin.path) + (mode == Mode::GENERIC ? " (generic)" : "")), ": ", guarded, " guarded nodes of ", prog.nodes.size());
+            CHECK(bad == 0);
+        }
+    }
+    MESSAGE("runs with a biome off their whole box: ", pruned_runs);
+    CHECK(pruned_runs > 0);
 }
