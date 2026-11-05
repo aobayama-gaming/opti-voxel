@@ -81,11 +81,10 @@ std::vector<int> band_index(const LevelProgram &p_prog) {
     return index;
 }
 
-// Node p_n's statement in the specialised text.
-ov::str statement(const LevelProgram &p_prog, const GpuLayout &p_layout, int p_n, const std::vector<int> &p_band, const std::vector<int64_t> &p_curve,
+// Node p_n's expression in the specialised text.
+ov::str expression(const LevelProgram &p_prog, const GpuLayout &p_layout, int p_n, const std::vector<int> &p_band, const std::vector<int64_t> &p_curve,
         ShaderParams &r_params) {
     const Node &node = p_prog.nodes[size_t(p_n)];
-    const ov::str dst = reg(p_layout.reg[size_t(p_n)]);
     const auto in = [&](int p_i) { return p_i < int(node.in.size()) ? reg(p_layout.reg[size_t(node.in[size_t(p_i)])]) : ov::str("vec4(0.0)"); };
     const auto k = [&](int p_i) { return p_i < int(node.k.size()) ? r_params(node.k[size_t(p_i)]) : ov::str("0.0"); };
     const char *glsl = op_def(node.op).glsl;
@@ -95,18 +94,67 @@ ov::str statement(const LevelProgram &p_prog, const GpuLayout &p_layout, int p_n
             const ov::str t = ov::replace_all(glsl, { { "$i", in(int(i)) }, { "#i", k(int(i)) } });
             sum = i == 0 ? t : "cl_add(" + sum + ", " + t + ")";
         }
-        return "            " + dst + " = " + (sum.empty() ? ov::str("vec4(0.0)") : sum) + ";\n";
+        return sum.empty() ? ov::str("vec4(0.0)") : sum;
     }
     if (node.op == Op::PICK) {
         ov::str all = ov::format("vec4[%d](", int64_t(Climate::MAX_BIOMES));
         for (int b = 0; b < Climate::MAX_BIOMES; b++) {
             all += (b ? ", " : "") + (b < int(node.in.size()) ? in(b) : ov::str("vec4(0.0)"));
         }
-        return "            " + dst + " = " + ov::replace_all(glsl, { { "$all", all + ")" }, { "#n", ov::itos(int64_t(node.in.size())) }, { "@p", "p" } }) + ";\n";
+        return ov::replace_all(glsl, { { "$all", all + ")" }, { "#n", ov::itos(int64_t(node.in.size())) }, { "@p", "p" } });
     }
     const ov::str band = node.op == Op::NOTE ? ov::format("bands[%d]", int64_t(p_band[size_t(p_n)])) : ov::str();
     const ov::str curve = node.op == Op::CURVE ? ov::itos(p_curve[size_t(node.curve)]) : ov::str();
-    return "            " + dst + " = " + form(glsl, in, k, ov::itos(node.level), band, curve) + ";\n";
+    return form(glsl, in, k, ov::itos(node.level), band, curve);
+}
+
+// A node's constant (Node::folded) as a dual: no gradient.
+ov::str folded_literal(const Node &p_node, ShaderParams &r_params) {
+    return "vec4(0.0, 0.0, 0.0, " + r_params(p_node.folded) + ")";
+}
+
+// LevelProgram::last_stop per LOD m = 0 .. MAX_LEVEL (both texts' table: where a run's last level stops).
+std::vector<float> last_stops(const LevelProgram &p_prog) {
+    std::vector<float> stops;
+    for (int m = 0; m <= Cascade::MAX_LEVEL; m++) {
+        stops.push_back(float(p_prog.last_stop(m)));
+    }
+    return stops;
+}
+
+// Node p_n's folded value on a run of LOD m (its constant from const_lod up), p_expr its expression.
+ov::str folded_value(const Node &p_node, const ov::str &p_expr, ShaderParams &r_params) {
+    const ov::str c = folded_literal(p_node, r_params);
+    if (p_node.const_lod <= 0) {
+        return c;
+    }
+    return p_node.const_lod < NO_LEVEL ? ov::format("(m >= %d ? %s : %s)", int64_t(p_node.const_lod), c, p_expr) : p_expr;
+}
+
+// Node p_n's statement in the specialised text, p_expr under its fold (Node::const_lod, live_lod): its constant on a
+// run of LOD >= const_lod, nothing on a last level of LOD > live_lod.
+ov::str statement(const LevelProgram &p_prog, const GpuLayout &p_layout, int p_n, const ov::str &p_expr, ShaderParams &r_params) {
+    const Node &node = p_prog.nodes[size_t(p_n)];
+    const ov::str set = reg(p_layout.reg[size_t(p_n)]) + " = ";
+    const ov::str c = set + folded_literal(node, r_params) + ";", e = set + p_expr + ";";
+    std::vector<ov::str> lines = { e };
+    if (node.const_lod <= 0) {
+        lines = { c };
+    } else if (node.const_lod < NO_LEVEL) {
+        lines = { ov::format("if (m >= %d) {", int64_t(node.const_lod)), "    " + c, "} else {", "    " + e, "}" };
+    }
+    if (node.live_lod < NO_LEVEL) {
+        for (ov::str &l : lines) {
+            l = "    " + l;
+        }
+        lines.insert(lines.begin(), ov::format("if (!last || m <= %d) {", int64_t(node.live_lod)));
+        lines.push_back("}");
+    }
+    ov::str t;
+    for (const ov::str &l : lines) {
+        t += "            " + l + "\n";
+    }
+    return t;
 }
 
 // The specialised text's note loop: level s's looped notes (one range of the band table, note_order) in one loop at the
@@ -140,7 +188,8 @@ ov::str note_loop(const LevelProgram &p_prog, const std::vector<int> &p_band, co
         return ov::str();
     }
     ov::str t = "        int nf = int(" + r_params.table(first, "min(s, " + ov::itos(Cascade::MAX_LEVEL) + ")") + ");\n";
-    t += "        int nn = int(" + r_params.table(count, "min(s, " + ov::itos(Cascade::MAX_LEVEL) + ")") + ");\n";
+    // a coarser run's notes are absent (their statements folded to 0)
+    t += "        int nn = m > s ? 0 : int(" + r_params.table(count, "min(s, " + ov::itos(Cascade::MAX_LEVEL) + ")") + ");\n";
     ov::str w = "vec4(0.0), vec4(0.0), vec4(0.0)";
     if (!warps.empty()) {
         t += ov::format("        vec4 nw[%d];\n        for (int e = 0; e < %d; e++) {\n            nw[e] = vec4(0.0);\n        }\n", int64_t(3 * most), int64_t(3 * most));
@@ -169,8 +218,8 @@ ov::str specialised(const LevelProgram &p_prog, const GpuLayout &p_layout, Shade
         if (!p_prog.levels[size_t(s)].code.empty()) {
             code += ov::format("        case %d:\n", s);
             for (const int n : p_prog.levels[size_t(s)].code) {
-                code += slot[size_t(n)] >= 0 ? ov::format("            %s = nv[%d];\n", reg(p_layout.reg[size_t(n)]), int64_t(slot[size_t(n)]))
-                                             : statement(p_prog, p_layout, n, band, curves, r_params);
+                const ov::str expr = slot[size_t(n)] >= 0 ? ov::format("nv[%d]", int64_t(slot[size_t(n)])) : expression(p_prog, p_layout, n, band, curves, r_params);
+                code += statement(p_prog, p_layout, n, expr, r_params);
             }
             code += "            break;\n";
         }
@@ -189,17 +238,19 @@ ov::str specialised(const LevelProgram &p_prog, const GpuLayout &p_layout, Shade
                            "    int lv = min(m, %d);\n",
             int64_t(p_layout.regs), int64_t(p_prog.top));
     t += "    switch (lv) {\n" + loads + empty + "    }\n";
-    t += "    for (int s = lv; s >= (last ? 0 : lv); s--) {\n" + notes + "        switch (s) {\n" + code + "        default:\n            break;\n        }\n    }\n";
-    t += "    Ch o = ch_zero();\n    if (last) {\n" + ch_put("0", reg(p_layout.reg[size_t(p_prog.output)])) +
-            ov::format("        o.c[4] = %s.w;\n", reg(p_layout.reg[size_t(p_prog.pick)])) + "        return o;\n    }\n";
+    const ov::str stop = "int(" + r_params.table(last_stops(p_prog), ov::format("min(m, %d)", int64_t(Cascade::MAX_LEVEL))) + ")";
+    t += "    for (int s = lv; s >= (last ? " + stop + " : lv); s--) {\n" + notes + "        switch (s) {\n" + code + "        default:\n            break;\n        }\n    }\n";
+    const auto root = [&](int p_n) { return folded_value(p_prog.nodes[size_t(p_n)], reg(p_layout.reg[size_t(p_n)]), r_params); };
+    t += "    Ch o = ch_zero();\n    if (last) {\n" + ch_put("0", root(p_prog.output)) + ov::format("        o.c[4] = %s.w;\n", root(p_prog.pick)) + "        return o;\n    }\n";
     return t + "    switch (lv) {\n" + stores + empty + "    }\n    return o;\n}\n";
 }
 
 // The generic interpreter's records (heap): level m's [inputs, outputs, instructions, first instruction, input registers,
 // output registers] at the directory's entry m (values), each instruction [op, register, inputs, constants, aux0,
-// aux1, input registers, constants] (aux: a NOTE's band and level, a CURVE's record).
+// aux1, const_lod, live_lod, folded, input registers, constants] (aux: a NOTE's band and level, a CURVE's record; the
+// fold: Node's, as the specialised statement reads it).
 struct GenericRecords {
-    int64_t dir = 0, top = 0, output = 0, pick = 0;
+    int64_t dir = 0, top = 0, output = 0, pick = 0, stop = 0;
 };
 
 GenericRecords generic_records(const LevelProgram &p_prog, const GpuLayout &p_layout, ShaderParams &r_params) {
@@ -212,7 +263,8 @@ GenericRecords generic_records(const LevelProgram &p_prog, const GpuLayout &p_la
         for (const int n : p_prog.levels[size_t(s)].code) {
             const Node &node = p_prog.nodes[size_t(n)];
             const float aux0 = node.op == Op::NOTE ? float(band[size_t(n)]) : (node.op == Op::CURVE ? float(curves[size_t(node.curve)]) : 0.0f);
-            code.insert(code.end(), { float(node.op), float(p_layout.reg[size_t(n)]), float(node.in.size()), float(node.k.size()), aux0, float(node.level) });
+            code.insert(code.end(),
+                    { float(node.op), float(p_layout.reg[size_t(n)]), float(node.in.size()), float(node.k.size()), aux0, float(node.level), float(node.const_lod), float(node.live_lod), node.folded });
             for (const int in : node.in) {
                 code.push_back(float(p_layout.reg[size_t(in)]));
             }
@@ -233,8 +285,13 @@ GenericRecords generic_records(const LevelProgram &p_prog, const GpuLayout &p_la
     GenericRecords g;
     g.dir = r_params.append(dir);
     g.top = r_params.append({ float(p_prog.top) });
-    g.output = r_params.append({ float(p_layout.reg[size_t(p_prog.output)]) });
-    g.pick = r_params.append({ float(p_layout.reg[size_t(p_prog.pick)]) });
+    const auto root = [&](int p_n) {
+        const Node &node = p_prog.nodes[size_t(p_n)];
+        return r_params.append({ float(p_layout.reg[size_t(p_n)]), float(node.const_lod), node.folded }); // register, the fold
+    };
+    g.output = root(p_prog.output);
+    g.pick = root(p_prog.pick);
+    g.stop = r_params.append(last_stops(p_prog));
     return g;
 }
 
@@ -248,33 +305,40 @@ Ch level_run(Ch ch, WorldPos p, int m, bool last) {
     for (int k = 0; k < nin; k++) {
         r[int(cl_heap(d + 4 + k))] = CH_GET;
     }
-    for (int s = lv; s >= (last ? 0 : lv); s--) {
+    for (int s = lv; s >= (last ? int(cl_param(FINEST + min(m, MAX_LEVEL))) : lv); s--) {
         int e = int(cl_param(DIR + s));
         int q = int(cl_heap(e + 3));
         int count = int(cl_heap(e + 2));
         for (int i = 0; i < count; i++) {
             int op = int(cl_heap(q));
             int na = int(cl_heap(q + 2));
-            int kq = q + 6 + na;
-            vec4 a[3];
-            for (int j = 0; j < 3; j++) {
-                a[j] = vec4(0.0);
-                if (j < na) {
-                    a[j] = r[int(cl_heap(q + 6 + j))];
+            int kq = q + 9 + na;
+            int qn = kq + int(cl_heap(q + 3));
+            if (last && float(m) > cl_heap(q + 7)) {
+                // unread on this last level
+            } else if (float(m) >= cl_heap(q + 6)) {
+                r[int(cl_heap(q + 1))] = vec4(0.0, 0.0, 0.0, cl_heap(q + 8));
+            } else {
+                vec4 a[3];
+                for (int j = 0; j < 3; j++) {
+                    a[j] = vec4(0.0);
+                    if (j < na) {
+                        a[j] = r[int(cl_heap(q + 9 + j))];
+                    }
                 }
+                vec4 v = vec4(0.0);
+                switch (op) {
+CASES                default:
+                    break;
+                }
+                r[int(cl_heap(q + 1))] = v;
             }
-            vec4 v = vec4(0.0);
-            switch (op) {
-CASES            default:
-                break;
-            }
-            r[int(cl_heap(q + 1))] = v;
-            q = kq + int(cl_heap(q + 3));
+            q = qn;
         }
     }
     Ch o = ch_zero();
     if (last) {
-PUT_OUTPUT        o.c[4] = r[int(cl_param(PICK))].w;
+PUT_OUTPUT        o.c[4] = ROOT_PICK.w;
         return o;
     }
     int nout = int(cl_heap(d + 1));
@@ -284,11 +348,16 @@ PUT_CHANNEL    }
 }
 )glsl";
 
+// A root's value in the generic text: its register, or its constant from its const_lod up (generic_records' root).
+ov::str generic_root(const char *p_at) {
+    return ov::replace_all("(float(m) >= cl_param(AT + 1) ? vec4(0.0, 0.0, 0.0, cl_param(AT + 2)) : r[int(cl_param(AT))])", "AT", p_at);
+}
+
 ov::str generic(const LevelProgram &p_prog, const GpuLayout &p_layout, ShaderParams &r_params) {
     const GenericRecords g = generic_records(p_prog, p_layout, r_params);
     const auto in = [](int p_i) { return ov::format("a[%d]", int64_t(p_i)); };
     const auto k = [](int p_i) { return ov::format("cl_heap(kq + %d)", int64_t(p_i)); };
-    const ov::str in_j = "r[int(cl_heap(q + 6 + j))]";
+    const ov::str in_j = "r[int(cl_heap(q + 9 + j))]";
     ov::str cases;
     for (int op = 0; op < int(Op::COUNT); op++) {
         const char *glsl = op_def(Op(op)).glsl;
@@ -306,8 +375,8 @@ ov::str generic(const LevelProgram &p_prog, const GpuLayout &p_layout, ShaderPar
         }
         cases += ov::format("            case %d: {\n", int64_t(op)) + body + "                break;\n            }\n";
     }
-    ov::str t = ov::replace_all(GENERIC_RUN, { { "CASES", cases }, { "CH_GET", ch_get("k") }, { "PUT_OUTPUT", ch_put("0", "r[int(cl_param(OUTPUT))]") }, { "PUT_CHANNEL", ch_put("k", "r[int(cl_heap(d + 4 + nin + k))]") } });
-    return ov::replace_all(t, { { "MAX_REGISTERS", ov::itos(MAX_REGISTERS) }, { "TOP", ov::itos(g.top) }, { "DIR", ov::itos(g.dir) }, { "OUTPUT", ov::itos(g.output) }, { "PICK", ov::itos(g.pick) } });
+    ov::str t = ov::replace_all(GENERIC_RUN, { { "CASES", cases }, { "CH_GET", ch_get("k") }, { "PUT_OUTPUT", ch_put("0", generic_root("OUTPUT")) }, { "ROOT_PICK", generic_root("PICK") }, { "PUT_CHANNEL", ch_put("k", "r[int(cl_heap(d + 4 + nin + k))]") } });
+    return ov::replace_all(t, { { "MAX_REGISTERS", ov::itos(MAX_REGISTERS) }, { "TOP", ov::itos(g.top) }, { "DIR", ov::itos(g.dir) }, { "OUTPUT", ov::itos(g.output) }, { "PICK", ov::itos(g.pick) }, { "FINEST", ov::itos(g.stop) }, { "MAX_LEVEL", ov::itos(Cascade::MAX_LEVEL) } });
 }
 
 // Each node's first and last event over the stream (levels top .. 0: the inputs' loads, the code, the outputs' stores;

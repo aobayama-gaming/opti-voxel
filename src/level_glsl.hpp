@@ -19,7 +19,8 @@
 // copied from the floor parent), flushes them, then calls `Ch level_run(Ch ch, WorldPos p, int m, bool last)`: the
 // level's channels loaded into registers, its code run (on a run's last level, the code of every level from m down to 0,
 // as LevelProgram::last_code), and the channels it carries stored back in Ch for the level below; on the last level,
-// the output (channel 0) and the pick (channel 1's value) instead.
+// the output (channel 0) and the pick (channel 1's value) instead. Each statement (each generic record) is guarded by
+// its node's fold (Node::const_lod, live_lod: fold_lods), as the CPU run is.
 //
 // Registers: one per node, allocated over the stream of every level's code top to 0 (a node live from its first event
 // to its last: computed, read, loaded on a level, stored for the level below), so a level alone and a run's last level

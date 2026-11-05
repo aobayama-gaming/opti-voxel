@@ -267,7 +267,7 @@ Measured, not assumed: PR G carries a `tools/bench_ab.sh` table against dev (the
 | **D** (done) | the GLSL forms (specialised, generic); `SDFCascade` on v2; CascadeCheck on v2 |
 | **E** (done) | deletion of *What goes*; tests ported, test tables re-checked and pinned, the template biome as world files (the flat preset kept, above) |
 | **F** (done) | biome mixer: node kinds from the engine's catalogue (it already built its nodes from `graph_kinds`; its own loop refusal deleted, the engine's error names the node; the tooltips' v1 rules rewritten), the warp's `x` / `y` / `z` ports in `graph_kinds` (all three or `in`, each gated), any multifractal parent, worlds migrated on read (a field's ground term dropped) |
-| G | guards and fold tuning; the bench table; `docs/perf.md` |
+| G | the constant relaxation per LOD (`fold_lods`, `docs/cascade.md`: a node of absent notes is a constant, the last level skips what nothing reads); guards; the bench table; `docs/perf.md` |
 
 Each PR updates the docs it makes wrong: `cascade.md`, `climate.md`, `terrain.md`, `testing.md`, `gotchas.md`,
 `integer-frame.md`, `instance-stream.md`, and the CLAUDE.md invariants (the "CPU mirrors" rule points at the op table

@@ -17,7 +17,8 @@
 // the finest level of its inputs; a constant and `up` have none (exact at every lattice point: computed where they are
 // read). A node is computed on its level's lattice from its inputs' values there and Hermite-subdivided below
 // (Cascade::axis_rule, x then y then z), so every LOD and origin gets the same bits where they share points. A run of
-// LOD L stops at Λ_L: its last level computes the nodes of every level <= L, the notes finer than L reading 0.
+// LOD L stops at Λ_L: its last level computes the nodes of every level <= L, the notes finer than L reading 0 (what is
+// then a constant folded to it: fold_lods).
 //
 // Values are dual numbers (Float4: gradient per lattice spacing of the level, value), every op's result flushed under
 // 2^-64 (Cascade::dflush), each op's CPU form and GLSL form side by side in one table entry (op_table): the same ops in
@@ -72,6 +73,12 @@ struct Node {
     int curve = -1;
     Cascade::Band band; // NOTE: octave, seed, offset, stretch (amp 1)
     int level = NO_LEVEL;
+    // The fold per LOD (fold_lods): on every level of a run of LOD >= const_lod the node is the constant `folded` (its
+    // notes there absent, or a product by such a 0), and a run's last level of LOD > live_lod doesn't compute it (no
+    // node it computes reads it). NO_LEVEL: never constant, always read.
+    int const_lod = NO_LEVEL;
+    int live_lod = NO_LEVEL;
+    float folded = 0.0f;
 };
 
 // One level's program: the nodes it computes (in order, after the inputs carried from the level above: the level
@@ -104,6 +111,9 @@ struct LevelProgram {
     const std::vector<int> &inputs(int p_m) const;
     // The code a run down to p_lod runs on its last level: that of levels min(p_lod, top) .. 0, coarse to fine.
     std::vector<int> last_code(int p_lod) const;
+    // The finest level that code computes a node on (folded: fold_lods): below it every node is a constant or unread, so
+    // a run's last level stops there (its output and pick, if constants, read as such).
+    int last_stop(int p_lod) const;
     int channels(int p_m) const { return int(levels[size_t(p_m)].out.size()); }
 };
 
@@ -134,6 +144,13 @@ const OpDef &op_def(Op p_op);
 ov::str glsl_helpers();
 // Node p_node's value from its inputs' values p_in at p_at (op_def's CPU form).
 Float4 eval_node(const LevelProgram &p_prog, const Node &p_node, const Float4 *p_in, const OpPoint &p_at);
+
+// The constant relaxation (docs/cascade.md, Folding): a run of LOD L reads its notes finer than L as 0, so a node of
+// such notes and constants only is a constant there, computed once by its own op (and a product by such a 0 is 0),
+// whatever the point: each node's const_lod and folded. The last level then computes only what its non-constant nodes
+// read from the output and the pick (live_lod). The same bits as the unfolded program (every op's result flushed: no
+// -0, a product by +0 is +0), so the CPU and both GPU texts fold alike. Called by compile after lower.
+void fold_lods(LevelProgram &r_prog);
 
 // The channels of one level of a run: the nodes it holds (slot[node], -1: none), 4 planar channels per slot in
 // Cascade::Channel order (VALUE, DX, DY, DZ) over the box's points (x-major).
