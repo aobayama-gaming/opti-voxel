@@ -202,7 +202,8 @@ ov::str statement(const LevelProgram &p_prog, const GpuLayout &p_layout, int p_n
 // level's start, so the text holds one perlin3 whatever the note count (one inlined call per note took the NVIDIA
 // compiler minutes and gigabytes for 80 notes); each note's statement then copies its nv slot. r_slot: per node, its
 // slot in nv (-1: computed by its own statement).
-ov::str note_loop(const LevelProgram &p_prog, const std::vector<int> &p_band, const GpuLayout &p_layout, const ov::str &p_on, ShaderParams &r_params, std::vector<int> &r_slot) {
+ov::str note_loop(const LevelProgram &p_prog, const std::vector<int> &p_band, const GpuLayout &p_layout, const ov::str &p_on, int p_upto, ShaderParams &r_params,
+        std::vector<int> &r_slot) {
     r_slot.assign(p_prog.nodes.size(), -1);
     std::vector<float> first(size_t(Cascade::MAX_LEVEL + 1), 0.0f), count(size_t(Cascade::MAX_LEVEL + 1), 0.0f);
     int most = 0;
@@ -222,6 +223,9 @@ ov::str note_loop(const LevelProgram &p_prog, const std::vector<int> &p_band, co
             r_slot[size_t(c)] = n++;
         }
         count[size_t(s)] = float(n);
+        if (s > p_upto) {
+            continue; // a level the text doesn't run
+        }
         most = ov::max(most, n);
         warps += gather.empty() ? ov::str() : ov::format("        case %d:\n", int64_t(s)) + gather + "            break;\n";
     }
@@ -254,14 +258,14 @@ ov::str note_loop(const LevelProgram &p_prog, const std::vector<int> &p_band, co
     return t + "            if (ng == 0u || (on & ng) != 0u) {\n                " + call + "\n            } else {\n                nv[e] = vec4(0.0);\n            }\n        }\n";
 }
 
-ov::str specialised(const LevelProgram &p_prog, const GpuLayout &p_layout, ShaderParams &r_params) {
+ov::str specialised(const LevelProgram &p_prog, const GpuLayout &p_layout, int p_upto, ShaderParams &r_params) {
     const std::vector<int> band = band_index(p_prog);
     const std::vector<int64_t> curves = curve_records(p_prog, r_params);
     std::vector<int> slot;
     const ov::str on = on_word(p_prog, p_layout);
-    const ov::str notes = note_loop(p_prog, band, p_layout, on, r_params, slot);
+    const ov::str notes = note_loop(p_prog, band, p_layout, on, p_upto, r_params, slot);
     ov::str loads, code, stores;
-    for (int s = p_prog.top; s >= 0; s--) {
+    for (int s = ov::min(p_prog.top, p_upto); s >= 0; s--) {
         const std::vector<int> &in = s < p_prog.top ? p_layout.chan[size_t(s + 1)] : std::vector<int>();
         if (!in.empty()) {
             loads += ov::format("    case %d:\n", s);
@@ -619,13 +623,13 @@ bool uses_biome_mask(const LevelProgram &p_prog) {
     return p_prog.generic || std::any_of(p_prog.nodes.begin(), p_prog.nodes.end(), [](const Node &p_n) { return p_n.guard >= 0; });
 }
 
-ov::str level_glsl(const LevelProgram &p_prog, const GpuLayout &p_layout, ShaderParams &r_params) {
+ov::str level_glsl(const LevelProgram &p_prog, const GpuLayout &p_layout, ShaderParams &r_params, int p_upto) {
     const ov::str mask = uses_biome_mask(p_prog)
             ? ov::format("\n// Terrain::guard_biomes: the run's biome mask per item (zeroed per batch), the item level_run reads it for.\n"
                          "layout(set = 0, binding = %d, std430) restrict buffer BiomeMask { uint biome_mask[]; };\nuint g_item = 0u;\n",
                       int64_t(CascadeGLSL::BIOME_MASK_BINDING))
             : ov::str();
-    return mask + (p_prog.generic ? generic(p_prog, p_layout, r_params) : specialised(p_prog, p_layout, r_params));
+    return mask + (p_prog.generic ? generic(p_prog, p_layout, r_params) : specialised(p_prog, p_layout, p_upto, r_params));
 }
 
 } // namespace Terrain

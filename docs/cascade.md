@@ -60,6 +60,15 @@ v2, `docs/cascade-v2.md`) and the GPU passes (`src/cascade_glsl.*`, `src/level_g
   set and the caps only (`MAX_CHANNELS`, `MAX_REGISTERS`), so an edit of a value compiles nothing, and the same
   generic program gives the same bits on the CPU. The two modes differ by blend factoring (a few float steps of the
   output's bound, a doctest bounds them). The Godot device keeps the SPIR-V of every text by text (`RDDevice`).
+- **The fine variant.** One specialised text holds every level's code behind a switch on the level, so the GPU gives
+  each thread the registers of the heaviest level (`world.json`: 168 per thread, a quarter of the warps). The levels
+  `0 .. LevelProgram::fine_cut()` compute nothing (each note sits on a coarser level): `CascadePasses` compiles a
+  second text of those levels' cases alone (`level_shader`'s `p_upto`: 51 registers on `world.json`, 96 with the
+  instance fold) and a dispatch runs it when the batch's coarsest chunk's level, its largest LOD + j, sits there. The
+  same statements in the same order: the same bits. The generic text stays one (an edit compiles nothing). Measured
+  (`cascade_test.sh` G6 on `world.json`, 128-chunk batches): the last level at LOD 0 1.52 -> 0.42 ms (v1: 0.75), a
+  batch at LOD 0 2.31 -> 0.66 ms; LOD 8 and 12, whose last level runs code, are unchanged (the next lever: a text per
+  level range). Registers per text: `VK_KHR_pipeline_executable_properties` on the NVIDIA driver.
   Engine constants (the kernel's fade, the noise's means) stay literals. `CascadePasses` owns the passes per device
   (`ov::gpu::Device`); the mesher runs them in place of its sdf pass (and in the discovery audit).
 - **The cascade only exists on lattice points.** `SDFCascade::evaluate(p, lod)` takes `frac == 0` and a voxel
