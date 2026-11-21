@@ -60,7 +60,7 @@ const Pin PINS[] = {
     { "res://climate/plain.json", 8812832827283825826ull },
     { "res://climate/shaped_test.json", 9767343333093668675ull },
     { "res://climate/fieldless_test.json", 1997498522675870854ull },
-    { "res://climate/eight_biomes_test.json", 6180938215590612826ull },
+    { "res://climate/eight_biomes_test.json", 17544743084060714778ull }, // the pick on the finest note's level
     { "res://climate/notes_test.json", 10293944894637181568ull },
     { "res://climate/programs_test.json", 15627919854828456144ull },
     { "res://climate/graph_test.json", 10291101714587891757ull },
@@ -371,7 +371,7 @@ TEST_CASE("Terrain: the weights are ClimateTest::weights, op for op, and the pic
     const Values &v = levels[size_t(prog.top - level)];
     CHECK_OR_RETURN(v.m == level);
     int64_t bad = 0;
-    Cascade::for_each_point(v.box, [&](const Vector3i64 &p_p, int64_t p_i) {
+    Cascade::for_each_point(v.box, [&](const Vector3i64 &, int64_t p_i) {
         Float4 f[Climate::MAX_FIELDS] = {};
         for (size_t i = 0; i < field.size(); i++) {
             f[i] = field[i] >= 0 ? v.at(field[i], p_i) : Float4{};
@@ -381,9 +381,27 @@ TEST_CASE("Terrain: the weights are ClimateTest::weights, op for op, and the pic
         for (size_t b = 0; b < table.biomes.size(); b++) {
             bad += ExactNoise::same_bits(w[b], v.at(pick.in[b], p_i)) ? 0 : 1;
         }
-        bad += int(v.at(prog.pick, p_i).w) == Climate::pick_of(int(table.biomes.size()), w, p_p, v.m) ? 0 : 1;
     });
     CHECK(bad == 0);
+    // The pick, on the finest level of the program's notes (the biomes' 3.2 m notes), the largest of the weights
+    // subdivided there: a border follows their smooth contours, not their own lattice's cells.
+    int finest = NO_LEVEL;
+    for (const Node &n : prog.nodes) {
+        finest = n.op == Op::NOTE ? ov::min(finest, n.level) : finest;
+    }
+    CHECK_OR_RETURN(pick.level < level);
+    CHECK(pick.level == finest);
+    const Values &pv = levels[size_t(prog.top - pick.level)];
+    CHECK_OR_RETURN(pv.m == pick.level);
+    int64_t bad_pick = 0;
+    Cascade::for_each_point(pv.box, [&](const Vector3i64 &p_p, int64_t p_i) {
+        Float4 w[Climate::MAX_BIOMES];
+        for (size_t b = 0; b < table.biomes.size(); b++) {
+            w[b] = pv.at(pick.in[b], p_i);
+        }
+        bad_pick += int(pv.at(prog.pick, p_i).w) == Climate::pick_of(int(table.biomes.size()), w, p_p, pv.m) ? 0 : 1;
+    });
+    CHECK(bad_pick == 0);
 }
 
 TEST_CASE("Terrain: a ridged multifractal parent compiles and weighs its note") {

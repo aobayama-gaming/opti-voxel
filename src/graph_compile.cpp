@@ -38,6 +38,7 @@ class Graph {
 public:
     LevelProgram prog;
     bool specialise = true;
+    int pick_level = NO_LEVEL; // the finest level of the program's notes (compile sets it before the pick)
 
     const Node &node(int p_id) const { return prog.nodes[size_t(p_id)]; }
     bool is_constant(int p_id, float p_v) const { return node(p_id).op == Op::CONST && node(p_id).k[0] == p_v; }
@@ -51,6 +52,11 @@ public:
             constant = constant && node(i).op == Op::CONST;
             in.push_back(Float4{ 0.0f, 0.0f, 0.0f, node(i).op == Op::CONST ? node(i).k[0] : 0.0f });
         }
+        // The pick is computed on the finest level any note is (pick_level), from its weights subdivided there, then
+        // copied below: a biome's border is the smooth contour of its weights, stepped by the terrain's own finest
+        // lattice. On the weights' level it was their lattice's cells (51.2 m squares for fields of 409.6 m at 5 cm).
+        // The levels below the finest note still compute nothing (LevelProgram::fine_cut).
+        p_n.level = p_n.op == Op::PICK ? ov::min(p_n.level, pick_level) : p_n.level;
         if (constant) {
             return this->constant(eval_node(prog, p_n, in.data(), OpPoint()).w);
         }
@@ -544,6 +550,7 @@ Graph rebuild(const Graph &p_old, std::vector<int> &r_roots, F p_emit) {
     const std::vector<int> use = use_counts(p_old.prog, r_roots);
     Graph g;
     g.specialise = p_old.specialise;
+    g.pick_level = p_old.pick_level;
     g.prog.curves = p_old.prog.curves;
     std::vector<int> id(p_old.prog.nodes.size(), -1);
     for (size_t i = 0; i < p_old.prog.nodes.size(); i++) {
@@ -683,6 +690,9 @@ ov::str compile(const ov::Value &p_data, const Climate::Ground &p_ground, Mode p
         }
     }
     const std::vector<int> w = weight_nodes(g, r_table, fields);
+    for (const Node &n : g.prog.nodes) {
+        g.pick_level = n.op == Op::NOTE ? ov::min(g.pick_level, n.level) : g.pick_level;
+    }
     Node pick;
     pick.op = Op::PICK;
     pick.in = w;
