@@ -22,15 +22,6 @@ ov::str reg(int p_r) {
     return ov::format("r[%d]", p_r);
 }
 
-// Channel k of Ch as a dual (x, y, z: gradient, w: value; Ch holds Cascade::Channel order) and back.
-ov::str ch_get(const ov::str &p_k) {
-    return ov::format("vec4(ch.c[4 * %s + 1], ch.c[4 * %s + 2], ch.c[4 * %s + 3], ch.c[4 * %s])", p_k, p_k, p_k, p_k);
-}
-
-ov::str ch_put(const ov::str &p_k, const ov::str &p_v) {
-    return ov::format("        { vec4 v = %s; o.c[4 * %s] = v.w; o.c[4 * %s + 1] = v.x; o.c[4 * %s + 2] = v.y; o.c[4 * %s + 3] = v.z; }\n", p_v, p_k, p_k, p_k, p_k);
-}
-
 // An op's GLSL form with its operands: p_in(i) input i, p_k(i) constant i, and the node's own (@level, @band, @curve).
 template <typename In, typename K>
 ov::str form(const char *p_form, In p_in, K p_k, const ov::str &p_level, const ov::str &p_band, const ov::str &p_curve) {
@@ -270,7 +261,8 @@ ov::str specialised(const LevelProgram &p_prog, const GpuLayout &p_layout, int p
         if (!in.empty()) {
             loads += ov::format("    case %d:\n", s);
             for (size_t k = 0; k < in.size(); k++) {
-                loads += "        " + reg(p_layout.reg[size_t(in[k])]) + " = " + ch_get(ov::itos(int64_t(k))) + ";\n";
+                const bool pick = k == 0 && p_layout.pick_in(s);
+                loads += ov::format("        %s = subdivide(%du, %s);\n", reg(p_layout.reg[size_t(in[k])]), int64_t(k), pick ? "true" : "false");
             }
             loads += "        break;\n";
         }
@@ -284,16 +276,16 @@ ov::str specialised(const LevelProgram &p_prog, const GpuLayout &p_layout, int p
         }
         const std::vector<int> &out = p_layout.chan[size_t(s)];
         if (!out.empty()) {
-            stores += ov::format("        case %d:\n", s);
+            stores += ov::format("    case %d:\n", s);
             for (size_t k = 0; k < out.size(); k++) {
-                stores += "    " + ch_put(ov::itos(int64_t(k)), reg(p_layout.reg[size_t(out[k])]));
+                stores += ov::format("        ch_store(%du, %s);\n", int64_t(k), reg(p_layout.reg[size_t(out[k])]));
             }
-            stores += "            break;\n";
+            stores += "        break;\n";
         }
     }
     const ov::str empty = "    default:\n        break;\n";
     ov::str t = ov::format("\n// Terrain::level_run, specialised: level m's channels into registers, its code (a run's last level: levels m .. 0's), its\n"
-                           "// channels out (the last level: the output, then the pick).\nCh level_run(Ch ch, WorldPos p, int m, bool last) {\n    vec4 r[%d];\n"
+                           "// channels out (the last level: the output, then the pick).\nvoid level_run(WorldPos p, int m, bool last, out vec4 o_ground, out float o_pick) {\n    vec4 r[%d];\n"
                            "    int lv = min(m, %d);\n",
             int64_t(p_layout.regs), int64_t(p_prog.top));
     if (!on.empty()) {
@@ -303,8 +295,8 @@ ov::str specialised(const LevelProgram &p_prog, const GpuLayout &p_layout, int p
     const ov::str stop = "int(" + r_params.table(last_stops(p_prog), ov::format("min(m, %d)", int64_t(Cascade::MAX_LEVEL))) + ")";
     t += "    for (int s = lv; s >= (last ? " + stop + " : lv); s--) {\n" + (notes.empty() ? on : notes) + "        switch (s) {\n" + code + "        default:\n            break;\n        }\n    }\n";
     const auto root = [&](int p_n) { return folded_value(p_prog.nodes[size_t(p_n)], reg(p_layout.reg[size_t(p_n)]), r_params); };
-    t += "    Ch o = ch_zero();\n    if (last) {\n" + ch_put("0", root(p_prog.output)) + ov::format("        o.c[4] = %s.w;\n", root(p_prog.pick)) + "        return o;\n    }\n";
-    return t + "    switch (lv) {\n" + stores + empty + "    }\n    return o;\n}\n";
+    t += "    o_ground = vec4(0.0);\n    o_pick = 0.0;\n    if (last) {\n        o_ground = (" + root(p_prog.output) + ").wxyz;\n        o_pick = (" + root(p_prog.pick) + ").w;\n        return;\n    }\n";
+    return t + "    switch (lv) {\n" + stores + empty + "    }\n}\n";
 }
 
 // The generic interpreter's records (heap): level m's [inputs, outputs, instructions, first instruction, input registers,
@@ -373,13 +365,14 @@ GenericRecords generic_records(const LevelProgram &p_prog, const GpuLayout &p_la
 
 constexpr const char GENERIC_RUN[] = R"glsl(
 // Terrain::level_run, generic: the program's records (ShaderParams' heap) interpreted, the same ops in the same order.
-Ch level_run(Ch ch, WorldPos p, int m, bool last) {
+void level_run(WorldPos p, int m, bool last, out vec4 o_ground, out float o_pick) {
     vec4 r[MAX_REGISTERS];
     int lv = min(m, int(cl_param(TOP)));
     int d = int(cl_param(DIR + lv));
     int nin = int(cl_heap(d));
+    bool pick_in = PARENT_PICK != 0.0;
     for (int k = 0; k < nin; k++) {
-        r[int(cl_heap(d + 4 + k))] = CH_GET;
+        r[int(cl_heap(d + 4 + k))] = subdivide(uint(k), k == 0 && pick_in);
     }
     uint mask = last ? 0u : biome_mask[g_item];
     for (int s = lv; s >= (last ? int(cl_param(FINEST + min(m, MAX_LEVEL))) : lv); s--) {
@@ -427,15 +420,17 @@ CASES                default:
             q = qn;
         }
     }
-    Ch o = ch_zero();
+    o_ground = vec4(0.0);
+    o_pick = 0.0;
     if (last) {
-PUT_OUTPUT        o.c[4] = ROOT_PICK.w;
-        return o;
+        o_ground = ROOT_OUTPUT.wxyz;
+        o_pick = ROOT_PICK.w;
+        return;
     }
     int nout = int(cl_heap(d + 1));
     for (int k = 0; k < nout; k++) {
-PUT_CHANNEL    }
-    return o;
+        ch_store(uint(k), r[int(cl_heap(d + 4 + nin + k))]);
+    }
 }
 )glsl";
 
@@ -466,7 +461,13 @@ ov::str generic(const LevelProgram &p_prog, const GpuLayout &p_layout, ShaderPar
         }
         cases += ov::format("            case %d: {\n", int64_t(op)) + body + "                break;\n            }\n";
     }
-    ov::str t = ov::replace_all(GENERIC_RUN, { { "CASES", cases }, { "CH_GET", ch_get("k") }, { "PUT_OUTPUT", ch_put("0", generic_root("OUTPUT")) }, { "ROOT_PICK", generic_root("PICK") }, { "PUT_CHANNEL", ch_put("k", "r[int(cl_heap(d + 4 + nin + k))]") } });
+    // Per level m, whether its first input is the pick (copied from the floor parent, not subdivided).
+    std::vector<float> pick_in;
+    for (int m = 0; m <= Cascade::MAX_LEVEL; m++) {
+        pick_in.push_back(p_layout.pick_in(m) ? 1.0f : 0.0f);
+    }
+    const ov::str parent_pick = r_params.table(pick_in, ov::format("min(m, %d)", int64_t(Cascade::MAX_LEVEL)));
+    ov::str t = ov::replace_all(GENERIC_RUN, { { "CASES", cases }, { "PARENT_PICK", parent_pick }, { "ROOT_OUTPUT", generic_root("OUTPUT") }, { "ROOT_PICK", generic_root("PICK") } });
     return ov::replace_all(t, { { "MAX_REGISTERS", ov::itos(MAX_REGISTERS) }, { "RECORD_HEAD", ov::itos(RECORD_HEAD) }, { "TOP", ov::itos(g.top) }, { "DIR", ov::itos(g.dir) }, { "OUTPUT", ov::itos(g.output) }, { "PICK", ov::itos(g.pick) }, { "FINEST", ov::itos(g.stop) }, { "WEIGHTS", ov::itos(g.weights) }, { "MAX_LEVEL", ov::itos(Cascade::MAX_LEVEL) } });
 }
 
@@ -522,19 +523,10 @@ void allocate(const LevelProgram &p_prog, GpuLayout &r_layout) {
     r_layout.regs = ov::max(1, int(busy_until.size()));
 }
 
-// `int <p_name>(int m)`: p_values[m] for m = 0 .. MAX_LEVEL (a fixed-size table of r_params).
-ov::str level_table(const char *p_name, const std::vector<float> &p_values, ShaderParams &r_params) {
-    return ov::format("int %s(int m) {\n    return int(%s);\n}\n", p_name, r_params.table(p_values, ov::format("min(m, %d)", int64_t(Cascade::MAX_LEVEL))));
-}
-
 } // namespace
 
 bool GpuLayout::pick_in(int p_m) const {
     return p_m + 1 < int(chan.size()) && !chan[size_t(p_m + 1)].empty() && chan[size_t(p_m + 1)][0] == pick_node;
-}
-
-int GpuLayout::inputs(int p_m) const {
-    return p_m + 1 < int(chan.size()) ? int(chan[size_t(p_m + 1)].size()) : 0;
 }
 
 GpuLayout gpu_layout(const LevelProgram &p_prog, ov::str &r_error) {
@@ -604,19 +596,6 @@ ov::bytes band_table(const LevelProgram &p_prog) {
         at++;
     }
     return bytes;
-}
-
-ov::str level_flags_glsl(const LevelProgram &p_prog, const GpuLayout &p_layout, ShaderParams &r_params) {
-    std::vector<float> in, pick, out;
-    for (int m = 0; m <= Cascade::MAX_LEVEL; m++) {
-        in.push_back(m < p_prog.top ? float(p_layout.inputs(m)) : 0.0f);
-        pick.push_back(m < p_prog.top && p_layout.pick_in(m) ? 1.0f : 0.0f);
-        out.push_back(m <= p_prog.top ? float(p_layout.chan[size_t(m)].size()) : 0.0f);
-    }
-    ov::str code = "\n// Terrain::level_flags: what level m receives (g_in channels, the first the pick where g_pick) and stores (g_out).\n";
-    code += "uint g_in = 0u;\nbool g_pick = false;\nuint g_out = 0u;\n\n";
-    code += level_table("level_in", in, r_params) + level_table("level_pick", pick, r_params) + level_table("level_out", out, r_params);
-    return code + "\nvoid level_flags(int m) {\n    g_in = uint(level_in(m));\n    g_pick = level_pick(m) != 0;\n    g_out = uint(level_out(m));\n}\n";
 }
 
 bool uses_biome_mask(const LevelProgram &p_prog) {

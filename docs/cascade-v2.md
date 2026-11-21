@@ -135,10 +135,11 @@ The GPU keeps the current machinery around the program:
 - one dispatch per level for the batch;
 - closed-form boxes;
 - scratch A/B, planar;
-- `hermite_functions` / `storage_functions`;
+- the Hermite passes (`subdivision_functions`: one channel at a time, `subdivide(k, pick)` / `ch_store(k, v)`);
 - the level template and the fold variant for instances.
 
-`Ch` becomes the level's live channels.
+A level subdivides and stores its own live channels only: no struct of every channel, so the text's cost is what each
+level carries.
 
 ### Bounds and skirts
 

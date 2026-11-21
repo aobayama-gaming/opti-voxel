@@ -524,6 +524,37 @@ TEST_CASE("Terrain: the specialised text calls tp_note once, whatever the note c
     }
 }
 
+// A level subdivides and stores its own channels, one call each: the text's cost is what each level carries, not the
+// widest level's (one struct of every channel per level once made each subdivision as wide as the widest).
+TEST_CASE("Terrain: the specialised text subdivides and stores each level's own channels") {
+    const auto count = [](const ov::str &p_text, const char *p_call) {
+        size_t n = 0;
+        for (size_t at = p_text.find(p_call); at != ov::str::npos; at = p_text.find(p_call, at + 1)) {
+            n++;
+        }
+        return n;
+    };
+    for (const Pin &pin : PINS) {
+        LevelProgram prog;
+        CHECK_OR_RETURN(compile_table(test_table(pin.path), prog) == ov::str());
+        ov::str err;
+        const GpuLayout layout = gpu_layout(prog, err);
+        Cascade::ShaderParams params;
+        const ov::str text = level_glsl(prog, layout, params);
+        size_t loads = 0, stores = 0, picks = 0;
+        for (int m = 0; m <= prog.top; m++) {
+            loads += m < prog.top ? layout.chan[size_t(m + 1)].size() : 0;
+            stores += layout.chan[size_t(m)].size();
+            picks += layout.pick_in(m) ? 1 : 0;
+        }
+        INFO(pin.path);
+        CHECK(count(text, "subdivide(") == loads);
+        CHECK(count(text, ", true);") == picks);
+        CHECK(count(text, "ch_store(") == stores);
+        CHECK(text.find("Ch ") == ov::str::npos);
+    }
+}
+
 namespace {
 
 // p_prog without its fold: every node computed on every level, as before the constant relaxation.
@@ -589,7 +620,7 @@ TEST_CASE("Terrain: the generic text keeps none of its placeholders") {
         Cascade::ShaderParams params;
         const std::string text = level_glsl(prog, layout, params).c_str();
         INFO(pin.path);
-        for (const char *word : { "CASES", "CH_GET", "PUT_OUTPUT", "PUT_CHANNEL", "ROOT_PICK", "MAX_REGISTERS", "MAX_LEVEL", "TOP", "DIR", "OUTPUT", "PICK", "FINEST", "WEIGHTS", "RECORD_HEAD" }) {
+        for (const char *word : { "CASES", "PARENT_PICK", "ROOT_OUTPUT", "ROOT_PICK", "MAX_REGISTERS", "MAX_LEVEL", "TOP", "DIR", "OUTPUT", "PICK", "FINEST", "WEIGHTS", "RECORD_HEAD" }) {
             CHECK_MESSAGE(text.find(word) == std::string::npos, word);
         }
         std::smatch glued; // a placeholder replaced inside a longer one: an upper-case word glued to a number
