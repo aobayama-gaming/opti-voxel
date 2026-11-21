@@ -400,6 +400,14 @@ std::vector<int> LevelProgram::last_code(int p_lod) const {
     return code;
 }
 
+int LevelProgram::fine_cut() const {
+    int m = 0;
+    while (m <= top && levels[size_t(m)].code.empty()) {
+        m++;
+    }
+    return m - 1;
+}
+
 int LevelProgram::last_stop(int p_lod) const {
     const int lv = ov::min(p_lod, top);
     int stop = lv;

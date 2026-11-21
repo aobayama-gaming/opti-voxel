@@ -174,3 +174,32 @@ TEST_CASE("Climate shape: the level shader's text is filled, the generic one the
         }
     }
 }
+
+// The fine variant (CascadePasses): world.json's notes all sit on levels >= 6, so levels 0 .. 5 compute nothing and get a
+// text of their own cases alone (its registers: 51 against 168 on the NVIDIA driver); plain.json computes on level 0.
+TEST_CASE("Climate shape: the fine text holds the fine levels' cases alone") {
+    ClimateSDF world("res://climate/world.json", 15);
+    CLIMATE_REQUIRE(world.sdf.get_program() != nullptr);
+    const Terrain::LevelProgram &prog = *world.sdf.get_program();
+    const int cut = prog.fine_cut();
+    CHECK(cut == 5);
+    for (int m = 0; m <= cut; m++) {
+        CHECK(prog.levels[size_t(m)].code.empty());
+    }
+    CHECK(!prog.levels[size_t(cut + 1)].code.empty());
+    for (const bool fold : { false, true }) {
+        Cascade::ShaderParams all_params, fine_params;
+        const ov::str all = CascadeGLSL::level_shader(&world.sdf, false, false, fold, true, true, &all_params);
+        const ov::str fine = CascadeGLSL::level_shader(&world.sdf, false, false, fold, true, true, &fine_params, cut);
+        CHECK(fine.size() < all.size());
+        CHECK(ov::contains(all, "case 6:"));
+        CHECK(!ov::contains(fine, "case 6:"));
+        CHECK(ov::contains(fine, ov::format("case %d:", int64_t(cut))));
+    }
+    for (const char *path : { "res://climate/plain.json", "res://climate/example.json" }) {
+        CAPTURE(std::string(path));
+        ClimateSDF other(path, 15);
+        CLIMATE_REQUIRE(other.sdf.get_program() != nullptr);
+        CHECK(other.sdf.get_program()->fine_cut() == -1);
+    }
+}

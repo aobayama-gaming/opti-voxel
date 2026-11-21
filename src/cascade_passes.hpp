@@ -40,8 +40,8 @@ public:
     // Records level j for chunks [p_base, p_base + p_count) of the input (p_count <= max chunks: the scratch
     // holds chunk p_base + i at slot i) as one compute list. p_fold: level 0 folds the chunks' instance lists (a
     // batch with any instance listed; needs the table's buffers). Off, the bare cascade: the same bits over empty
-    // lists, without the fold's cost. p_lods: the batch's smallest and largest LOD (ChunkMath::lod_range; unused by v2's
-    // one program).
+    // lists, without the fold's cost. p_lods: the batch's smallest and largest LOD (ChunkMath::lod_range: whether the fine
+    // variant serves level p_j).
     void record_level(int p_j, uint32_t p_base, uint32_t p_count, const ov::ivec2 &p_lods, bool p_fold = false);
     // Every level, sub-batches of at most max chunks.
     void record_all(const ov::ivec2 &p_lods, uint32_t p_count, bool p_fold = false);
@@ -54,8 +54,11 @@ public:
 
 private:
     ov::gpu::Device *device = nullptr;
-    // The bare level-0 output, and the instance fold (given the table's buffers).
-    static constexpr int VARIANTS = 2;
+    // Variant 2 * fine + fold: the bare level-0 output or the instance fold (given the table's buffers), the text of every
+    // level or the fine levels' own (fine: a specialised program's levels 0 .. fine_cut, which compute nothing: a
+    // dispatch whose levels all sit there runs it, with their registers instead of the heaviest level's).
+    static constexpr int VARIANTS = 4;
+    int fine_cut = -1;
     ov::gpu::Pipeline pipeline[VARIANTS];
     ov::gpu::BindSet uniform_set[VARIANTS];
     Buffer params[VARIANTS]; // each variant's Cascade::ShaderParams (PARAM_BINDING)

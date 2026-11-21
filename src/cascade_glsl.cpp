@@ -413,7 +413,7 @@ bool ground_materials(const CascadeSource *p_sdf) {
     return p_sdf->samples_carry_materials();
 }
 
-ov::str level_shader(const CascadeSource *p_sdf, bool p_debug, bool p_points, bool p_fold, bool p_material, bool p_cubes, ShaderParams *r_params) {
+ov::str level_shader(const CascadeSource *p_sdf, bool p_debug, bool p_points, bool p_fold, bool p_material, bool p_cubes, ShaderParams *r_params, int p_upto) {
     ShaderParams own;
     ShaderParams &params = r_params != nullptr ? *r_params : own;
     const Terrain::LevelProgram &prog = *p_sdf->get_program();
@@ -469,7 +469,7 @@ ov::str level_shader(const CascadeSource *p_sdf, bool p_debug, bool p_points, bo
     // flags, Ch and its passes, then the program.
     const ov::str helpers = Climate::shared_helpers_glsl() + Climate::smooth_min_glsl() + Climate::curve_at_glsl() + Terrain::glsl_helpers();
     const ov::str program = Terrain::level_flags_glsl(prog, layout, params) + "\n" + helpers + hermite_functions(layout.channels) + storage_functions(layout.channels) +
-            Terrain::level_glsl(prog, layout, params) + ground_material;
+            Terrain::level_glsl(prog, layout, params, p_upto < 0 ? Terrain::NO_LEVEL : p_upto) + ground_material;
     code = ov::replace_all(code, "/*CASCADE*/", program);
     const ov::str debug_store = ov::str(cubes ? "if (sample_live) " : "") + "store_debug(sample_index, ch); // CascadeSpike variant";
     code = ov::replace_all(code, "/*DEBUG_STORE*/", p_debug ? debug_store : ov::str());

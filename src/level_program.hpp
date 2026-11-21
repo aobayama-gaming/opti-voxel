@@ -122,6 +122,10 @@ struct LevelProgram {
     // The finest level that code computes a node on (folded: fold_lods): below it every node is a constant or unread, so
     // a run's last level stops there (its output and pick, if constants, read as such).
     int last_stop(int p_lod) const;
+    // The coarsest level m such that levels 0 .. m compute nothing (-1: level 0 has code): there a level only subdivides
+    // what it receives, so the GPU runs them with a text of those levels alone (CascadePasses' fine variant: the
+    // registers of the finest levels, where nearly all the samples are, not those of the heaviest level).
+    int fine_cut() const;
     int channels(int p_m) const { return int(levels[size_t(p_m)].out.size()); }
 };
 
