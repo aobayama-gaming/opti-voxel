@@ -13,7 +13,7 @@ class CascadePasses {
 public:
     // p_input (ChunkInput[]), p_param_ubo (ChunkParam std140), p_sdf_sample (vec4 per sample): the mesher's.
     // p_max_chunks: chunks per dispatch (scratch size). p_debug: valid for the debug variant, a buffer for
-    // the last level's channels (vec4s_per_point vec4s per sample, CascadeSpike); invalid for the meshers' (a
+    // the last level's channels (CascadeGLSL::DEBUG_VEC4S per sample, CascadeSpike); invalid for the meshers' (a
     // 16 B placeholder is bound). p_share_scratch: use that object's scratch buffers instead of new ones.
     // p_table_records / p_table_list: the mesher's instance table buffers (a terrain with a table): with them, a
     // second variant whose level 0 folds the chunks' instance lists (record_level's p_fold). p_sdf_material: the

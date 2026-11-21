@@ -44,9 +44,12 @@ v2, `docs/cascade-v2.md`) and the GPU passes (`src/cascade_glsl.*`, `src/level_g
   smallest LOD down to 0), boxes in closed form from the chunk's anchor on (lo, hi) words (`GLSL_FRAME_INT64`,
   `Cascade::level_box`), a child point replays the CPU's x, y, z passes on its 2x2x2 parents (code generated from the
   same axis rule), ping-pong scratch A (odd j, 17^3 points per chunk) / B (even j >= 2, 10^3), j = 0 straight to
-  `sdf_sample`. The level's own work is `level_run` (`level_glsl.hpp`): the channels it receives loaded into
-  registers, its code, the channels it carries stored back; the pick's channel is copied from the floor parent, never
-  interpolated. The notes reach the GPU as a table (`Terrain::band_table`, binding 5).
+  `sdf_sample`. The level's own work is `level_run` (`level_glsl.hpp`): each channel it receives subdivided into
+  its register one at a time (`subdivide(k, pick)`: the x, y, z passes and the flush on a vec4), its code, each channel
+  it carries stored back (`ch_store`); the pick's channel is copied from the floor parent, never interpolated. A level
+  loads and stores only its own channels, in both texts: neither depends on the widest level's count (a struct of every
+  channel once made each subdivision as wide as the widest level, 48 channels in the generic text). The scratch keeps
+  `GpuLayout::channels` planes. The notes reach the GPU as a table (`Terrain::band_table`, binding 5).
 - **Specialised and generic.** The world's numbers are data (`Cascade::ShaderParams`): every value the generated code
   reads (the biomes' centres and spans, the amplitudes, shape coefficients, warp amounts, the curves' segments, the
   constants and smooth k, and the skirt depth per LOD) is a slot of a per-variant uniform block of vec4s at

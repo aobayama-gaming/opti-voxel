@@ -15,12 +15,13 @@
 //     ShaderParams block, its text a function of the op set and the caps only (MAX_CHANNELS, MAX_REGISTERS), so an edit
 //     compiles nothing.
 //
-// The level shader subdivides the channels of the level above (Ch: CascadeGLSL's Hermite passes, the pick's channel
-// copied from the floor parent), flushes them, then calls `Ch level_run(Ch ch, WorldPos p, int m, bool last)`: the
-// level's channels loaded into registers, its code run (on a run's last level, the code of every level from m down to 0,
-// as LevelProgram::last_code), and the channels it carries stored back in Ch for the level below; on the last level,
-// the output (channel 0) and the pick (channel 1's value) instead. Each statement (each generic record) is guarded by
-// its node's fold (Node::const_lod, live_lod: fold_lods), as the CPU run is.
+// The level shader calls `void level_run(WorldPos p, int m, bool last, out vec4 o_ground, out float o_pick)`: each of the
+// level's inputs subdivided from the level above into its register, one channel at a time (`subdivide(k, pick)`:
+// CascadeGLSL's Hermite passes and flush, the pick copied from the floor parent), its code run (on a run's last level,
+// the code of every level from m down to 0, as LevelProgram::last_code), and the channels it carries stored for the
+// level below (`ch_store(k, v)`); on the last level, the output (Cascade::Channel order) and the pick instead. A level
+// loads and stores only its own channels, so the text's cost never depends on the widest level's. Each statement (each
+// generic record) is guarded by its node's fold (Node::const_lod, live_lod: fold_lods), as the CPU run is.
 //
 // Registers: one per node, allocated over the stream of every level's code top to 0 (a node live from its first event
 // to its last: computed, read, loaded on a level, stored for the level below), so a level alone and a run's last level
@@ -34,11 +35,10 @@ struct GpuLayout {
     std::vector<std::vector<int>> chan; // chan[m]: the nodes level m carries to the level below (its out), the pick first
     std::vector<int> reg; // per node, its register (-1: never computed)
     int regs = 1;
-    int channels = 2; // Ch's channels: the most a level carries, at least the last level's two (generic: MAX_CHANNELS)
+    int channels = 2; // the scratch's planes: the most a level carries, at least the last level's two (generic: MAX_CHANNELS)
     int pick_node = -1; // the PICK node (-1: one biome, a constant pick)
     // Whether level m's inputs (chan[m + 1]) start with the pick: its channel is copied, not interpolated.
     bool pick_in(int p_m) const;
-    int inputs(int p_m) const;
 };
 // p_prog's layout; r_error: why the generic text can't hold it (empty if it can, or for a specialised program).
 GpuLayout gpu_layout(const LevelProgram &p_prog, ov::str &r_error);
@@ -50,13 +50,10 @@ std::vector<int> note_order(const LevelProgram &p_prog);
 // words, info (1, seed, k, stretch)), at least one entry: the level shader's `bands` (binding 5).
 ov::bytes band_table(const LevelProgram &p_prog);
 
-// The globals the Hermite and storage functions read, set per invocation by `void level_flags(int m)`: g_in (the
-// channels level m receives), g_pick (its first one is the pick), g_out (the channels it stores).
-ov::str level_flags_glsl(const LevelProgram &p_prog, const GpuLayout &p_layout, Cascade::ShaderParams &r_params);
 // Whether p_prog's level shader reads the biome pruning's mask (CascadeGLSL::BIOME_MASK_BINDING, set g_item): a
 // program with guards (guard_biomes), and every generic one (its text never depends on the graph).
 bool uses_biome_mask(const LevelProgram &p_prog);
-// level_run (after Ch, glsl_helpers and the climate's helpers), led by the mask's declaration when it uses one; its
+// level_run (after the subdivision, glsl_helpers and the climate's helpers), led by the mask's declaration when it uses one; its
 // values and records go to r_params. p_upto (specialised only): the text runs levels m <= p_upto alone, the others'
 // cases left out (LevelProgram::fine_cut: the fine levels' own text, with their registers).
 ov::str level_glsl(const LevelProgram &p_prog, const GpuLayout &p_layout, Cascade::ShaderParams &r_params, int p_upto = NO_LEVEL);

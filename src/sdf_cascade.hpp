@@ -144,8 +144,8 @@ public:
         }
         return R"glsl(
 // SDFCascade::ground_material: 1 + the sample's biome (Terrain::level_run's pick).
-uint cascade_ground_material(Ch ch) {
-    return 1u + uint(ch.c[4]);
+uint cascade_ground_material(float pick) {
+    return 1u + uint(pick);
 }
 )glsl";
     }

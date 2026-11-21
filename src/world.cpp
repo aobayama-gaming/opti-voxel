@@ -676,7 +676,7 @@ ov::Value World::debug_stats() {
         c["fields"] = int64_t(climate->fields.size());
         c["biomes"] = int64_t(climate->biomes.size());
         ov::str layout_error;
-        c["channels"] = int64_t(Terrain::gpu_layout(sdf->program(), layout_error).channels); // the program's Ch
+        c["channels"] = int64_t(Terrain::gpu_layout(sdf->program(), layout_error).channels); // the widest level's channels
         d["climate"] = c;
     }
     d["frames"] = int64_t(exec_time);

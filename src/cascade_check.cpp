@@ -3,6 +3,7 @@
 #include "cascade.hpp"
 #include "cascade_check_points.hpp"
 #include "cascade_check_sets.hpp"
+#include "cascade_glsl.hpp"
 
 #include "cascade_passes.hpp"
 #include "debug_log.hpp"
@@ -34,8 +35,9 @@ constexpr uint32_t MAX_BATCH = 128;
 constexpr int CHUNKS_PER_PLACE = 14;
 constexpr int CHILDREN = 8;
 constexpr uint32_t TIMING_CHUNKS = 128;
-// The most bytes of last-level channels a slice of a batch reads back (SetChecker::run): the generic text's Ch holds
-// MAX_CHANNELS channels, and a whole batch of them took gigabytes on the host beside the CPU levels.
+// A slice of a batch (SetChecker::run): this many bytes of a level's channels per chunk-sized level box. A generic
+// program carries up to MAX_CHANNELS channels per level, and a whole batch of CPU levels (and once, its 48-channel
+// debug readback) took gigabytes on the host.
 constexpr uint64_t SLICE_BYTES = uint64_t(256) << 20;
 
 struct TestChunk {
@@ -147,7 +149,7 @@ public:
         const ov::bytes param_bytes = (GPUFrame::chunk_param_bytes(param));
         param_ubo = device->create_buffer(ov::gpu::BufferKind::UNIFORM, param_bytes.size(), param_bytes.data());
         samples = device->create_buffer(ov::gpu::BufferKind::STORAGE, MAX_BATCH * cells * 16);
-        debug = device->create_buffer(ov::gpu::BufferKind::STORAGE, MAX_BATCH * cells * nv * 16);
+        debug = device->create_buffer(ov::gpu::BufferKind::STORAGE, MAX_BATCH * cells * CascadeGLSL::DEBUG_VEC4S * 16);
         debug_samples = device->create_buffer(ov::gpu::BufferKind::STORAGE, MAX_BATCH * cells * 16);
     }
 
@@ -269,7 +271,7 @@ private:
                 continue;
             }
             const uint64_t n = uint64_t(level_bound(cs, 0));
-            const ov::bytes final_channels = read_bytes(device, debug, 0, count * n * n * n * nv * 16);
+            const ov::bytes final_channels = read_bytes(device, debug, 0, count * n * n * n * CascadeGLSL::DEBUG_VEC4S * 16);
             const ov::bytes final_samples = read_bytes(device, samples, 0, count * cells * 16);
             // The debug variant's samples must be the same bits as the meshers' variant's.
             if (read_bytes(device, debug_samples, 0, count * cells * 16) != final_samples) {
@@ -293,9 +295,9 @@ private:
     }
 
     // A GPU channel's 4 floats (Cascade::Channel order) of slot p_slot: planar scratch (p_plane vec4s per plane) or the
-    // per-point debug channels (p_plane 0).
+    // per-point debug channels (p_plane 0: DEBUG_VEC4S per point, the output and the pick).
     const float *gpu_channel(const float *p_gpu, uint64_t p_slot, size_t p_k, uint64_t p_plane) const {
-        return p_plane > 0 ? p_gpu + (uint64_t(p_k) * p_plane + p_slot) * 4 : p_gpu + (p_slot * nv + p_k) * 4;
+        return p_plane > 0 ? p_gpu + (uint64_t(p_k) * p_plane + p_slot) * 4 : p_gpu + (p_slot * CascadeGLSL::DEBUG_VEC4S + p_k) * 4;
     }
 
     // Level j of every chunk of the batch (GPU layout: x fastest, stride level_bound(j)) against the CPU's

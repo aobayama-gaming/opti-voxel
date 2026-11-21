@@ -36,8 +36,8 @@ public:
     // ignored).
     virtual ov::str get_sample_fold_glsl(uint32_t p_group_size) const = 0;
     // With a per-sample ground material (base_palette longer than one): the GLSL the cascade level passes splice after
-    // the program, defining `uint cascade_ground_material(Ch ch)`, the palette index of a sample no record colours (ch:
-    // its run's last level, Terrain::level_run's: the pick in channel 1). Empty otherwise.
+    // the program, defining `uint cascade_ground_material(float pick)`, the palette index of a sample no record colours
+    // (pick: the sample's biome, Terrain::level_run's). Empty otherwise.
     virtual ov::str get_ground_material_glsl() const { return ov::str(); }
 
     // The ground's base surface when it is curved (BaseSurface::curved): get_glsl_code's base_at then reads the batch's regions

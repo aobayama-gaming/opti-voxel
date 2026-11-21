@@ -40,6 +40,9 @@ namespace CascadeGLSL {
 static constexpr uint32_t BAND_BYTES = 64;
 static constexpr uint32_t PUSH_BYTES = 32;
 static constexpr uint32_t LOCAL_SIZE = 64;
+// The debug variant's vec4s per sample in debug_channels (level_shader's p_debug): the output channel (Cascade::Channel
+// order), then the pick in x.
+static constexpr uint32_t DEBUG_VEC4S = 2;
 // The fold variant's workgroup: a cube of FOLD_CUBE^3 samples of level 0 (given a chunk size that is a multiple of it,
 // else the fold runs per sample), the box arch_fold tests the chunk's list against once per workgroup.
 static constexpr uint32_t FOLD_CUBE = 4;
@@ -59,7 +62,7 @@ static constexpr int BIOME_MASK_BINDING = 13;
 static constexpr size_t MAX_PARAM_BYTES = 32768;
 
 // Scratch points per chunk of buffer A (odd levels) and B (even levels >= 2), and vec4s per point (one per channel of
-// the program's Ch: Terrain::GpuLayout::channels).
+// the level that carries the most: Terrain::GpuLayout::channels).
 uint32_t scratch_points_a(int p_item_size);
 uint32_t scratch_points_b(int p_item_size);
 uint32_t vec4s_per_point(const CascadeSource *p_sdf);

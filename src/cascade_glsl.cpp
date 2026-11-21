@@ -59,7 +59,6 @@ void main() {
     uvec3 i = uvec3(local % n, (local / n) % n, local / (n * n));
 /*ITEM_FRAME*/    int lod = f.lod;
     int m = lod + pc.j;
-    level_flags(m);
     int top = max(pc.top, lod);
     if (m > top) {
         /*SKIP*/ // above T: zero, nothing stored, the chunk starts lower
@@ -82,39 +81,16 @@ void main() {
         /*SKIP*/
     }
 
-    Ch ch;
-    if (m < top) {
-        // Parent box lo = floor(lo_m / 2): child lo_m + i has parent index (lo_m mod 2 + i) / 2, a midpoint
-        // on the axes where that sum is odd.
-        uvec3 par = (m_lo & 1u) + i;
-        uvec3 p0 = par >> 1u;
-        bvec3 mid = equal(par & 1u, uvec3(1u));
-        uint np = pc.n_parent;
-        uint pbase = c * np * np * np;
-        // j + 1 odd: A, even: B.
-        bool from_a = (pc.j & 1) == 0;
-        Ch x00 = pass_x(from_a, pbase, np, p0, mid.x);
-        Ch y0;
-        if (mid.y) {
-            y0 = hermite_y(x00, pass_x(from_a, pbase, np, p0 + uvec3(0u, 1u, 0u), mid.x), true);
-        } else {
-            y0 = hermite_y(x00, x00, false);
-        }
-        if (mid.z) {
-            Ch x01 = pass_x(from_a, pbase, np, p0 + uvec3(0u, 0u, 1u), mid.x);
-            Ch y1;
-            if (mid.y) {
-                y1 = hermite_y(x01, pass_x(from_a, pbase, np, p0 + uvec3(0u, 1u, 1u), mid.x), true);
-            } else {
-                y1 = hermite_y(x01, x01, false);
-            }
-            ch = hermite_z(y0, y1, true);
-        } else {
-            ch = hermite_z(y0, y0, false);
-        }
-    } else {
-        ch = ch_zero();
-    }
+    // Where subdivide reads the level above (read only below the top): parent box lo = floor(lo_m / 2), so child
+    // lo_m + i has parent index (lo_m mod 2 + i) / 2, a midpoint on the axes where that sum is odd. j + 1 odd: A,
+    // even: B; this level stores in the other one.
+    uvec3 par = (m_lo & 1u) + i;
+    g_p0 = par >> 1u;
+    g_mid = equal(par & 1u, uvec3(1u));
+    g_np = pc.n_parent;
+    g_pbase = c * g_np * g_np * g_np;
+    g_from_a = (pc.j & 1) == 0;
+    g_slot = c * n * n * n + local;
 
     // The level's absolute point: voxel (lo_m + i) << m.
     WorldPos p;
@@ -124,11 +100,10 @@ void main() {
     i64_shl(p.lo, p.hi, m);
     p.frac = vec3(0.0);
 
-    ch = flush(ch);
-    ch = level_run(ch, p, m, pc.j == 0);
-    uint slot = c * n * n * n + local;
+    vec4 ground;
+    float pick;
+    level_run(p, m, pc.j == 0, ground, pick);
     if (pc.j > 0) {
-        store(pc.j & 1, slot, ch);
         return;
     }
     // Λ_L: the sample.
@@ -221,18 +196,39 @@ WorldPos level_point(uvec3 m_lo, ivec3 m_hi, uvec3 i, int m) {
 }
 )glsl";
 
-// Ch (p_nch channels of 4 floats, Cascade::Channel order each) and hermite_x/y/z (Cascade::axis_rule, op for op): the
-// first g_in channels, the level's inputs (Terrain::level_flags), the first one copied from the floor parent where it is
-// the pick (g_pick).
-ov::str hermite_functions(int p_nch) {
-    ov::str code = ov::format("struct Ch { float c[%d]; };\n\n", 4 * p_nch);
-    code += "Ch ch_zero() {\n    Ch r;\n";
-    for (int c = 0; c < 4 * p_nch; c++) {
-        code += ov::format("    r.c[%d] = 0.0;\n", c);
+// The subdivision of the level above, one channel at a time (Cascade::axis_rule, op for op), and the scratch access. A
+// channel is a vec4 in Cascade::Channel order (x the value, y z w its slopes along x y z); a register is a dual (x y z
+// the gradient, w the value). The scratch is planar: channel k of slot s at k * plane + s, plane = the buffer's vec4s /
+// p_nch. main() sets the g_ globals: the point's floor parent g_p0 and its midpoint axes g_mid in the level above (g_np
+// points per axis, the chunk's first at g_pbase, in A where g_from_a; this level stores in the other one) and its own
+// slot g_slot.
+ov::str subdivision_functions(int p_nch) {
+    static_assert(VALUE == 0 && DX == 1 && DY == 2 && DZ == 3, "CascadeGLSL: a channel's vec4 is value, dx, dy, dz.");
+    ov::str code = ov::replace_all(R"glsl(uvec3 g_p0 = uvec3(0u);
+bvec3 g_mid = bvec3(false);
+uint g_np = 0u;
+uint g_pbase = 0u;
+bool g_from_a = false;
+uint g_slot = 0u;
+
+vec4 ch_load(uint k, uint slot) {
+    if (g_from_a) {
+        return scratch_a[k * (uint(scratch_a.length()) / NCHu) + slot];
     }
-    code += "    return r;\n}\n\n";
-    // Cascade::hermite_copy / hermite_mid, op for op.
-    code += R"glsl(void hcopy(float a, float sa, out float v, out float s) {
+    return scratch_b[k * (uint(scratch_b.length()) / NCHu) + slot];
+}
+
+// Register v as this level's channel k.
+void ch_store(uint k, vec4 v) {
+    if (g_from_a) {
+        scratch_b[k * (uint(scratch_b.length()) / NCHu) + g_slot] = v.wxyz;
+    } else {
+        scratch_a[k * (uint(scratch_a.length()) / NCHu) + g_slot] = v.wxyz;
+    }
+}
+
+// Cascade::hermite_copy / hermite_mid, op for op.
+void hcopy(float a, float sa, out float v, out float s) {
     precise float ps = sa * 0.5;
     v = a;
     s = ps;
@@ -245,100 +241,64 @@ void hmid(float a, float b, float sa, float sb, out float v, out float s) {
     s = ps;
 }
 
-)glsl";
-    static const char *AXIS_NAMES[3] = { "x", "y", "z" };
+)glsl",
+            "NCH", ov::itos(p_nch));
+    // Along one axis: the value and that axis' slope by the Hermite rule, the transverse slopes linear.
     for (int axis = 0; axis < 3; axis++) {
-        ov::str mid_code;
-        ov::str copy_code;
-        // Channel p_base: value + the axis slope by the Hermite rule, the transverse slopes linear.
-        auto linear4 = [&](int p_base, const char *p_indent) {
-            mid_code += ov::format("%shmid(a.c[%d], b.c[%d], a.c[%d], b.c[%d], r.c[%d], r.c[%d]);\n", p_indent, p_base + VALUE, p_base + VALUE, p_base + DX + axis,
-                    p_base + DX + axis, p_base + VALUE, p_base + DX + axis);
-            copy_code += ov::format("%shcopy(a.c[%d], a.c[%d], r.c[%d], r.c[%d]);\n", p_indent, p_base + VALUE, p_base + DX + axis, p_base + VALUE, p_base + DX + axis);
-            for (int s = p_base + DX; s <= p_base + DZ; s++) {
-                if (s != p_base + DX + axis) {
-                    mid_code += ov::format("%s{ precise float t = (a.c[%d] + b.c[%d]) * 0.5; r.c[%d] = t; }\n", p_indent, s, s, s);
-                    copy_code += ov::format("%sr.c[%d] = a.c[%d];\n", p_indent, s, s);
-                }
+        const char slope = "yzw"[axis];
+        ov::str mid = ov::format("        hmid(a.x, b.x, a.%c, b.%c, r.x, r.%c);\n", slope, slope, slope);
+        ov::str copy = ov::format("        hcopy(a.x, a.%c, r.x, r.%c);\n", slope, slope);
+        for (const char o : { 'y', 'z', 'w' }) {
+            if (o != slope) {
+                mid += ov::format("        { precise float t = (a.%c + b.%c) * 0.5; r.%c = t; }\n", o, o, o);
+                copy += ov::format("        r.%c = a.%c;\n", o, o);
             }
-        };
-        for (int k = 0; k < p_nch; k++) {
-            mid_code += ov::format("        if (g_in > %du) {\n", k);
-            copy_code += ov::format("        if (g_in > %du) {\n", k);
-            if (k == 0) {
-                const ov::str copied = "            if (g_pick) {\n                r.c[0] = a.c[0];\n                r.c[1] = a.c[1];\n                r.c[2] = a.c[2];\n"
-                                       "                r.c[3] = a.c[3];\n            } else {\n";
-                mid_code += copied;
-                copy_code += copied;
-                linear4(0, "                ");
-                mid_code += "            }\n";
-                copy_code += "            }\n";
-            } else {
-                linear4(4 * k, "            ");
-            }
-            mid_code += "        }\n";
-            copy_code += "        }\n";
         }
-        code += ov::format("Ch hermite_%s(Ch a, Ch b, bool mid) {\n    Ch r = ch_zero();\n    if (mid) {\n%s    } else {\n%s    }\n    return r;\n}\n\n", AXIS_NAMES[axis],
-                mid_code, copy_code);
+        code += ov::format("vec4 hermite_%c(vec4 a, vec4 b, bool mid) {\n    vec4 r;\n    if (mid) {\n%s    } else {\n%s    }\n    return r;\n}\n\n", "xyz"[axis], mid, copy);
     }
-    code += "Ch flush(Ch ch) {\n";
-    for (int c = 0; c < 4 * p_nch; c++) {
-        const ov::str v = ov::format("ch.c[%d]", c);
-        code += "    " + v + " = " + glsl_flush_of(v) + ";\n";
+    ov::str flush;
+    for (const char c : { 'x', 'y', 'z', 'w' }) {
+        flush += ov::format("%s(%s)", c == 'x' ? "" : ", ", glsl_flush_of(ov::format("v.%c", c)));
     }
-    return code + "    return ch;\n}\n\n";
-}
-
-// Scratch and debug buffer access (p_nch vec4s per point: channel k one vec4) and the x pass at a parent position. The
-// scratch is planar: vec4 k of slot s at k * plane + s, plane = the buffer's vec4s / p_nch; a level loads its g_in
-// channels and stores its g_out. The debug channels are per point (slot * p_nch + k).
-ov::str storage_functions(int p_nch) {
-    ov::str code = "Ch unpack(";
-    for (int v = 0; v < p_nch; v++) {
-        code += ov::format("%svec4 v%d", v ? ", " : "", v);
-    }
-    code += ") {\n    Ch r;\n";
-    for (int c = 0; c < 4 * p_nch; c++) {
-        code += ov::format("    r.c[%d] = v%d[%d];\n", c, c / 4, c % 4);
-    }
-    code += "    return r;\n}\n\n";
-    ov::str args_a;
-    ov::str args_b;
-    for (int v = 0; v < p_nch; v++) {
-        const char *sep = v ? ", " : "";
-        args_a += ov::format("%s(g_in > %du ? scratch_a[%du * plane_a + slot] : vec4(0.0))", sep, v, v);
-        args_b += ov::format("%s(g_in > %du ? scratch_b[%du * plane_b + slot] : vec4(0.0))", sep, v, v);
-    }
-    const ov::str planes = ov::format("    uint plane_a = uint(scratch_a.length()) / %du;\n    uint plane_b = uint(scratch_b.length()) / %du;\n", p_nch, p_nch);
-    code += "Ch load(bool from_a, uint slot) {\n" + planes + ov::format("    if (from_a) {\n        return unpack(%s);\n    }\n    return unpack(%s);\n}\n\n", args_a, args_b);
-    ov::str vecs;
-    for (int v = 0; v < p_nch; v++) {
-        vecs += ov::format("    vec4 v%d = vec4(r.c[%d], r.c[%d], r.c[%d], r.c[%d]);\n", v, 4 * v, 4 * v + 1, 4 * v + 2, 4 * v + 3);
-    }
-    code += "void store(int odd, uint slot, Ch r) {\n" + planes + vecs;
-    for (int v = 0; v < p_nch; v++) {
-        code += ov::format("    if (g_out > %du) {\n        if (odd != 0) {\n            scratch_a[%du * plane_a + slot] = v%d;\n        } else {\n"
-                           "            scratch_b[%du * plane_b + slot] = v%d;\n        }\n    }\n",
-                v, v, v, v, v);
-    }
-    code += "}\n\nvoid store_debug(uint slot, Ch r) {\n" + vecs;
-    for (int v = 0; v < p_nch; v++) {
-        code += ov::format("    debug_channels[slot * %du + %du] = v%d;\n", p_nch, v, v);
-    }
-    code += "}\n\n";
-    // The x pass at parent position q (and q + x on a midpoint).
-    code += R"glsl(Ch pass_x(bool from_a, uint pbase, uint np, uvec3 q, bool mid) {
-    uint slot = pbase + q.x + np * (q.y + np * q.z);
-    Ch a = load(from_a, slot);
-    if (mid) {
-        return hermite_x(a, load(from_a, slot + 1u), true);
+    // The x pass at parent position q (and q + x on a midpoint), then y, then z, then the flush.
+    const ov::str tail = R"glsl(vec4 pass_x(uint k, uvec3 q) {
+    uint slot = g_pbase + q.x + g_np * (q.y + g_np * q.z);
+    vec4 a = ch_load(k, slot);
+    if (g_mid.x) {
+        return hermite_x(a, ch_load(k, slot + 1u), true);
     }
     return hermite_x(a, a, false);
 }
 
+// Channel k of the level above at this point, subdivided and flushed, as a register; the pick (pick) copied from the
+// floor parent.
+vec4 subdivide(uint k, bool pick) {
+    vec4 v;
+    if (pick) {
+        v = ch_load(k, g_pbase + g_p0.x + g_np * (g_p0.y + g_np * g_p0.z));
+    } else {
+        vec4 x00 = pass_x(k, g_p0);
+        vec4 y0 = g_mid.y ? hermite_y(x00, pass_x(k, g_p0 + uvec3(0u, 1u, 0u)), true) : hermite_y(x00, x00, false);
+        if (g_mid.z) {
+            vec4 x01 = pass_x(k, g_p0 + uvec3(0u, 0u, 1u));
+            vec4 y1 = g_mid.y ? hermite_y(x01, pass_x(k, g_p0 + uvec3(0u, 1u, 1u)), true) : hermite_y(x01, x01, false);
+            v = hermite_z(y0, y1, true);
+        } else {
+            v = hermite_z(y0, y0, false);
+        }
+    }
+    v = vec4(/*FLUSH*/);
+    return v.yzwx;
+}
+
+// The debug variant's level 0: the output channel, then the pick, at the slot's DEBUG_VEC4S.
+void store_debug(uint slot, vec4 ground, float pick) {
+    debug_channels[slot * /*DEBUG_VEC4S*/u] = ground;
+    debug_channels[slot * /*DEBUG_VEC4S*/u + 1u] = vec4(pick, 0.0, 0.0, 0.0);
+}
+
 )glsl";
-    return code;
+    return code + ov::replace_all(tail, { { "/*FLUSH*/", flush }, { "/*DEBUG_VEC4S*/", ov::itos(CascadeGLSL::DEBUG_VEC4S) } });
 }
 
 } // namespace
@@ -438,16 +398,15 @@ ov::str level_shader(const CascadeSource *p_sdf, bool p_debug, bool p_points, bo
     code = ov::replace_all(code, "/*ITEM_EXTENT*/", fills.item_extent);
     code = ov::replace_all(code, "/*LEVEL0_OUTPUT*/", fills.level0_output);
     code = ov::replace_all(code, "/*AFTER_SAMPLE*/", cubes ? "\n    if (!sample_live) {\n        return; // past the fold's barriers\n    }" : "");
-    // The run's last level returns the output in channel 0 (Terrain::level_run).
-    const ov::str c0 = "vec4(ch.c[0], ch.c[1], ch.c[2], ch.c[3])";
-    code = ov::replace_all(code, "/*GROUND_C0*/", c0);
-    const ov::str channels = c0 + ov::str(", p, lod");
+    // The run's last level returns the output channel and the pick (Terrain::level_run).
+    code = ov::replace_all(code, "/*GROUND_C0*/", "ground");
+    const ov::str channels = "ground, p, lod";
     // The fold's workgroup box: its cube's first and last samples (the sample itself per sample).
     const ov::str cube_box = cubes ? ov::format("level_point(m_lo, m_hi, cube, m), level_point(m_lo, m_hi, cube + %du, m)", FOLD_CUBE - 1) : ov::str("p, p");
     code = ov::replace_all(code, "/*SAMPLE_SDF*/", p_fold ? ov::format("cascade_sample_sdf(%s, %s, pc.chunk_base + c, material, skirt_extra)", channels, cube_box) : ov::format("cascade_terrain_sdf(%s)", channels));
     // Without ground materials only the fold writes materials, and only for chunks with a list: a chunk without one is
     // ground, and the meshers don't read its samples' materials (its palette is the ground block, or its list is empty).
-    // With them every chunk's samples get one: the winner's, or the ground's pick (channel 1 of the last level).
+    // With them every chunk's samples get one: the winner's, or the ground's pick (level_run's o_pick).
     const bool grounds = ground_materials(p_sdf) && !p_points;
     const bool store = p_material && (p_fold || grounds);
     const ov::str ground_material = grounds ? p_sdf->get_ground_material_glsl() : ov::str();
@@ -455,7 +414,7 @@ ov::str level_shader(const CascadeSource *p_sdf, bool p_debug, bool p_points, bo
     ov::str material_store;
     if (store && grounds) {
         // Air samples (w > 0, after the skirt) keep 0: the meshers read a vertex's material from its cell's solid corners.
-        material_store = ov::str(!ground_material.empty() ? "if (material == 0u && !(r.w > 0.0)) {\n        material = cascade_ground_material(ch);\n    }\n    " : "") +
+        material_store = ov::str(!ground_material.empty() ? "if (material == 0u && !(r.w > 0.0)) {\n        material = cascade_ground_material(pick);\n    }\n    " : "") +
                 "sdf_material[sample_index] = material;";
     } else if (store) {
         material_store = "if (g_sdf_chunk.anchor_hi.w > 0) {\n        sdf_material[sample_index] = material;\n    }";
@@ -465,13 +424,12 @@ ov::str level_shader(const CascadeSource *p_sdf, bool p_debug, bool p_points, bo
     code = ov::replace_all(code, "/*TABLE_BUFFERS*/", p_fold ? p_sdf->get_table_glsl(TABLE_RECORD_BINDING, TABLE_LIST_BINDING) : ov::str());
     code = ov::replace_all(code, "/*HELPERS*/", ov::str(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + (p_points ? GPUFrame::glsl_point_frame() : ov::str()) + GPUFrame::glsl_int64() + ov::str(GLSL_EXACT_NOISE));
     code = ov::replace_all(code, "/*TERRAIN_SDF*/", p_sdf->get_glsl_code(params) + (p_fold ? (cubes ? ov::str(LEVEL_POINT) : ov::str()) + p_sdf->get_sample_fold_glsl(cubes ? LOCAL_SIZE : 0) : ov::str()));
-    // The op table's helpers (the climate's duals, smooth min, curves, the forms' own; the base's stretch is get_glsl_code's), the level
-    // flags, Ch and its passes, then the program.
+    // The op table's helpers (the climate's duals, smooth min, curves, the forms' own; the base's stretch is get_glsl_code's), the
+    // subdivision, then the program.
     const ov::str helpers = Climate::shared_helpers_glsl() + Climate::smooth_min_glsl() + Climate::curve_at_glsl() + Terrain::glsl_helpers();
-    const ov::str program = Terrain::level_flags_glsl(prog, layout, params) + "\n" + helpers + hermite_functions(layout.channels) + storage_functions(layout.channels) +
-            Terrain::level_glsl(prog, layout, params, p_upto < 0 ? Terrain::NO_LEVEL : p_upto) + ground_material;
+    const ov::str program = "\n" + helpers + subdivision_functions(layout.channels) + Terrain::level_glsl(prog, layout, params, p_upto < 0 ? Terrain::NO_LEVEL : p_upto) + ground_material;
     code = ov::replace_all(code, "/*CASCADE*/", program);
-    const ov::str debug_store = ov::str(cubes ? "if (sample_live) " : "") + "store_debug(sample_index, ch); // CascadeSpike variant";
+    const ov::str debug_store = ov::str(cubes ? "if (sample_live) " : "") + "store_debug(sample_index, ground, pick); // CascadeSpike variant";
     code = ov::replace_all(code, "/*DEBUG_STORE*/", p_debug ? debug_store : ov::str());
     // Last: the block holds every number the generators took (a generic program's at its largest: its size in the text).
     const int64_t heap = int64_t(params.values.size());
