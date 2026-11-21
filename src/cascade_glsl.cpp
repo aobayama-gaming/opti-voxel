@@ -270,7 +270,7 @@ void hmid(float a, float b, float sa, float sb, out float v, out float s) {
     return hermite_x(a, a, false);
 }
 
-// Channel k of the level above at this point, subdivided and flushed, as a register; the pick (p_pick) copied from the
+// Channel k of the level above at this point, subdivided and flushed, as a register; the pick (pick) copied from the
 // floor parent.
 vec4 subdivide(uint k, bool pick) {
     vec4 v;
@@ -406,7 +406,7 @@ ov::str level_shader(const CascadeSource *p_sdf, bool p_debug, bool p_points, bo
     code = ov::replace_all(code, "/*SAMPLE_SDF*/", p_fold ? ov::format("cascade_sample_sdf(%s, %s, pc.chunk_base + c, material, skirt_extra)", channels, cube_box) : ov::format("cascade_terrain_sdf(%s)", channels));
     // Without ground materials only the fold writes materials, and only for chunks with a list: a chunk without one is
     // ground, and the meshers don't read its samples' materials (its palette is the ground block, or its list is empty).
-    // With them every chunk's samples get one: the winner's, or the ground's pick (channel 1 of the last level).
+    // With them every chunk's samples get one: the winner's, or the ground's pick (level_run's o_pick).
     const bool grounds = ground_materials(p_sdf) && !p_points;
     const bool store = p_material && (p_fold || grounds);
     const ov::str ground_material = grounds ? p_sdf->get_ground_material_glsl() : ov::str();

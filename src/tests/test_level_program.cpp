@@ -549,7 +549,7 @@ TEST_CASE("Terrain: the specialised text subdivides and stores each level's own 
         }
         INFO(pin.path);
         CHECK(count(text, "subdivide(") == loads);
-        CHECK(count(text, ", true);") == picks);
+        CHECK(count(text, "subdivide(0u, true)") == picks);
         CHECK(count(text, "ch_store(") == stores);
         CHECK(text.find("Ch ") == ov::str::npos);
     }
