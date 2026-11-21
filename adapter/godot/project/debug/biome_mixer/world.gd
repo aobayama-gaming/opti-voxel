@@ -1,14 +1,17 @@
 extends RefCounted
-## The mixer's world: the world file itself (res://climate/world.json: its biomes, their graphs, places, surfaces,
-## instances and features, every other key as it is), with the mixer's keys beside them: "fields" (its climate's, read
-## only), "current" (the biome the graph edits), "mode" ("biome" or "world"), "view" and "mixer_version". A biome's "at"
-## is kept as {field: [centre, span]} (the default, the last, has none). The weights and the maps are the engine's
+## The mixer's world: the world file itself (res://climate/world.json, or the file --open names: its biomes, their
+## graphs, places, surfaces, instances and features, its planet, every other key as it is), with the mixer's keys beside
+## them: "fields" (its climate's, edited by the fields panel), "path" (the file it came from and exports to), "current"
+## (the biome the graph edits), "mode" ("biome" or "world"), "view" and "mixer_version". A biome's "at" is kept as
+## {field: [centre, span]} (the default, the last, has none). The weights and the maps are the engine's
 ## (ClimateReportNode.preview); the file it writes is the world minus the mixer's keys, checked by the engine first.
 
 const EngineInfo := preload("res://debug/biome_mixer/engine_info.gd")
 
 # The world's keys that are the mixer's, not the file's.
-const MIXER_KEYS := ["fields", "current", "mode", "view", "mixer_version", "name"]
+const MIXER_KEYS := ["fields", "path", "current", "mode", "view", "mixer_version", "name"]
+# The world file's keys that may name a file (WorldFile: relative to the world file).
+const SECTIONS := ["engine", "climate", "look", "zone", "instances", "features", "species"]
 # 3: single-octave notes, warp nodes; 4: multifractals with a parent (an older autosave is not read).
 const VERSION := 4
 # The World mode's view settings, beside the Biome mode's (the mixer's VIEW_DEFAULTS) in the world's "view".
@@ -20,16 +23,19 @@ const LINE := 120
 
 
 # The world file p_path as the mixer's world ({} if it isn't one): its climate's fields beside it, every biome's place as
-# [centre, span] (a biome without a graph gets the template's).
-static func read(p_path: String) -> Dictionary:
+# [centre, span] (a biome without a graph gets the template's). p_file: the world file a saved world without a "path"
+# came from (an autosave older than the key: world.json), else p_path.
+static func read(p_path: String, p_file: String = "") -> Dictionary:
 	var w = JSON.parse_string(FileAccess.get_file_as_string(p_path)) if FileAccess.file_exists(p_path) else null
 	if not w is Dictionary or w.get("biomes", []).is_empty():
 		return {}
 	# The mixer's own world model before version 2 (its biomes' "model" graphs): not a world file.
 	if w.get("kind", "") == "world" or int(w.get("mixer_version", VERSION)) != VERSION:
 		return {}
+	# A saved world (the autosave, Save) keeps the file it came from.
+	w.path = String(w.get("path", p_file if p_file != "" else p_path))
 	if not w.has("fields"):
-		w.fields = EngineInfo.section(w, "climate", p_path).get("fields", [])
+		w.fields = EngineInfo.section(w, "climate", w.path).get("fields", [])
 	migrate(w, p_path)
 	var n: int = w.biomes.size()
 	for i in n:
@@ -81,23 +87,36 @@ static func debug_color(p_biome: Dictionary) -> Color:
 	return EngineInfo.debug_color(p_biome)
 
 
-# The world as its file: a copy without the mixer's keys, the default biome without a place.
-static func file_of(p_world: Dictionary) -> Dictionary:
+# The span of the views that frames a planet (metres; 0 on the flat world): its diameter, a torus's outer one. The maps
+# are the base's tangent plane traced down to the ground, so wider shows nothing more of the planet.
+static func planet_extent_m(p_world: Dictionary) -> float:
+	var planet: Dictionary = p_world.get("planet", {})
+	return 2.0 * (float(planet.get("radius_m", 0.0)) + float(planet.get("ring_m", 0.0)))
+
+
+# The world as its file: a copy without the mixer's keys, the default biome without a place, its fields (edited or not)
+# in its climate: inline where it was inline; a climate file the world names kept unless the fields differ from it,
+# then inline (the mixer never writes a climate file another world may name). p_climate false: that comparison (a file
+# read) skipped, the climate as it is (preview_file inlines the fields anyway, on every edit).
+static func file_of(p_world: Dictionary, p_climate: bool = true) -> Dictionary:
 	var f: Dictionary = p_world.duplicate(true)
 	for key in MIXER_KEYS:
 		f.erase(key)
 	for b in f.biomes:
 		if b.get("at", {}).is_empty():
 			b.erase("at")
+	if f.get("climate") is Dictionary:
+		f.climate.fields = p_world.fields.duplicate(true)
+	elif p_climate and EngineInfo.section(p_world, "climate", String(p_world.path)).get("fields", []) != p_world.fields:
+		f.climate = {"fields": p_world.fields.duplicate(true)}
 	return f
 
 
 # What the engine draws for p_world (ClimateReportNode.preview, the mixer's view and "Open in game"): its file with
-# its engine an absolute path and its fields inline; p_alone >= 0: that biome alone (the default).
+# the sections it names absolute paths (WorldFile reads them relative to the world file) and its fields inline;
+# p_alone >= 0: that biome alone (the default).
 static func preview_file(p_world: Dictionary, p_alone: int = -1) -> Dictionary:
-	var f := file_of(p_world)
-	var e = f.get("engine", {})
-	f.engine = EngineInfo.section_path(e, EngineInfo.WORLD) if e is String else e
+	var f := _absolute(file_of(p_world, false), String(p_world.path))
 	f.climate = {"fields": p_world.fields.duplicate(true)}
 	if p_alone >= 0:
 		var b: Dictionary = f.biomes[p_alone]
@@ -106,21 +125,34 @@ static func preview_file(p_world: Dictionary, p_alone: int = -1) -> Dictionary:
 	return f
 
 
-# The engine's verdict on p_world's biomes over its fields (ClimateReportNode.check, at its engine): "" when it accepts.
+# p_file with the sections it names relative to the world file p_path absolute.
+static func _absolute(p_file: Dictionary, p_path: String) -> Dictionary:
+	for key in SECTIONS:
+		if p_file.get(key) is String:
+			p_file[key] = EngineInfo.section_path(p_file[key], p_path)
+	return p_file
+
+
+# The engine's verdict on p_world (ClimateReportNode.check: the whole file, at its own engine and over its own planet,
+# whose relief cap refuses a ground the flat world takes): "" when it accepts.
 static func check(p_world: Dictionary) -> String:
-	var body := JSON.stringify({"fields": p_world.fields, "biomes": file_of(p_world).biomes})
-	return ClassDB.class_call_static("ClimateReportNode", "check", body, EngineInfo.voxel_m, EngineInfo.lods)
+	return ClassDB.class_call_static("ClimateReportNode", "check", JSON.stringify(preview_file(p_world)), String(p_world.path).get_base_dir())
 
 
-# The world over p_path (its climate file untouched: the mixer doesn't edit the fields) once the engine accepts it:
-# {written, message (for the status line)}.
-static func write(p_world: Dictionary, p_path: String) -> Dictionary:
+# The world over its own file (p_world.path, or p_path: elsewhere, the sections it names made absolute so it loads from
+# there; its climate file untouched, file_of) once the engine accepts it: {written, message (for the status line)}.
+static func write(p_world: Dictionary, p_path: String = "") -> Dictionary:
+	var path := p_path if p_path != "" else String(p_world.path)
 	var err := check(p_world)
 	if err != "":
 		return {"written": false, "message": "Not exported, the engine refuses it: " + err}
-	if not store(p_path, text(file_of(p_world))):
-		return {"written": false, "message": "Could not write " + p_path}
-	return {"written": true, "message": "Exported %d biomes to %s" % [p_world.biomes.size(), p_path]}
+	var f := file_of(p_world)
+	if path.get_base_dir() != String(p_world.path).get_base_dir():
+		_absolute(f, String(p_world.path))
+	if not store(path, text(f)):
+		return {"written": false, "message": "Could not write " + path}
+	var inlined: bool = f.get("climate") is Dictionary and not p_world.get("climate") is Dictionary
+	return {"written": true, "message": "Exported %d biomes to %s%s" % [p_world.biomes.size(), path, " (its edited fields inline, the climate file untouched)" if inlined else ""]}
 
 
 # p_text into the file p_path (the mixer's saves too): false if it can't be opened.

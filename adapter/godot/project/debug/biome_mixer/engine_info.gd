@@ -3,7 +3,8 @@ extends RefCounted
 ## node kinds (Climate::graph_kinds: their inputs and parameters, what the mixer builds its nodes from), the template
 ## biome, a biome's debug colour, a shape's phi, where a biome is whole. Nothing here computes the terrain.
 
-# The game's world, and the master variables every note and field is read at: its engine.
+# The game's world, and the master variables every note and field is read at: the edited world's engine (use_world),
+# world.json's until a world is set.
 const WORLD := "res://climate/world.json"
 static var voxel_m: float
 static var lods: int
@@ -16,10 +17,7 @@ static var _by_kind := {}
 
 static func _static_init() -> void:
 	var world = JSON.parse_string(FileAccess.get_file_as_string(WORLD))
-	var engine := section(world if world is Dictionary else {}, "engine", WORLD)
-	# WorldFile's defaults.
-	voxel_m = float(engine.get("voxel_m", 0.5))
-	lods = int(engine.get("lods", 15))
+	use_world(world if world is Dictionary else {})
 	if not ClassDB.class_exists("ClimateReportNode"):
 		push_error("biome mixer: the engine's extension isn't loaded (ClimateReportNode): run the import, then the mixer.")
 		return
@@ -27,6 +25,25 @@ static func _static_init() -> void:
 	kinds = ClassDB.class_call_static("ClimateReportNode", "graph_kinds")
 	for k in kinds:
 		_by_kind[k.kind] = k
+
+
+# The master variables of the world being edited (its engine section, else WorldFile's defaults): a new biome's
+# template and the fields panel's octaves read them.
+static func use_world(p_world: Dictionary) -> void:
+	var engine := section(p_world, "engine", String(p_world.get("path", WORLD)))
+	voxel_m = float(engine.get("voxel_m", 0.5))
+	lods = int(engine.get("lods", 15))
+
+
+# The octaves a note or a field band may sit on (k: 2^k voxels), from the cascade's finest (3) to the top note of the
+# LOD count (lods + 4: 26 km at 5 cm and 15 LODs), and the one the engine reads a wavelength of p_m metres as.
+static func octave_range() -> Vector2i:
+	return Vector2i(3, lods + 4)
+
+
+static func octave_of(p_m: float) -> int:
+	var r := octave_range()
+	return clampi(roundi(log(maxf(p_m, 1e-6) / voxel_m) / log(2.0)), r.x, r.y)
 
 
 static func kind(p_kind: String) -> Dictionary:

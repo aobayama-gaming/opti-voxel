@@ -82,7 +82,7 @@ macro layer in double on the CPU, `BaseSurface`'s region machinery).
   nested LINs merged, linear crossings carried as one channel (a plain fBm is one channel top to bottom) and, specialised,
   blend factoring. Then the bounds (`bound_program`: each node's value range, the output's step per LOD, the skirts'
   depth) and the validation: the output within `Ground::amp_cap` (a planet's relief, the exact range's top on the flat
-  world), a curve's slope within `MAX_CURVE_SLOPE` (4), a warp within `WARP_LIMIT`. Refusals name the biome and node.
+  world; the blend's range is the hull of its biomes' outputs, its weights summing to 1, not their sum), a curve's slope within `MAX_CURVE_SLOPE` (4), a warp within `WARP_LIMIT`. Refusals name the biome and node.
 - **CPU** (`level_program.cpp`): `Terrain::run` / `Terrain::point` on the op table's CPU forms, through
   `SDFCascade::channels_at` on every path (chunk samples, point items, `ground_along`, the report); BiomePick,
   CloudClimate and ClimateReport read the program's `fields` and `weights` nodes (`Terrain::point_nodes`, which
@@ -145,12 +145,18 @@ samples), each on the tables of its time; v2's own are PR G's (`docs/cascade-v2.
 `adapter/godot/project/debug/biome_mixer/`, `tools/biome_mixer.sh`: a world's biomes edited as the engine reads them,
 the engine's view of them beside it. It is an editor over the engine, never a copy of it: it keeps no model of its own,
 computes no terrain and has no node kind the engine hasn't.
-- **The world is the world file** (`world.gd`): `res://climate/world.json` as it is (every biome's `graph`, place,
-  surface, clouds, instances, features, every other key), with the mixer's keys beside it (`fields`, its climate's,
-  read only; `current`, `mode`, `view`, `mixer_version`). A biome's `at` is kept as `[centre, span]`. The world
-  autosaves (user://), saves to `climate/worlds/*.world.json`, and *Export* (World menu) writes it over world.json once
-  `ClimateReportNode.check` (`ClimateReport::check`) accepts its biomes over its fields: the file is the world minus the
-  mixer's keys (its climate file untouched). Numbers keep 7 significant digits; a value fits on one line up to 120
+- **The world is the world file** (`world.gd`): `res://climate/world.json`, or the file `--open=PATH` names (a planet's
+  too: `worlds/tiny_biomes.world.json` is a blank 2 km planet, five placeholder biomes on the template ground over three
+  fields of 819.2 + 409.6 m), as it is (every biome's `graph`, place, surface, clouds, instances, features, every other
+  key), with the mixer's keys beside it (`fields`, its climate's; `path`, the file it came from; `current`, `mode`,
+  `view`, `mixer_version`). A biome's `at` is kept as `[centre, span]`. The world's engine section sets the octaves
+  (`EngineInfo.use_world`); a planet's views start on the whole planet. The World mode's fields panel
+  (`fields_panel.gd`) edits the fields' bands (each shown with the octave the engine snaps it to), adds and removes
+  fields, and sets the planet's radius (written into the shaders: a recompile). The world autosaves (user://), saves to
+  `climate/worlds/*.world.json`, and *Export* (World menu) writes it over its own file once `ClimateReportNode.check`
+  (`ClimateReport::check_world`: the whole file, at its engine and over its planet, whose relief cap refuses a ground
+  the flat world takes) accepts it: the file is the world minus the mixer's keys (a climate file it names untouched;
+  edited fields then go inline). The 2D maps (`ClimateReport::preview`) are drawn over the world's planet too. Numbers keep 7 significant digits; a value fits on one line up to 120
   characters. A world read (the autosave, a saved world) is migrated to what cascade v2 reads (`World.migrate`, a
   printed note each): a field's `"source": "ground"` term goes, from the mixer's fields and an inline climate (a
   climate file the world names is left as it is). An autosave of an older `mixer_version` (3: multifractals without a

@@ -2,7 +2,8 @@ extends RefCounted
 ## The biome mixer's headless self-test (mixer.gd --check): every engine kind has the mixer's UI; world.json read as the
 ## mixer's world is the same file; every biome, and a graph of every kind, drawn by the engine and every node's GraphNode
 ## built; edits (a row out, a node out, a loop the engine refuses, mute) still drawn; the export written, read back the same, and
-## refused when the engine refuses. run() returns the report (its "ok" the verdict).
+## refused when the engine refuses; the blank planet world drawn over its planet, its fields editable, its relief cap
+## checked. run() returns the report (its "ok" the verdict).
 
 const EngineInfo := preload("res://debug/biome_mixer/engine_info.gd")
 const Graph := preload("res://debug/biome_mixer/graph.gd")
@@ -13,6 +14,8 @@ const EngineView := preload("res://debug/biome_mixer/engine_view.gd")
 
 # Where the check writes world.json's export.
 const EXPORT_PATH := "user://biome_mixer_export_check.json"
+# The blank planet world (tools/biome_mixer.sh --open=... starts on it).
+const PLANET := "res://worlds/tiny_biomes.world.json"
 # The engine's maps the check asks for (points a side): small, the check is about the bits reaching the engine.
 const SIZE := 16
 
@@ -34,7 +37,8 @@ static func run(p_mixer: Object) -> Dictionary:
 	report.world = whole(w)
 	report.edits = edits(p_mixer)
 	report.export = export_world(w)
-	var ok: bool = report.kinds.ok and report.same_file.ok and report.every_kind.ok and report.world.ok and report.edits.ok and report.export.ok
+	report.planet = planet()
+	var ok: bool = report.kinds.ok and report.same_file.ok and report.every_kind.ok and report.world.ok and report.edits.ok and report.export.ok and report.planet.ok
 	for b in report.biomes:
 		ok = ok and report.biomes[b].ok
 	report.ok = ok
@@ -70,9 +74,9 @@ static func same_file(p_world: Dictionary) -> Dictionary:
 	return {"ok": _close(want, got)}
 
 
-# The whole world drawn by the engine: every biome named, the chart's samples one per point (every field each).
-static func whole(p_world: Dictionary) -> Dictionary:
-	var map: Dictionary = EngineView.draw(JSON.stringify(World.preview_file(p_world)), 200.0, SIZE)
+# The whole world drawn by the engine across p_km: every biome named, the chart's samples one per point (every field each).
+static func whole(p_world: Dictionary, p_km: float = 200.0) -> Dictionary:
+	var map := _map(p_world, p_km)
 	var names: PackedStringArray = map.get("biome_names", PackedStringArray())
 	var fields: PackedStringArray = map.get("field_names", PackedStringArray())
 	var samples: int = map.get("fields", PackedFloat32Array()).size() / maxi(fields.size(), 1)
@@ -177,6 +181,33 @@ static func export_world(p_world: Dictionary) -> Dictionary:
 	r.refused = not wz.written and not FileAccess.file_exists(zero_path)
 	r.ok = wr.written and r.same and r.stable and r.refused
 	return r
+
+
+# The blank planet world: drawn whole by the engine across the planet; a field's band edited (the fields panel's path,
+# World.preview_file) changes the field the engine samples; a 200 m ground refused by the export check over the
+# planet's relief cap (1/32 of its radius), taken by it on the flat world.
+static func planet() -> Dictionary:
+	var w := World.read(PLANET)
+	if w.is_empty():
+		return {"ok": false, "error": PLANET + " is not a world file with biomes"}
+	var km := World.planet_extent_m(w) / 1000.0
+	var r := {"world": whole(w, km)}
+	var before: PackedFloat32Array = _map(w, km).get("fields", PackedFloat32Array())
+	w.fields[0].bands[0].wavelength_m = float(w.fields[0].bands[0].wavelength_m) * 2.0
+	r.field_edit = not before.is_empty() and _map(w, km).get("fields", PackedFloat32Array()) != before
+	var high: Dictionary = w.duplicate(true)
+	high.biomes[0].graph = {"nodes": [{"id": "c", "kind": "constant", "value_m": 200.0}, {"id": "out", "kind": "output", "height": "c"}]}
+	r.refusal = World.check(high)
+	var flat: Dictionary = high.duplicate(true)
+	flat.erase("planet")
+	r.flat = World.check(flat)
+	r.ok = r.world.ok and r.field_edit and r.refusal.contains("over the cap") and r.flat == ""
+	return r
+
+
+# p_world drawn whole by the engine across p_km (its maps, as the mixer asks for them).
+static func _map(p_world: Dictionary, p_km: float) -> Dictionary:
+	return EngineView.draw(JSON.stringify(World.preview_file(p_world)), p_km, SIZE)
 
 
 # Equal, numbers within 1e-6 (the file keeps World.DIGITS digits).

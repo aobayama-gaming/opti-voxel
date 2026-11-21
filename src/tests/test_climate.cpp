@@ -171,15 +171,23 @@ TEST_CASE("Climate: the plain preset (the example before shaped bands) parses at
     CHECK(ov::contains(parse_json(past_top, g14.ground, single), "outside the cascade's range"));
 }
 
-TEST_CASE("ClimateReport: check takes a table's text, accepts a good one, refuses bad JSON and a refused table with the reason") {
-    const char *good = R"({"fields": [{"name": "t", "bands": [{"wavelength_m": 5000, "amp": 1}]}],
-        "biomes": [{"name": "a", "at": {"t": [0, 0.5]}}, {"name": "b"}]})";
-    CHECK(ClimateReport::check(good, 0.05, 25) == ov::str());
-    CHECK(ov::contains(ClimateReport::check("{\"fields\": [", 0.05, 25), "not a JSON object"));
-    CHECK(ov::contains(ClimateReport::check("[1, 2]", 0.05, 25), "not a JSON object"));
-    const char *zero_span = R"({"fields": [{"name": "t", "bands": [{"wavelength_m": 5000, "amp": 1}]}],
-        "biomes": [{"name": "a", "at": {"t": [0, 0]}}, {"name": "b"}]})";
-    CHECK(ov::contains(ClimateReport::check(zero_span, 0.05, 25), "span must be > 0"));
+// The mixer's export check (a world's text): bad JSON and a refused table refused with the reason; the world's own
+// planet read, a 200 m ground the flat world takes over a 2 km planet's relief cap (1/32 of its radius). Before, the
+// check and the maps configured a flat cascade whatever the world said.
+TEST_CASE("ClimateReport: check_world refuses bad JSON and a refused table, and reads the world's planet") {
+    const auto world = [](const char *p_planet, const char *p_span) {
+        return ov::str(R"({"engine": {"voxel_m": 0.05, "lods": 15},)") + p_planet +
+                R"("climate": {"fields": [{"name": "t", "bands": [{"wavelength_m": 819.2, "amp": 1}]}]},
+                "biomes": [{"name": "a", "at": {"t": [0, )" +
+                p_span + R"(]}, "graph": {"nodes": [{"id": "c", "kind": "constant", "value_m": 200},
+                {"id": "out", "kind": "output", "height": "c"}]}}, {"name": "b"}]})";
+    };
+    CHECK(ClimateReport::check_world(world("", "0.5"), "") == ov::str());
+    CHECK(!ClimateReport::check_world("{\"fields\": [", "").empty());
+    CHECK(!ClimateReport::check_world("[1, 2]", "").empty());
+    CHECK(ov::contains(ClimateReport::check_world(world("", "0"), ""), "span must be > 0"));
+    CHECK(ov::contains(ClimateReport::check_world(world(R"("planet": {"radius_m": 2000},)", "0.5"), ""), "over the cap"));
+    CHECK(ov::contains(ClimateReport::check_world(world(R"("planet": {"ring_m": 5000},)", "0.5"), ""), "needs radius_m"));
 }
 
 // The biome mixer's maps are the engine's: a world in memory sampled by the report's own code, the same bits twice, a
@@ -400,6 +408,35 @@ TEST_CASE("Climate: a biome's shaped amplitude is held to the cap") {
         const double cap_m = 1000.0 / ov::max(std::fabs(prog.lo[o]), std::fabs(prog.hi[o]));
         CHECK(parse_json(table(0.99 * cap_m), ground, t) == ov::str());
         CHECK(ov::contains(parse_json(table(1.01 * cap_m), ground, t), "over the cap"));
+    }
+}
+
+// The blend is a convex combination (the weights sum to 1): its bound is one biome's reach, not the sum of all of
+// them. Five biomes each at 0.6 of the cap compile in both modes (summed, 3x the cap, the generic text refused a
+// planet of five biomes the specialised text took through blend factoring); one over the cap is still refused. Each
+// biome's note is on its own octave, so the blend is a chain of partial sums, one per level (partial_sums): the bound
+// holds across the chain.
+TEST_CASE("Climate: the blend's bound is the largest biome's reach, not their sum") {
+    const Ground ground{ 0.5, 19, 1000.0f, INFINITY };
+    auto table = [](double p_last_m) {
+        ov::str biomes;
+        for (int b = 0; b < 5; b++) {
+            const double amp_m = b == 4 ? p_last_m : 300.0; // 600 voxels: 0.6 of the cap
+            const ov::str at = b == 4 ? ov::str() : ov::format(R"("at": {"t": [%s, 0.2]}, )", -0.6 + 0.4 * b);
+            biomes += ov::format(R"(%s{"name": "b%d", %s)", b ? ", " : "", b, at) + ClimateTest::note_graph(ov::format(R"("wavelength_m": %d, "seed": %d, "amp_m": %s)", 4096 >> b, b + 1, amp_m)) + "}";
+        }
+        return ClimateTest::json(R"({"fields": [{"name": "t", "bands": [{"wavelength_m": 65536, "amp": 1}]}], "biomes": [)" + biomes + "]}");
+    };
+    for (const Terrain::Mode mode : { Terrain::Mode::SPECIALISED, Terrain::Mode::GENERIC }) {
+        CAPTURE(int(mode));
+        Table t;
+        Terrain::LevelProgram prog;
+        CHECK(Terrain::compile(table(300.0), ground, mode, t, prog) == ov::str());
+        const size_t o = size_t(prog.output);
+        const Terrain::Node &out = prog.nodes[o];
+        CHECK((out.op == Terrain::Op::LIN && std::any_of(out.in.begin(), out.in.end(), [&](int p_in) { return prog.nodes[size_t(p_in)].op == Terrain::Op::LIN; })));
+        CHECK(ov::max(std::fabs(prog.lo[o]), std::fabs(prog.hi[o])) < 601.0);
+        CHECK(ov::contains(Terrain::compile(table(505.0), ground, mode, t, prog), "over the cap"));
     }
 }
 
