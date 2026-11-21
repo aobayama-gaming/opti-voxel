@@ -19,8 +19,9 @@ protected:
 public:
     Dictionary run(const String &p_out_dir, const String &p_world_path, double p_extent_km, int p_size, bool p_surface,
             const Vector2 &p_center, int p_lattice = -1);
-    // ClimateReport::check: "" if the table's text is accepted, else why not (static: ClassDB.class_call_static).
-    static String check(const String &p_json, double p_voxel_size, int p_lods);
+    // ClimateReport::check_world: "" if the world file's text (sections relative to p_dir) is accepted at its own engine
+    // and over its own base, else why not (static: ClassDB.class_call_static).
+    static String check(const String &p_json, const String &p_dir);
     // ClimateReport::preview of a world file's text (its relative paths from p_dir), static: { error, size, lattice,
     // spacing_m, us_per_point, relief_m, biomes: Image, shaded: Image (RGB8), altitude_m: PackedFloat32Array, fields:
     // PackedFloat32Array (point-major), field_names, biome_names } (the biome mixer's maps). p_background: its loop at

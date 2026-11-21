@@ -437,8 +437,14 @@ static int slice_lattice(double p_extent_km, int p_n, double p_voxel_size) {
     return ov::max(0, int(std::floor(std::log2(p_extent_km * 1000.0 / p_n / p_voxel_size))));
 }
 
-// A world's cascade, configured on its climate: empty, or why it has none to sample.
+// A world's cascade, configured on its climate over its base (a planet's: its curvature, its relief caps): empty, or why
+// it has none to sample.
 static ov::str load_climate(const WorldFile &p_world, SDFCascade &r_sdf) {
+    if (p_world.planet_ring_m > 0.0 && !(p_world.planet_radius_m > 0.0)) {
+        return "world: a planet's ring_m needs radius_m (the game runs it flat)."; // World::start's refusal
+    }
+    r_sdf.planet_radius_m = p_world.planet_radius_m;
+    r_sdf.planet_ring_m = p_world.planet_ring_m;
     const ov::str err = configure(r_sdf, p_world.climate_table, p_world.voxel_m, p_world.lods);
     return err.empty() && r_sdf.get_climate() == nullptr ? ov::str("climate: the world has no fields and biomes.") : err;
 }
@@ -461,14 +467,13 @@ static Slice sample_slice(const SDFCascade &p_sdf, bool p_surface, int p_trace, 
     return out;
 }
 
-ov::str ClimateReport::check(const ov::str &p_json, double p_voxel_size, int p_lods) {
-    ov::str json_error;
-    const ov::Value data = ov::parse_json(p_json, json_error);
-    if (data.get_type() != ov::Value::OBJECT || data.is_empty()) {
-        return "climate: not a JSON object with a table." + (json_error.empty() ? ov::str() : " " + json_error);
-    }
+ov::str ClimateReport::check_world(const ov::str &p_json, const ov::str &p_dir) {
+    ov::Value data;
+    WorldFile world;
+    ov::str err = WorldFile::parse_object(p_json, "the world's text", data);
+    err = err.empty() ? WorldFile::parse(data, p_dir, world) : err;
     SDFCascade sdf;
-    return configure(sdf, data, p_voxel_size, p_lods);
+    return err.empty() ? load_climate(world, sdf) : err;
 }
 
 ov::Value ClimateReport::run(const ov::str &p_out_dir, const ov::str &p_world_path, double p_extent_km, int p_size,

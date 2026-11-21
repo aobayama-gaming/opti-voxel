@@ -6,10 +6,10 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
   headless Godot, a few seconds, no GPU. `filter` is a doctest wildcard on test names
   (`'ChunkMath*'`). Tests are compiled into non-release builds only (`OPTI_VOXEL_TESTS`).
 - `tools/format.sh [--check] [files]`: clang-format 23.1.3 through `uvx` on `src/`.
-- `tools/biome_mixer.sh [--biome=NAME] [--world] [--set=ID.KEY=V] [--shot=PATH]` opens the biome mixer (a window;
+- `tools/biome_mixer.sh [--open=PATH] [--biome=NAME] [--world] [--set=ID.KEY=V] [--shot=PATH]` opens the biome mixer (a window;
   `docs/climate.md`); `--check` is its headless self-test (world.json read and written back the same, every biome and a
   graph of every engine kind drawn by the engine, `ClimateReportNode.preview`, and every node's UI built, edits, the
-  export and its refusal: `MIXER: {json}`, exit 0 ok, 4 not ok or a script error). `--shot` draws the sharp
+  export and its refusal, the blank planet world drawn, its fields edited and its relief cap checked: `MIXER: {json}`, exit 0 ok, 4 not ok or a script error). `--shot` draws the sharp
   map once, waits for the 3D view's terrain, restarts it twice on the same world (an edit's path), saves the window and
   the view, prints the map's time and the three loads (`MIXER_SHOT: terrain_loads_ms`) and quits. `--drag=ID.KEY=A:B:S` drags a
   node's value A to B and back each second for S seconds, one edit a frame (a slider held), and prints `MIXER_DRAG:`

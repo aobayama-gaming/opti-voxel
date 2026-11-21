@@ -236,13 +236,11 @@ static func _surface_row(p_key: String, p_ctx: Object) -> Control:
 # (an older file) shows as its nearest, which is what the engine reads.
 static func _octaves(p_m: float, p_set: Callable) -> OptionButton:
 	var ob := OptionButton.new()
-	var lo := 3
-	var hi := EngineInfo.lods + 4
-	for k in range(lo, hi + 1):
+	var lo := EngineInfo.octave_range().x
+	for k in range(lo, EngineInfo.octave_range().y + 1):
 		var m := EngineInfo.voxel_m * pow(2.0, k)
 		ob.add_item("%.1f m" % m if m < 1000.0 else "%.1f km" % (m / 1000.0))
-	var near := clampi(int(round(log(maxf(p_m, 1e-6) / EngineInfo.voxel_m) / log(2.0))), lo, hi)
-	ob.select(near - lo)
+	ob.select(EngineInfo.octave_of(p_m) - lo)
 	ob.item_selected.connect(func(i: int) -> void: p_set.call(snappedf(EngineInfo.voxel_m * pow(2.0, lo + i), 0.0001)))
 	return ob
 

@@ -8,7 +8,9 @@ extends Control
 ## the game on it. The mixer computes no terrain and keeps no model of its own.
 ## Run: tools/biome_mixer.sh [-- flags]  (godot --path adapter/godot/project res://debug/biome_mixer/biome_mixer.tscn)
 ## Flags:
-##   --biome=NAME       start on the world's biome NAME (the world: the autosave, else res://climate/world.json)
+##   --open=PATH        edit the world file PATH (res:// or absolute; a planet's too) instead of the autosave: the World
+##                      menu exports over it, and the autosave follows it (a plain launch then resumes on it)
+##   --biome=NAME       start on the world's biome NAME (the world: --open's, else the autosave, else res://climate/world.json)
 ##   --world            start in the World mode
 ##   --set=ID.KEY=V     set a node's key in the current biome's graph after loading (V as JSON: 1.5, "ridged"), or
 ##                      view.KEY=V a view setting (view.extent_km=40); repeatable
@@ -20,7 +22,8 @@ extends Control
 ##   --shot=PATH        draw once (the sharp map; in 3D, the terrain's load then two restarts, timed), save the window to
 ##                      PATH (and the view alone to PATH_view.png), quit
 ##   --check            headless self-test (checks.gd); prints MIXER: {json} and quits 0 if ok
-## The World menu exports the world over res://climate/world.json, the game's (the engine checks it first).
+## The World menu exports the world over the file it came from (res://climate/world.json, the game's, by default; the
+## engine checks it first, at the world's own engine and over its own planet).
 
 const EngineInfo := preload("res://debug/biome_mixer/engine_info.gd")
 const Graph := preload("res://debug/biome_mixer/graph.gd")
@@ -29,6 +32,7 @@ const Nodes := preload("res://debug/biome_mixer/nodes.gd")
 const EngineView := preload("res://debug/biome_mixer/engine_view.gd")
 const World := preload("res://debug/biome_mixer/world.gd")
 const WorldPanel := preload("res://debug/biome_mixer/world_panel.gd")
+const FieldsPanel := preload("res://debug/biome_mixer/fields_panel.gd")
 const Checks := preload("res://debug/biome_mixer/checks.gd")
 
 const WORLD := EngineInfo.WORLD
@@ -57,6 +61,7 @@ var refit := false  # the next World mode resample fits the chart's axes to the 
 var compile_queued := false
 var recompile_usec := 0  # the last recompile (the map and the terrain hand-off), --drag reports it
 var world_panel := WorldPanel.new()
+var fields_panel := FieldsPanel.new()
 var biome_pick := OptionButton.new()
 var mode_pick := OptionButton.new()
 
@@ -72,8 +77,11 @@ func _ready() -> void:
 	var mode := ""
 	var drag := ""
 	var steps := ""
+	var open := ""
 	for a in args:
-		if a.begins_with("--shot="):
+		if a.begins_with("--open="):
+			open = a.trim_prefix("--open=")
+		elif a.begins_with("--shot="):
 			shot = a.trim_prefix("--shot=")
 		elif a.begins_with("--biome="):
 			pick = a.trim_prefix("--biome=")
@@ -95,7 +103,15 @@ func _ready() -> void:
 	# A shot leaves the session's autosave alone (it may edit the graph with --set).
 	if shot != "" or probe:
 		autosave.timeout.disconnect(_autosave)
-	var w := World.read(AUTOSAVE) if shot == "" and not probe else {}
+	var w := {}
+	if open != "":
+		w = World.read(open)
+		if w.is_empty():
+			push_error("--open=%s: not a world file with biomes" % open)
+			get_tree().quit(1)
+			return
+	elif shot == "" and not probe:
+		w = World.read(AUTOSAVE, WORLD)
 	if w.is_empty():
 		w = World.read(WORLD)
 	if pick != "":
@@ -127,11 +143,14 @@ func set_world(p_world: Dictionary, p_frame: bool) -> void:
 	world = p_world
 	model = {}
 	row_flags.clear()
+	EngineInfo.use_world(world)
 	var view: Dictionary = VIEW_DEFAULTS.duplicate()
 	view.merge(World.WORLD_VIEW)
+	_frame_planet(view)
 	view.merge(world.get("view", {}), true)
 	world.view = view
 	world_panel.set_world(world)
+	fields_panel.set_world(world)
 	_fill_biome_pick()
 	_enter(String(world.get("mode", "biome")), p_frame)
 
@@ -149,12 +168,21 @@ func _enter(p_mode: String, p_frame: bool) -> void:
 	mode_pick.select(0 if p_mode == "biome" else 1)
 	graph.visible = p_mode == "biome"
 	world_panel.visible = p_mode == "world"
+	fields_panel.visible = p_mode == "world"
 	biome_pick.disabled = p_mode == "world"
 	# The graph (hidden in the World mode) always holds the current biome: --set reads it.
 	set_model(world.biomes[world.current], p_frame and p_mode == "biome", false)
 	preview.set_extent(float(world.view.extent_m) / 1000.0 if p_mode == "world" else float(world.view.extent_km))
 	refit = p_mode == "world"
 	recompile()
+
+
+# A planet's views on the whole planet (a flat world's spans would show it as a dot, or a corner of it).
+func _frame_planet(r_view: Dictionary) -> void:
+	var planet_m := World.planet_extent_m(world)
+	if planet_m > 0.0:
+		r_view.extent_km = planet_m / 1000.0
+		r_view.extent_m = planet_m
 
 
 func world_mode() -> bool:
@@ -403,7 +431,7 @@ func _save_world() -> void:
 
 
 func _export_world() -> void:
-	status.text = World.write(world, WORLD).message
+	status.text = World.write(world).message
 
 
 # The chart's cloud: the world's fields on its two axes at the view's points (the engine's samples).
@@ -495,6 +523,18 @@ func _build_ui() -> void:
 		biome_pick.select(b)
 		_enter("biome", true))
 	world_panel.axes_changed.connect(func() -> void: resample(true))
+	left.add_child(fields_panel)
+	fields_panel.visible = false
+	fields_panel.changed.connect(func(p_names: bool) -> void:
+		if p_names:
+			world_panel.set_world(world)
+		refit = true
+		queue_recompile())
+	fields_panel.planet_changed.connect(func() -> void:
+		_frame_planet(world.view)
+		preview.set_extent(float(world.view.extent_m) / 1000.0 if world_mode() else float(world.view.extent_km))
+		refit = true
+		queue_recompile())
 	split.add_child(left)
 	for k in kinds:
 		add_menu.add_item(Kinds.title(k))
@@ -536,17 +576,20 @@ func _menu(p_text: String, p_items: Array, p_pressed: Callable) -> MenuButton:
 	return m
 
 
-# The World menu: world.json again, or a saved world; save this one, export it.
+# The World menu: this world's file again, world.json, or a saved world; save this one, export it over its file.
 func _fill_worlds(p_menu: MenuButton) -> void:
 	var popup := p_menu.get_popup()
 	popup.clear()
 	for c in popup.id_pressed.get_connections():
 		popup.id_pressed.disconnect(c.callable)
+	var path := String(world.get("path", WORLD))
 	var actions := [
-		["Reload %s" % WORLD, func() -> void: set_world(World.read(WORLD), true)],
+		["Reload %s" % path, func() -> void: set_world(World.read(path), true)],
 		["Save this world to %s" % WORLDS_DIR, _save_world],
-		["Export this world to %s (the game's)" % WORLD, _export_world],
+		["Export this world to %s%s" % [path, " (the game's)" if path == WORLD else ""], _export_world],
 	]
+	if path != WORLD:
+		actions.append(["Open %s (the game's)" % WORLD, func() -> void: set_world(World.read(WORLD), true)])
 	for a in actions:
 		popup.add_item(a[0])
 	var files: Array = []
@@ -558,7 +601,8 @@ func _fill_worlds(p_menu: MenuButton) -> void:
 		if i < actions.size():
 			actions[i][1].call()
 		else:
-			var w := World.read("%s/%s" % [WORLDS_DIR, files[i - actions.size()]])
+			# A world saved before its "path" key came from world.json (its sections are world.json's).
+			var w := World.read("%s/%s" % [WORLDS_DIR, files[i - actions.size()]], WORLD)
 			if not w.is_empty():
 				set_world(w, true))
 
@@ -673,7 +717,7 @@ func _check() -> void:
 	var report := Checks.run(self)
 	print("MIXER: ", JSON.stringify(report))
 	# The window's parts, never added to the tree in a check.
-	for c in [graph, preview, status, name_edit, add_menu, autosave, world_panel, biome_pick, mode_pick]:
+	for c in [graph, preview, status, name_edit, add_menu, autosave, world_panel, fields_panel, biome_pick, mode_pick]:
 		c.free()
 	await get_tree().process_frame
 	get_tree().quit(0 if report.ok else 1)
