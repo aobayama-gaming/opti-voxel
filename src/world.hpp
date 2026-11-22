@@ -123,6 +123,9 @@ public:
         points_gpu = std::move(p_kept.points_gpu);
     }
     bool is_started() const { return started; }
+    // Why the last start() failed (its file, planet, climate or species refused, no device, bad settings), or why the
+    // started world draws nothing (the mesher's passes failed to compile: seen by frame()); empty otherwise. Hosts show it.
+    const str &get_error() const { return error; }
     // The LOD the view's rule gives at p_distance_m from the camera (ChunkDiscoverer::lod_at_distance); 0 before start.
     int lod_at_distance(double p_distance_m) const;
     // The direction towards the sun (render space, unit): the atmosphere's light from the next frame on.
@@ -147,7 +150,8 @@ public:
     int64_t pending_chunk_count() const { return int64_t(state.dirty_chunk.size()); }
     // Distance from the camera (metres) that bounds every chunk the discoverer can load (0 before start).
     double load_radius() const;
-    // SDF (metres, LOD 0) at a render-space position: the camera's distance to the terrain.
+    // SDF (metres, LOD 0) at a render-space position: the camera's distance to the terrain; 0 without a configured
+    // world (a refused one: get_error).
     double sdf_at(const double p_render_pos[3]) const;
     // The LOD0 voxel holding a render-space position (an edit's anchor).
     VoxelPos voxel_at(const double p_render_pos[3]) const;
@@ -220,6 +224,9 @@ private:
     VoxelState state;
 
     bool started = false;
+    str error; // get_error
+    // p_error kept for get_error and printed; false (start's and load_world's refusal).
+    bool fail(const str &p_error);
     // update_destroy is needed (a scan or mesher results arrived since it last ran).
     bool destroy_dirty = false;
     // View of the scan currently in state.scanned_chunk.

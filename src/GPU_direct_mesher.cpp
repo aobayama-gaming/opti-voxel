@@ -189,7 +189,10 @@ void GPUDirectMesher::_rt_initialize() {
 
     for (int i = 0; i < COMPUTE_PASSES; i++) {
         pipelines[i] = _rt_compile(PASS_SOURCES[i], PASS_NAMES[i + 1]);
-        OV_ERR_FAIL_COND_MSG(!pipelines[i].is_valid(), ov::str("GPUDirectMesher: pass failed to compile: ") + PASS_NAMES[i + 1]);
+        if (!pipelines[i].is_valid()) {
+            rt_failed.store(true, std::memory_order_release);
+            OV_ERR_FAIL_MSG(ov::str("GPUDirectMesher: pass failed to compile: ") + PASS_NAMES[i + 1]);
+        }
     }
 
     // The table, sized for the capacity up front; the records arrive with the first dispatch (_table_payload).
@@ -211,6 +214,7 @@ void GPUDirectMesher::_rt_initialize() {
                 buffer_table_records, buffer_table_list, buffer_material)) {
         device->free(uniform_set);
         uniform_set = ov::gpu::BindSet(); // nothing dispatches
+        rt_failed.store(true, std::memory_order_release);
         OV_ERR_FAIL_MSG("GPUDirectMesher: the cascade passes failed to compile.");
     }
     const uint64_t cascade_mb = cascade->scratch_bytes() / 1048576;

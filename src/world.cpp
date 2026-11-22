@@ -57,6 +57,12 @@ World::~World() {
     stop();
 }
 
+bool World::fail(const str &p_error) {
+    error = p_error;
+    OV_ERR_PRINT("World: " + p_error);
+    return false;
+}
+
 bool World::load_world() {
     OV_ERR_FAIL_COND_V_MSG(started, false, "World: the world is set before start.");
     if (config.world_path == content_path && config.world_json == content_json && config.world_dir == content_dir) {
@@ -69,7 +75,9 @@ bool World::load_world() {
     } else if (!config.world_path.empty()) {
         err = WorldFile::load(config.world_path, loaded);
     }
-    OV_ERR_FAIL_COND_V_MSG(!err.empty(), false, "World: " + err);
+    if (!err.empty()) {
+        return fail(err);
+    }
     content = loaded;
     content_path = config.world_path;
     content_json = config.world_json;
@@ -82,17 +90,26 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
         double p_camera_far_m) {
     ChunkParam &chunk_param = config.chunk_param;
     OV_ERR_FAIL_COND_V_MSG(started, false, "World: already started.");
+    error = str();
     if (!load_world()) {
         return false;
     }
     const int lod_numbers = content.lods;
     // One chunk-id unit is half a LOD0 chunk, a whole number of voxels.
-    OV_ERR_FAIL_COND_V_MSG(chunk_param.chunk_voxel_dimension() % 2 != 0, false, "World: chunk_size - 2 * skirt_size must be even.");
-    OV_ERR_FAIL_COND_V_MSG(lod_numbers < 1 || lod_numbers > ChunkMath::MAX_LOD_NUMBERS, false, "World: lod_numbers out of range.");
+    if (chunk_param.chunk_voxel_dimension() % 2 != 0) {
+        return fail("chunk_size - 2 * skirt_size must be even.");
+    }
+    if (lod_numbers < 1 || lod_numbers > ChunkMath::MAX_LOD_NUMBERS) {
+        return fail("lod_numbers out of range.");
+    }
     // The mesher needs the main device. Without one (headless, the Compatibility renderer) the page pool would
     // dereference null on the device's thread: the terrain stays empty instead.
-    OV_ERR_FAIL_COND_V_MSG(p_hosts.device == nullptr, false, "World: no GPU device (headless or the Compatibility renderer): the terrain is disabled.");
-    OV_ERR_FAIL_COND_V_MSG(p_hosts.pages == nullptr, false, "World: no host to draw the mesher's output.");
+    if (p_hosts.device == nullptr) {
+        return fail("no GPU device (headless or the Compatibility renderer): the terrain is disabled.");
+    }
+    if (p_hosts.pages == nullptr) {
+        return fail("no host to draw the mesher's output.");
+    }
     hosts = p_hosts;
 
     started = true;
@@ -133,11 +150,10 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
         OV_TRACE("world", "start_configure");
         sdf->configure(chunk_param, lod_numbers);
     }
-    // A refused planet or climate configures another world (the flat datum, the template ground): not the one asked for.
+    // A refused planet, climate or species: no world was configured.
     if (const str err = sdf->get_world_error(); !err.empty()) {
-        OV_ERR_PRINT("World: " + err + ": the world isn't started.");
         started = false;
-        return false;
+        return fail(err);
     }
     sdf->set_walk_verify(config.walk_verify);
     if (config.walk_gpu) {
@@ -181,7 +197,7 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
     // Only for a host that draws them (binds their textures).
     if (content.atmosphere && hosts.atmosphere_textures) {
         atmosphere = new Atmosphere();
-        atmosphere->start(hosts.device, sdf->get_base(), double(chunk_param.voxel_size), sdf->relief_m(content.relief_m), content.atmosphere_scale,
+        atmosphere->start(hosts.device, sdf->get_base(), double(chunk_param.voxel_size), sdf->ground_top_m(), content.atmosphere_scale,
                 hosts.atmosphere_textures);
         if (content.clouds && hosts.cloud_textures) {
             clouds = new Clouds();
@@ -193,7 +209,7 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
                     return CloudClimate::at(*climate, cascade->program(), p_voxel, p_m);
                 });
             }
-            clouds->start(hosts.device, atmosphere, sdf->get_base(), double(chunk_param.voxel_size), sdf->relief_m(content.relief_m), content.atmosphere_scale,
+            clouds->start(hosts.device, atmosphere, sdf->get_base(), double(chunk_param.voxel_size), sdf->ground_top_m(), content.atmosphere_scale,
                     hosts.cloud_textures);
             clouds->set_weather(cloud_cover, cloud_wind);
         }
@@ -269,6 +285,9 @@ void World::_record_dispatch_times(const DispatchTimes &p_now) {
 void World::frame(const Float3 *p_camera_pos, const Float3 *p_camera_forward, double p_camera_far_m, const Float3 *p_load_centre) {
     if (!started) {
         return;
+    }
+    if (error.empty() && direct_mesher != nullptr && direct_mesher->has_failed()) {
+        fail("the mesher's passes failed to compile: nothing is drawn.");
     }
 
     Section total(process_stats.process_total, "process");
@@ -539,6 +558,9 @@ double World::load_radius() const {
 }
 
 double World::sdf_at(const double p_render_pos[3]) const {
+    if (sdf->program().nodes.empty()) {
+        return 0.0; // no world configured (before start, or refused: get_error): nothing to sample
+    }
     WorldPos p;
     p.voxel = voxel_at(p_render_pos); // the cascade only exists on lattice points: the LOD0 voxel corner (within one voxel)
     return sdf->evaluate_view(p, 0); // called every frame: streamed instances come once resident

@@ -217,6 +217,9 @@ protected:
     // (SDFCascade: its world's climate). Valid from configure() on.
     virtual const Climate::Table *placing_climate() const { return nullptr; }
     virtual const Terrain::LevelProgram *placing_program() const { return nullptr; }
+    // Empty, or the first instance entry (the world's or a biome's, of placing_climate) naming a species the world's
+    // species don't have: a world error (SDFCascade::configure), never a list grown without it.
+    ov::str species_error() const;
 
     // The base palette (SDFGpuTable::base_palette): GROUND, then p_ground's materials, registered by name (their
     // parameters replaced on a reconfigure). Call from configure(); empty: {GROUND}.

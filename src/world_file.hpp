@@ -16,7 +16,7 @@
 //     "engine": "engine.json" or { "voxel_m": 0.05, "lods": 25 },   the master variables
 //     "climate": "climate.json" or { "fields": [ field... ] },       the fields that place the biomes; none: no biomes
 //     "planet": { "radius_m": 0, "ring_m": 0 },
-//     "look": { "atmosphere": true, "atmosphere_scale": 0, "clouds": true, "relief_m": 3276.8 },
+//     "look": { "atmosphere": true, "atmosphere_scale": 0, "clouds": true },
 //     "zone": { "side_m": 0, "centre_m": [-50, -150] },
 //     "instances": [ { "species": "conifer", "cell_m": 5, "share": 1 }... ],
 //     "features": [ { "kind": "lava_lake", "cell_m": 640, "chance": 0.6, "radius_m": [18, 45] }... ],
@@ -44,10 +44,6 @@ struct WorldFile {
     bool atmosphere = true;
     double atmosphere_scale = 0.0;
     bool clouds = true; // the volumetric clouds in it (Clouds), their layer's scale as the atmosphere's
-    // The relief the sky stays above (metres; AtmosphereMedium::for_base, CloudLayer::for_base), a planet's
-    // SDFCascade::PLANET_RELIEF of its radius at most (SDFCascade::relief_m): the template ground's 3.3 km cap.
-    static constexpr double DEFAULT_RELIEF_M = 3276.8;
-    double relief_m = DEFAULT_RELIEF_M;
     SDFTable::Zone zone; // SDFTable::set_zone
     std::vector<Climate::InstanceShare> instances; // SDFTable::set_instances
     std::vector<Climate::FeatureShare> features; // SDFTable::set_features

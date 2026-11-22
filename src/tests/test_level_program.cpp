@@ -16,12 +16,11 @@ using ExactNoise::float_bits;
 
 namespace {
 
-// 5 cm voxels, 15 LODs (octaves up to 19), the flat world's cap.
+// 5 cm voxels, 15 LODs (octaves up to 19), the flat base.
 Climate::Ground ground() {
     Climate::Ground g;
     g.voxel_size = 0.05;
     g.k_max = 19;
-    g.amp_cap = ExactNoise::exact_pow2(40);
     return g;
 }
 

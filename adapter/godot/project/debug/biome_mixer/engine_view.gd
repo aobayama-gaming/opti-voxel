@@ -10,6 +10,7 @@ extends VBoxContainer
 signal view_changed  # the extent or the centre moved: draw again
 signal open_game
 signal drawn  # a map was shown: last is the newest the thread drew
+signal terrain_error(p_error: String)  # the 3D view's terrain on the last world: why it refused it, "" if it took it
 
 const FAST := 48
 const SHARP := 192
@@ -48,6 +49,7 @@ func _ready() -> void:
 	add_child(_rect)
 	_view3d.visible = false
 	_view3d.status_changed.connect(_show_info)
+	_view3d.status_changed.connect(func() -> void: terrain_error.emit(_view3d.error))
 	add_child(_view3d)
 	var bar := HFlowContainer.new()
 	add_child(bar)

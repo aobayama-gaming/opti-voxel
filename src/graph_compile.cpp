@@ -18,18 +18,14 @@ using Climate::Ground;
 using Term = std::pair<int, float>; // a LIN's input and its coefficient
 
 // Whether p_ground has p_note's octave ([BAND_SHIFT, k_max]: a note the LOD count doesn't have plays nothing, so a
-// world reads at any LOD count); its stretch on its octave (Band::stretch: octave k takes at most k - BAND_SHIFT of it);
-// its amplitude (LOD0 voxels), under p_ground's note_cap.
+// world reads at any LOD count).
 bool note_plays(const Climate::NoteNode &p_note, const Ground &p_ground) {
     return p_note.k >= ExactNoise::BAND_SHIFT && p_note.k <= p_ground.k_max;
 }
 
-int note_stretch(const Climate::NoteNode &p_note) {
-    return ov::max(0, ov::min(p_note.stretch, p_note.k - ExactNoise::BAND_SHIFT));
-}
-
+// p_note's amplitude in LOD0 voxels.
 float note_amp(const Climate::NoteNode &p_note, const Ground &p_ground) {
-    return float(ov::min(p_note.amp_m / p_ground.voxel_size, p_ground.note_cap));
+    return float(p_note.amp_m / p_ground.voxel_size);
 }
 
 // The program under construction: nodes hash-consed (one node per identity), their levels set and their constants
@@ -248,7 +244,7 @@ private:
             return;
         }
         Cascade::Band band = ExactNoise::make_octave(nn.seed + p_seed, uint32_t(nn.k), nn.k, 1.0f);
-        band.stretch = note_stretch(nn);
+        band.stretch = nn.stretch; // within its octave's (the parser: k - BAND_SHIFT at most)
         std::vector<int> disp;
         if (p_n.has("warp")) {
             const ov::Value *w = input(p_n, "warp");

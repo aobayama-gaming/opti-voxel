@@ -36,10 +36,10 @@ continents) are macro inputs until the planned macro engine computes them.
    and spans x1.1, its biome shares over 1678 km within a point of the edges' (desert 5.7% both, mountain 18.2% for
    19.4%).
 3. **The ground** at a point is `sum_b w_b * out_b`, `out_b` biome b's graph output; each graph reads its own notes:
-   - a note `n_k` times its `"amp_m"` (under a planet's `note_cap`), read at the point moved by its warp: a warp node
+   - a note `n_k` times its `"amp_m"` (as written, on any base), read at the point moved by its warp: a warp node
      whose input is any node strictly coarser than the note (the gate), read with its notes' seed, seed + 1 and seed + 2
      for x, y and z (libnoise's turbulence), or its `x`, `y`, `z` ports; a `"stretch_y"` reads it squeezed along the
-     base's up;
+     base's up (at most 2^(k - 3) on octave k: more is refused, never clamped);
    - a shape `phi(n) = c0 + c1 n + c2 |n| + c3 n^2` (plain, billow, ridged, square) on any node, inserted without its
      mean on a note (`|n|` is `Cascade::smooth_abs`, `sqrt(n^2 + 0.01) - 0.1`: with the bare kink the Hermite
      subdivision rang along the lattice axes, ridged gradient channels 21% off the values' finite differences against
@@ -85,8 +85,8 @@ macro layer in double on the CPU, `BaseSurface`'s region machinery).
   kernel the product of its `AXIS` factors, `FILL`, `RCP`, `NORM`), the blend and the pick; then constants folded,
   nested LINs merged, linear crossings carried as one channel (a plain fBm is one channel top to bottom) and, specialised,
   blend factoring. Then the bounds (`bound_program`: each node's value range, the output's step per LOD, the skirts'
-  depth) and the validation: the output within `Ground::amp_cap` (a planet's relief, the exact range's top on the flat
-  world; the blend's range is the hull of its biomes' outputs, its weights summing to 1, not their sum), a curve's slope within `MAX_CURVE_SLOPE` (4), a warp within `WARP_LIMIT`. Refusals name the biome and node.
+  depth) and the validation: the output within the base's limits (`Ground::reach_cap`: `BaseSurface::ALT_LIMIT` either
+  side, a carve's top only; `Ground::floor`: on a planet its low side above the centre; the blend's range is the hull of its biomes' outputs, its weights summing to 1, not their sum), a curve's slope within `MAX_CURVE_SLOPE` (4), a warp within `WARP_LIMIT`. Refusals name the biome and node.
 - **CPU** (`level_program.cpp`): `Terrain::run` / `Terrain::point` on the op table's CPU forms, through
   `SDFCascade::channels_at` on every path (chunk samples, point items, `ground_along`, the report); BiomePick,
   CloudClimate and ClimateReport read the program's `fields` and `weights` nodes (`Terrain::point_nodes`, which
@@ -158,8 +158,8 @@ computes no terrain and has no node kind the engine hasn't.
   (`fields_panel.gd`) edits the fields' bands (each shown with the octave the engine snaps it to), adds and removes
   fields, and sets the planet's radius (written into the shaders: a recompile). The world autosaves (user://), saves to
   `climate/worlds/*.world.json`, and *Export* (World menu) writes it over its own file once `ClimateReportNode.check`
-  (`ClimateReport::check_world`: the whole file, at its engine and over its planet, whose relief cap refuses a ground
-  the flat world takes) accepts it: the file is the world minus the mixer's keys (a climate file it names untouched;
+  (`ClimateReport::check_world`: the whole file, at its engine and over its planet, which refuses a ground under its
+  centre the flat world takes) accepts it: the file is the world minus the mixer's keys (a climate file it names untouched;
   edited fields then go inline). The 2D maps (`ClimateReport::preview`) are drawn over the world's planet too. Numbers keep 7 significant digits; a value fits on one line up to 120
   characters. A world read (the autosave, a saved world) is migrated to what cascade v2 reads (`World.migrate`, a
   printed note each): a field's `"source": "ground"` term goes, from the mixer's fields and an inline climate (a
@@ -207,7 +207,9 @@ computes no terrain and has no node kind the engine hasn't.
   Direct, the game's sky, fog and sun) loading the same text (`set_world_json`, no file). An edit restarts its world in
   place (`VoxelTerrain.restart_world`: a new `ov::World` on the same node, device and page host) 50 ms after it (not
   pushed back by the next edits: maps every ~40 ms kept it from firing), or once the last restart's chunks in view are
-  loaded (at most 1 s later): a slider drag shows each load. The climate's
+  loaded (at most 1 s later): a slider drag shows each load. A world the terrain refuses (`restart_world` false, or a
+  started one whose passes failed to compile) leaves no terrain: `VoxelTerrain.get_world_error` says why, in the view's
+  line and in red in the mixer's status (`EngineView.terrain_error`), never another ground drawn instead. The climate's
   numbers being shader params (`Cascade::ShaderParams`, `docs/cascade.md`), an edit of a value builds no pipeline: the
   device parks the pipelines the old world frees, by text, and its buffers and textures by shape, and the new world
   takes those of the same text or shape (`RDDevice::park`); the page pool goes from the old world to the new

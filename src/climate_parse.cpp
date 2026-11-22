@@ -373,6 +373,8 @@ private:
         r_n.stretch = int(std::lround(std::log2(std::max(s, 1.0))));
         if (!(s >= 1.0 && s <= std::ldexp(1.0, MAX_STRETCH) && std::ldexp(1.0, r_n.stretch) == s)) {
             fail(p_where, ov::format("'stretch_y' is a power of two in [1, 2^%d].", MAX_STRETCH));
+        } else if (r_n.stretch > r_n.k - ExactNoise::BAND_SHIFT) {
+            fail(p_where, ov::format("'stretch_y' %s is over 2^%d, the most a note of octave k = %d stretches (2^(k - %d)).", ov::num(s), r_n.k - ExactNoise::BAND_SHIFT, r_n.k, ExactNoise::BAND_SHIFT));
         }
     }
 

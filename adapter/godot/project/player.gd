@@ -389,6 +389,11 @@ func _update_hud(delta: float) -> void:
 	var terrain := _terrain()
 	if terrain == null:
 		return
+	var error := String(terrain.get_world_error())
+	if error != "":  # the world was refused (or draws nothing): say why, in red
+		hud.text = "The world didn't start: " + error
+		hud.add_theme_color_override("font_color", Color(1.0, 0.5, 0.45))
+		return
 	var s: Dictionary = terrain.get_debug_stats()
 	var edits: Dictionary = s.get("edits", {})
 	var ms: Dictionary = s.get("mesher", {})

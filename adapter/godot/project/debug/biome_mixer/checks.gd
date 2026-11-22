@@ -2,8 +2,8 @@ extends RefCounted
 ## The biome mixer's headless self-test (mixer.gd --check): every engine kind has the mixer's UI; world.json read as the
 ## mixer's world is the same file; every biome, and a graph of every kind, drawn by the engine and every node's GraphNode
 ## built; edits (a row out, a node out, a loop the engine refuses, mute) still drawn; the export written, read back the same, and
-## refused when the engine refuses; the blank planet world drawn over its planet, its fields editable, its relief cap
-## checked. run() returns the report (its "ok" the verdict).
+## refused when the engine refuses; the blank planet world drawn over its planet, its fields editable, a ground under its
+## centre refused. run() returns the report (its "ok" the verdict).
 
 const EngineInfo := preload("res://debug/biome_mixer/engine_info.gd")
 const Graph := preload("res://debug/biome_mixer/graph.gd")
@@ -184,8 +184,8 @@ static func export_world(p_world: Dictionary) -> Dictionary:
 
 
 # The blank planet world: drawn whole by the engine across the planet; a field's band edited (the fields panel's path,
-# World.preview_file) changes the field the engine samples; a 200 m ground refused by the export check over the
-# planet's relief cap (1/32 of its radius), taken by it on the flat world.
+# World.preview_file) changes the field the engine samples; a ground 2.5 km down refused by the export check (it would
+# cross the 2 km planet's centre), taken by it on the flat world.
 static func planet() -> Dictionary:
 	var w := World.read(PLANET)
 	if w.is_empty():
@@ -195,13 +195,13 @@ static func planet() -> Dictionary:
 	var before: PackedFloat32Array = _map(w, km).get("fields", PackedFloat32Array())
 	w.fields[0].bands[0].wavelength_m = float(w.fields[0].bands[0].wavelength_m) * 2.0
 	r.field_edit = not before.is_empty() and _map(w, km).get("fields", PackedFloat32Array()) != before
-	var high: Dictionary = w.duplicate(true)
-	high.biomes[0].graph = {"nodes": [{"id": "c", "kind": "constant", "value_m": 200.0}, {"id": "out", "kind": "output", "height": "c"}]}
-	r.refusal = World.check(high)
-	var flat: Dictionary = high.duplicate(true)
+	var deep: Dictionary = w.duplicate(true)
+	deep.biomes[0].graph = {"nodes": [{"id": "c", "kind": "constant", "value_m": -2500.0}, {"id": "out", "kind": "output", "height": "c"}]}
+	r.refusal = World.check(deep)
+	var flat: Dictionary = deep.duplicate(true)
 	flat.erase("planet")
 	r.flat = World.check(flat)
-	r.ok = r.world.ok and r.field_edit and r.refusal.contains("over the cap") and r.flat == ""
+	r.ok = r.world.ok and r.field_edit and r.refusal.contains("past the planet's centre") and r.flat == ""
 	return r
 
 

@@ -46,7 +46,7 @@ Preview preview(const ov::Value &p_world, const ov::str &p_dir, double p_extent_
         ov::Priority p_priority = ov::Priority::HIGH);
 
 // Empty if the world file's text p_json (WorldFile::parse, its sections relative to p_dir) gives a cascade with a
-// climate, at its own engine and over its own base (a planet's relief caps refuse a ground the flat world takes), else
+// climate, at its own engine and over its own base (a planet refuses a ground under its centre the flat world takes), else
 // why not (the biome mixer checks an export with it before it overwrites the world's file).
 ov::str check_world(const ov::str &p_json, const ov::str &p_dir);
 

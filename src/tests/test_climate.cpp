@@ -172,21 +172,24 @@ TEST_CASE("Climate: the plain preset (the example before shaped bands) parses at
 }
 
 // The mixer's export check (a world's text): bad JSON and a refused table refused with the reason; the world's own
-// planet read, a 200 m ground the flat world takes over a 2 km planet's relief cap (1/32 of its radius). Before, the
-// check and the maps configured a flat cascade whatever the world said.
+// planet read: a ground 2.5 km down the flat world takes and a 2 km planet refuses (it would cross the centre), the
+// same 200 m up taken by both. Before, the check and the maps configured a flat cascade whatever the world said.
 TEST_CASE("ClimateReport: check_world refuses bad JSON and a refused table, and reads the world's planet") {
-    const auto world = [](const char *p_planet, const char *p_span) {
+    const auto world = [](const char *p_planet, const char *p_span, const char *p_value_m = "200") {
         return ov::str(R"({"engine": {"voxel_m": 0.05, "lods": 15},)") + p_planet +
                 R"("climate": {"fields": [{"name": "t", "bands": [{"wavelength_m": 819.2, "amp": 1}]}]},
                 "biomes": [{"name": "a", "at": {"t": [0, )" +
-                p_span + R"(]}, "graph": {"nodes": [{"id": "c", "kind": "constant", "value_m": 200},
+                p_span + R"(]}, "graph": {"nodes": [{"id": "c", "kind": "constant", "value_m": )" + p_value_m + R"(},
                 {"id": "out", "kind": "output", "height": "c"}]}}, {"name": "b"}]})";
     };
+    const char *planet = R"("planet": {"radius_m": 2000},)";
     CHECK(ClimateReport::check_world(world("", "0.5"), "") == ov::str());
     CHECK(!ClimateReport::check_world("{\"fields\": [", "").empty());
     CHECK(!ClimateReport::check_world("[1, 2]", "").empty());
     CHECK(ov::contains(ClimateReport::check_world(world("", "0"), ""), "span must be > 0"));
-    CHECK(ov::contains(ClimateReport::check_world(world(R"("planet": {"radius_m": 2000},)", "0.5"), ""), "over the cap"));
+    CHECK(ClimateReport::check_world(world(planet, "0.5"), "") == ov::str());
+    CHECK(ClimateReport::check_world(world("", "0.5", "-2500"), "") == ov::str());
+    CHECK(ov::contains(ClimateReport::check_world(world(planet, "0.5", "-2500"), ""), "past the planet's centre"));
     CHECK(ov::contains(ClimateReport::check_world(world(R"("planet": {"ring_m": 5000},)", "0.5"), ""), "needs radius_m"));
 }
 
@@ -261,11 +264,13 @@ TEST_CASE("Climate: malformed tables are refused with the reason") {
         { R"({"biomes": [{"name": "a", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 1, "seed": 1, "amp_m": 1}, {"id": "o", "kind": "output", "height": "n"}]}}]})",
                 "outside the cascade's range" },
         { R"({"biomes": [{"name": "a", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 4000, "seed": 1, "amp_m": 1e13}, {"id": "o", "kind": "output", "height": "n"}]}}]})",
-                "over the cap" },
+                "the base keeps exact" },
         { R"({"biomes": [{"name": "a", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 4000, "amp_m": 1}, {"id": "o", "kind": "output", "height": "n"}]}}]})",
                 "'seed' is required" },
         { R"({"biomes": [{"name": "a", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 4000, "seed": 1}, {"id": "o", "kind": "output", "height": "n"}]}}]})",
                 "'amp_m' is required" },
+        { R"({"biomes": [{"name": "a", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 8, "seed": 1, "amp_m": 1, "stretch_y": 4}, {"id": "o", "kind": "output", "height": "n"}]}}]})",
+                "the most a note of octave k = 4 stretches" },
         { R"({"biomes": [{"name": "a", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 4000, "seed": 1, "amp_m": 1}]}}]})", "an output node" },
         { R"({"biomes": [{"name": "a", "graph": {"nodes": [{"id": "o", "kind": "output", "height": "x"}]}}]})", "no node 'x'" },
         { R"({"biomes": [{"name": "a", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 4000, "seed": 1, "amp_m": 1}, {"id": "n", "kind": "note", "wavelength_m": 400, "seed": 1, "amp_m": 1}, {"id": "o", "kind": "output", "height": "n"}]}}]})",
@@ -298,7 +303,7 @@ TEST_CASE("Climate: malformed tables are refused with the reason") {
         { "[[0, 0]]", "at least 2 points" },
         { "[[0, 0], [0, 10]]", "must increase" },
         { "[[0, 0], [10]]", "[h, R(h)]" },
-        { "[[0, 0], [1e12, 4e12]]", "over the cap" },
+        { "[[0, 0], [1e12, 4e12]]", "the base keeps exact" },
         { "[[0, 0], [0.5, 5], [1, 0]]", "has a slope up to" },
     };
     for (const Case &c : curves) {
@@ -391,10 +396,10 @@ TEST_CASE("Climate: the graph kind catalogue is the parser's keys, every kind pa
     CHECK(name_hash("") == 2166136261u);
 }
 
-// The compiler's cap (a planet's relief, Ground::amp_cap): the output's bound on a note just under it compiles, just over
-// it is refused, for a plain and a shaped note (the bound per metre of amplitude: the program's own at 1 m).
-TEST_CASE("Climate: a biome's shaped amplitude is held to the cap") {
-    const Ground ground{ 0.5, 19, 1000.0f, INFINITY };
+// The compiler's reach limit (Ground::reach_cap, here 1000 voxels): the output's bound on a note just under it compiles,
+// just over it is refused, for a plain and a shaped note (the bound per metre of amplitude: the program's own at 1 m).
+TEST_CASE("Climate: a biome's shaped amplitude is held to the reach limit") {
+    const Ground ground{ 0.5, 19, 1000.0, -INFINITY };
     for (const char *shape : { "\"plain\"", "\"ridged\"" }) {
         CAPTURE(shape);
         auto table = [&](double p_amp_m) {
@@ -407,21 +412,21 @@ TEST_CASE("Climate: a biome's shaped amplitude is held to the cap") {
         const size_t o = size_t(prog.output);
         const double cap_m = 1000.0 / ov::max(std::fabs(prog.lo[o]), std::fabs(prog.hi[o]));
         CHECK(parse_json(table(0.99 * cap_m), ground, t) == ov::str());
-        CHECK(ov::contains(parse_json(table(1.01 * cap_m), ground, t), "over the cap"));
+        CHECK(ov::contains(parse_json(table(1.01 * cap_m), ground, t), "the base keeps exact"));
     }
 }
 
 // The blend is a convex combination (the weights sum to 1): its bound is one biome's reach, not the sum of all of
-// them. Five biomes each at 0.6 of the cap compile in both modes (summed, 3x the cap, the generic text refused a
-// planet of five biomes the specialised text took through blend factoring); one over the cap is still refused. Each
+// them. Five biomes each at 0.6 of the reach limit compile in both modes (summed, 3x the limit, the generic text refused
+// a planet of five biomes the specialised text took through blend factoring); one over the limit is still refused. Each
 // biome's note is on its own octave, so the blend is a chain of partial sums, one per level (partial_sums): the bound
 // holds across the chain.
 TEST_CASE("Climate: the blend's bound is the largest biome's reach, not their sum") {
-    const Ground ground{ 0.5, 19, 1000.0f, INFINITY };
+    const Ground ground{ 0.5, 19, 1000.0, -INFINITY };
     auto table = [](double p_last_m) {
         ov::str biomes;
         for (int b = 0; b < 5; b++) {
-            const double amp_m = b == 4 ? p_last_m : 300.0; // 600 voxels: 0.6 of the cap
+            const double amp_m = b == 4 ? p_last_m : 300.0; // 600 voxels: 0.6 of the limit
             const ov::str at = b == 4 ? ov::str() : ov::format(R"("at": {"t": [%s, 0.2]}, )", -0.6 + 0.4 * b);
             biomes += ov::format(R"(%s{"name": "b%d", %s)", b ? ", " : "", b, at) + ClimateTest::note_graph(ov::format(R"("wavelength_m": %d, "seed": %d, "amp_m": %s)", 4096 >> b, b + 1, amp_m)) + "}";
         }
@@ -436,7 +441,7 @@ TEST_CASE("Climate: the blend's bound is the largest biome's reach, not their su
         const Terrain::Node &out = prog.nodes[o];
         CHECK((out.op == Terrain::Op::LIN && std::any_of(out.in.begin(), out.in.end(), [&](int p_in) { return prog.nodes[size_t(p_in)].op == Terrain::Op::LIN; })));
         CHECK(ov::max(std::fabs(prog.lo[o]), std::fabs(prog.hi[o])) < 601.0);
-        CHECK(ov::contains(Terrain::compile(table(505.0), ground, mode, t, prog), "over the cap"));
+        CHECK(ov::contains(Terrain::compile(table(505.0), ground, mode, t, prog), "the base keeps exact"));
     }
 }
 

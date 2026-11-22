@@ -134,7 +134,7 @@ static func _absolute(p_file: Dictionary, p_path: String) -> Dictionary:
 
 
 # The engine's verdict on p_world (ClimateReportNode.check: the whole file, at its own engine and over its own planet,
-# whose relief cap refuses a ground the flat world takes): "" when it accepts.
+# which refuses a ground under its centre the flat world takes): "" when it accepts.
 static func check(p_world: Dictionary) -> String:
 	return ClassDB.class_call_static("ClimateReportNode", "check", JSON.stringify(preview_file(p_world)), String(p_world.path).get_base_dir())
 

@@ -428,7 +428,7 @@ static int slice_lattice(double p_extent_km, int p_n, double p_voxel_size) {
     return ov::max(0, int(std::floor(std::log2(p_extent_km * 1000.0 / p_n / p_voxel_size))));
 }
 
-// A world's cascade, configured on its climate over its base (a planet's: its curvature, its relief caps): empty, or why
+// A world's cascade, configured on its climate over its base (a planet's: its curvature, its centre under the ground): empty, or why
 // it has none to sample.
 static ov::str load_climate(const WorldFile &p_world, SDFCascade &r_sdf) {
     ChunkParam param;

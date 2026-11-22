@@ -17,6 +17,7 @@
 #include "ov/types.hpp"
 #include "ov/value.hpp"
 
+#include <atomic>
 #include <mutex>
 #include <vector>
 
@@ -93,6 +94,9 @@ public:
     // released before. p_keep_pool: the pages are not freed but returned, every one released (the next world's mesher
     // starts on them: a restart neither frees nor makes a page); null otherwise.
     QuadPagePool *destroy(bool p_keep_pool = false);
+    // Whether the device's thread failed to create the passes (a pass or the cascade's bare or fold text didn't
+    // compile): nothing is meshed. Read on any thread, after initialize() (World::frame reports it).
+    bool has_failed() const { return rt_failed.load(std::memory_order_acquire); }
 
     // The chunks to mesh (replacing the queue), loaded in the order of ChunkMath::load_queue for p_view.
     void send_chunk(const LODHashSet &p_chunks, const ScanView &p_view);
@@ -175,6 +179,7 @@ private:
     // Dual contouring of Hermite data (DC-lite) in the vertex pass (gpu_glsl.hpp). Set before
     // initialize(): the worker compiles the vertex shader there.
     bool dual_contouring = false;
+    std::atomic<bool> rt_failed{ false }; // has_failed: set by _rt_initialize
 
     QuadPagePool *pool = nullptr;
     PalettePool palettes; // blocks: main thread; texture: the device's thread

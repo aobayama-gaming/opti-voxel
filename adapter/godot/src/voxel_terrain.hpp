@@ -98,8 +98,12 @@ public:
     void set_world_json(const String &p_json, const String &p_dir);
     // The running terrain stopped and started again on the world p_json (paths from p_dir), on its device and hosts: the
     // pipelines whose text didn't change are kept (an editor's edit of a world's numbers builds none), its chunks loaded
-    // again. The settings are kept (chunk_param as it entered the tree); the instance edits are dropped.
-    void restart_world(const String &p_json, const String &p_dir);
+    // again. The settings are kept (chunk_param as it entered the tree); the instance edits are dropped. False if the
+    // world was refused: get_world_error says why.
+    bool restart_world(const String &p_json, const String &p_dir);
+    // Why the world didn't start (its file, planet, climate or species refused, no device), or why it draws nothing (the
+    // mesher's passes failed to compile); empty otherwise (ov::World::get_error).
+    String get_world_error() const;
     void set_terrain_mode(int p_mode);
     int get_terrain_mode() const;
 

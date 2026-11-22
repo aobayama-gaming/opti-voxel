@@ -1,5 +1,6 @@
 #pragma once
 
+#include "base_surface.hpp"
 #include "cascade.hpp"
 #include "exact_noise.hpp"
 #include "material_library.hpp"
@@ -175,17 +176,17 @@ struct Table {
     int field_index(const ov::str &p_name) const;
 };
 
-// What a table is compiled for (SDFCascade::climate_ground): the voxel, the LOD count's octaves and the base's caps.
+// What a table is compiled for (SDFCascade::climate_ground): the voxel, the LOD count's octaves and the base's limits.
 struct Ground {
     double voxel_size = 0.0; // metres: converts the format's metres to voxels and octaves
     // The coarsest octave a note or a field may have (the LOD count's: lod_count + 4, the cascade's top).
     int k_max = -1;
-    // The program's output at most this (LOD0 voxels): a planet's relief (SDFCascade::PLANET_RELIEF of its radius), the
-    // exact range's top on the flat world.
-    float amp_cap = 0.0f;
-    // A note's own amplitude at most this (LOD0 voxels): a planet's relief over SDFCascade::PLANET_HEADROOM, so a biome's
-    // volume up to it still fits under amp_cap; infinite on the flat world.
-    double note_cap = INFINITY;
+    // The program's output at most this far from the base, either side (LOD0 voxels; a carve, reading `up`, its top
+    // only): the altitude every base keeps exact (BaseSurface::ALT_LIMIT).
+    double reach_cap = double(BaseSurface::ALT_LIMIT);
+    // The output's low bound above this (LOD0 voxels): minus a curved base's radius (the tube's on a torus), so the
+    // ground never reaches the centre; -INFINITY on the flat datum.
+    double floor = -INFINITY;
 };
 
 // A note node as the format reads it: one octave k, its seed, its amplitude (metres) and its stretch along the base's up.
@@ -193,7 +194,7 @@ struct NoteNode {
     int k = 0;
     uint32_t seed = 0;
     double amp_m = 0.0;
-    int stretch = 0; // log2 of stretch_y (Band::stretch: octave k takes at most k - BAND_SHIFT of it)
+    int stretch = 0; // log2 of stretch_y (Band::stretch), at most k - BAND_SHIFT (the parser refuses more)
 };
 
 // The format's readers (climate_parse.cpp; the format is described above graph_kinds there), each returning empty or the

@@ -528,6 +528,8 @@ ov::Value check_table(ov::gpu::Device *p_device, int p_lods, const ChunkParam &p
     sdf.set_stream_sources(false); // placed whole: the chunks' lists are the snapshot's (the streamed ones: unit tests)
     param.skirt_depth = ov::max(param.skirt_depth, sdf.min_skirt_depth(param, p_lods));
     sdf.configure(param, p_lods);
+    d["ok"] = false;
+    OV_ERR_FAIL_COND_V_MSG(!sdf.get_world_error().empty(), d, "CascadeCheck: the table check's world: " + sdf.get_world_error());
     const std::shared_ptr<const Archetype::InstanceSnapshot> snap = sdf.get_snapshot();
     SDFGpuTable *table = sdf.get_gpu_table();
     const int cs = param.chunk_size;

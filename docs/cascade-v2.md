@@ -162,7 +162,7 @@ bounds. That includes a weight's change times its biome's output bound, which `C
 `skirt_depth_table[L]` is that step plus the instances' erosion (`min_skirt_depth`), as today.
 
 Validation keeps the limits that protect the skirts and the exact range:
-- the output bound under `amp_cap`;
+- the output bound within the base's limits (`Ground::reach_cap`, `Ground::floor`: a planet's centre);
 - a curve's slope under `MAX_CURVE_SLOPE`;
 - the noise's exact range.
 
@@ -211,9 +211,9 @@ It drops the ones that only protected the record layouts.
 - **Refusal rules** that only protected the layouts (listed in *The rule*).
 - **Engine settings that are data:** the template biome built in C++ (`template_graph`) became world files
   (`worlds/template_5cm.world.json`, `template_50cm.world.json`: a file per voxel size, since its octaves are counted in
-  voxels; `SDFCascade::template_path` picks it, a missing or refused one falls back to the flat table with an ERR). Its
-  cap on a small planet is data too: the template's 3.3 km octaves are over a 2 km planet's relief and refused there,
-  so `tiny.world.json` carries its own ground, the template's octaves stopped under the relief. `SDFCascade::Preset::
+  voxels; `SDFCascade::template_path` picks it; a missing or refused one is a world error, no ground at all). A small
+  planet's ground is data too: the template's 3.3 km octaves would cross a 2 km planet's centre and are refused there,
+  so `tiny.world.json` carries its own ground, the template's octaves stopped at 3.3 km wavelengths. `SDFCascade::Preset::
   FLAT` and `terrain_mode` stay: the flat ground is already a constant table (`flat_table`), and the preset also picks
   the shapes gallery's ground height, skirts and spawn in World and `player.gd`; folding those into world files is
   left for later.

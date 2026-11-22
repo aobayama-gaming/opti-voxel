@@ -304,6 +304,15 @@ func _map_drawn() -> void:
 	status.add_theme_color_override("font_color", Color(1.0, 0.5, 0.45) if not ok else Color(0.8, 0.82, 0.86))
 
 
+# The 3D view's terrain refused the world the map took (VoxelTerrain.get_world_error), or draws nothing: the reason in
+# the red status line until the next map.
+func _terrain_error(p_error: String) -> void:
+	if p_error == "":
+		return
+	status.text = "Error: the game's terrain refuses it: " + p_error
+	status.add_theme_color_override("font_color", Color(1.0, 0.5, 0.45))
+
+
 # p_file with its mix rows as heard (row_flags: a muted row, or one not soloed where its mix has a solo, at volume 0).
 func _heard(p_file: Dictionary) -> Dictionary:
 	for b in p_file.biomes:
@@ -556,6 +565,7 @@ func _build_ui() -> void:
 			refit = false)
 	preview.open_game.connect(_open_game)
 	preview.drawn.connect(_map_drawn)
+	preview.terrain_error.connect(_terrain_error)
 	right.add_child(preview)
 	status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	status.custom_minimum_size.y = 22

@@ -40,7 +40,8 @@ public:
     ~SDFCascade() override { stop_streaming(); }
 
     // Set before configure(): a climate table (the world file's format), empty for none. configure() compiles it
-    // (Terrain::compile). Without one, or one it refuses (get_world_error, no climate), the template ground (template_path).
+    // (Terrain::compile). Without one, the template ground (template_path); one it refuses is a world error
+    // (get_world_error: no program).
     ov::Value climate_data = ov::Value::object();
     // Set before configure(): the program specialised to the climate's values (Terrain::Mode::SPECIALISED), or generic
     // (false, the biome mixer's: its GPU text interprets the program as data, so an edit compiles nothing).
@@ -56,12 +57,6 @@ public:
     double planet_radius_m = 0.0;
     // > 0 with a planet: a torus instead, a ring of this radius (metres) round y, its tube planet_radius_m.
     double planet_ring_m = 0.0;
-    // A planet's relief: every biome's shaped note and curve (Climate::Ground::amp_cap) at most this fraction of its
-    // radius, so a small planet stays a ball (Earth: 199 km).
-    static constexpr double PLANET_RELIEF = 1.0 / 32.0;
-    // A planet's notes start at most PLANET_RELIEF / PLANET_HEADROOM of its radius (Climate::Ground::note_cap), so a
-    // biome's volume up to this still fits under the relief (the shipped climates go to 4.5).
-    static constexpr double PLANET_HEADROOM = 8.0;
     // The flat preset's ground, its base: 50 m below the datum. The page shader's contour lines lie halfway between whole
     // 100 m of altitude, never at 0: on one, a flat ground has fwidth ~ 0 and float noise picks the shade per triangle.
     static constexpr double FLAT_GROUND_M = BaseSurface::DATUM_M - 50.0;
@@ -74,17 +69,25 @@ public:
         const double vs = p_param.voxel_size;
         k_max = top_octave(p_lod_count);
         base = BaseSurface::flat(std::llround((preset == Preset::FLAT ? FLAT_GROUND_M : BaseSurface::DATUM_M) / vs));
+        voxel_size = p_param.voxel_size;
+        skirt_depth_table.clear();
+        moment_skirt_table.clear();
         world_error = ov::str();
         if (planet_radius_m > 0.0) {
             ov::str refusal;
-            const BaseSurface planet = BaseSurface::planet(planet_radius_m, vs, planet_ring_m, &refusal);
-            base = refusal.empty() ? planet : base; // refused (get_world_error): the flat datum
+            base = BaseSurface::planet(planet_radius_m, vs, planet_ring_m, &refusal);
             if (!refusal.empty()) {
                 world_error = ov::format("the planet (radius %.0f m, ring %.0f m): ", planet_radius_m, planet_ring_m) + refusal;
             }
         }
-        voxel_size = p_param.voxel_size;
-        attach_climate();
+        world_error = world_error.empty() ? attach_climate() : world_error;
+        world_error = world_error.empty() ? species_error() : world_error;
+        if (!world_error.empty()) {
+            prog = Terrain::LevelProgram(); // no world: every consumer refuses it (get_world_error)
+            table = Climate::Table();
+            given = false;
+            return;
+        }
         build_table(p_lod_count);
         // Skirt depth per LOD (metres). A face neighbour is at most one LOD away, so its surface differs from this chunk's
         // by the program's step (LevelProgram::step: the output's largest change when the notes of Λ_L are dropped), never
@@ -106,13 +109,14 @@ public:
     }
 
     const Terrain::LevelProgram *get_program() const override { return &prog; }
-    // The world's parsed climate (configure), null without one (the template ground or a refused one: get_world_error).
+    // The world's parsed climate (configure), null without one (the template ground, or a world error).
     const Climate::Table *get_climate() const { return given ? &table : nullptr; }
     // The scenes' sites read their biome from the world's climate (SDFTable's sources, BiomePick).
     const Climate::Table *placing_climate() const override { return get_climate(); }
     const Terrain::LevelProgram *placing_program() const override { return &prog; }
-    // Why configure() built another world than the one it was given, empty if it didn't: a refused planet (the flat
-    // datum instead) or a refused climate (the template ground). The world isn't started on one (World::start).
+    // Why configure() built no world, empty if it built the one it was given: a refused planet, climate (or template
+    // ground) or species. Then there is no program, no table and no skirts: nothing may sample it (World::start,
+    // ClimateReport, CascadeCheck refuse it).
     const ov::str &get_world_error() const { return world_error; }
     // Configured on p_world's planet, climate, voxel size and LOD count (r_param.voxel_size set): get_world_error.
     const ov::str &configure_world(const WorldFile &p_world, ChunkParam &r_param) {
@@ -123,13 +127,13 @@ public:
         configure(r_param, p_world.lods);
         return world_error;
     }
-    // The relief the sky stays above (metres: AtmosphereMedium, CloudLayer), p_look_m (the world's look.relief_m), at
-    // most a planet's PLANET_RELIEF of its radius.
-    double relief_m(double p_look_m) const { return base.curved() ? ov::min(p_look_m, PLANET_RELIEF * base.get_radius() * double(voxel_size)) : p_look_m; }
+    // The relief the sky stays above (metres: AtmosphereMedium, CloudLayer): the program's top, its output's upper
+    // bound over the base (a bound, not the highest point drawn); 0 for a ground that never rises above its base.
+    double ground_top_m() const { return prog.hi.empty() ? 0.0 : ov::max(prog.hi[size_t(prog.output)] * double(voxel_size), 0.0); }
 
-    // Whether ground samples take their biome's material: a climate with fields (the pick reads them; a table without
-    // any has its one default biome, drawn as the procedural ground).
-    bool has_ground_materials() const { return given && !table.fields.empty(); }
+    // Whether ground samples take their biome's material: a given climate (each biome's `surface`, a fieldless one's
+    // too; the template ground is drawn as the procedural ground).
+    bool has_ground_materials() const { return given; }
     // The palette index of a ground sample (one no record colours; 0 without ground materials): 1 + its biome p_pick (the
     // base palette holds biome b's material, Climate::biome_material, at 1 + b), the program's pick at the sample. The
     // GPU's cascade_ground_material, bit for bit.
@@ -169,14 +173,17 @@ uint cascade_ground_material(float pick) {
             r_w[b] = size_t(b) < prog.weights.size() ? v[2 + prog.fields.size() + size_t(b)] : ExactNoise::Float4{};
         }
     }
-    // What a climate table is compiled for (Terrain::compile), after configure(): the voxel, the LOD count's octaves, a
-    // planet's relief (the flat world: the exact range's top).
+    // What a climate table is compiled for (Terrain::compile), after configure(): the voxel, the LOD count's octaves, the
+    // base's limits (a curved base's centre under the ground).
     Climate::Ground climate_ground() const {
-        const double relief = base.curved() ? PLANET_RELIEF * base.get_radius() : double(ExactNoise::exact_pow2(40));
-        return Climate::Ground{ double(voxel_size), k_max, float(relief), base.curved() ? relief / PLANET_HEADROOM : INFINITY };
+        Climate::Ground g;
+        g.voxel_size = double(voxel_size);
+        g.k_max = k_max;
+        g.floor = base.curved() ? -base.get_radius() : -INFINITY;
+        return g;
     }
     // The template ground's world file at p_voxel_m metres (worlds/template_5cm.world.json, template_50cm...): the ground of a
-    // world without biomes and of one whose climate is refused, and the graph a new biome starts from (the biome mixer).
+    // world without biomes, and the graph a new biome starts from (the biome mixer).
     static ov::str template_path(double p_voxel_m) { return ov::format("res://worlds/template_%dcm.world.json", int64_t(std::llround(p_voxel_m * 100.0))); }
     // Its climate table in r_table: empty, or why not (no file at that voxel size, or one at another).
     static ov::str template_table(double p_voxel_m, ov::Value &r_table) {
@@ -462,7 +469,7 @@ vec4 base_stretch_gradient(vec4 g, int j) {
     return g;
 }
 )glsl";
-    // The flat preset's table, and the ground of last resort (a template the run refuses): one biome whose output is 0.
+    // The flat preset's table: one biome whose output is 0.
     static ov::Value flat_table() {
         ov::str error;
         return ov::parse_json(R"({"biomes": [{"name": "flat", "graph": {"nodes": [{"id": "c", "kind": "constant", "value_m": 0},
@@ -486,32 +493,27 @@ vec4 base_stretch_gradient(vec4 g, int j) {
         return err.empty() ? layout_error : err;
     }
 
-    // The climate_data table compiled into the program, else the template's, else the flat one (configure, after the base
-    // and voxel size). The template and the flat table are specialised whatever specialize says: nothing edits them.
-    void attach_climate() {
+    // The program (configure, after the base and voxel size): the flat preset's constant table, else climate_data's,
+    // else (none given) the template ground's. Empty, or why that one can't run here: never another ground instead. The
+    // template and the flat table are specialised whatever specialize says: nothing edits them.
+    ov::str attach_climate() {
         given = false;
         set_ground_materials({});
-        if (!climate_data.is_empty() && preset != Preset::FLAT) {
-            const ov::str climate_error = compile_climate(climate_data, specialize ? Terrain::Mode::SPECIALISED : Terrain::Mode::GENERIC);
-            given = climate_error.empty();
-            world_error = world_error.empty() ? climate_error : world_error;
-            if (!given) {
-                OV_ERR_PRINT("SDFCascade: " + climate_error + ": no climate, the template ground.");
-            }
-        }
-        bool flat = preset == Preset::FLAT;
-        if (!given && !flat) {
+        ov::str err;
+        if (preset == Preset::FLAT) {
+            err = compile_climate(flat_table(), Terrain::Mode::SPECIALISED);
+            err = err.empty() ? err : "the flat ground: " + err;
+        } else if (!climate_data.is_empty()) {
+            err = compile_climate(climate_data, specialize ? Terrain::Mode::SPECIALISED : Terrain::Mode::GENERIC);
+            given = err.empty();
+        } else {
             ov::Value t;
-            ov::str err = template_table(double(voxel_size), t);
+            err = template_table(double(voxel_size), t);
             err = err.empty() ? compile_climate(t, Terrain::Mode::SPECIALISED) : err;
-            if (!err.empty()) {
-                OV_ERR_PRINT("SDFCascade: the template ground (" + template_path(double(voxel_size)) + "): " + err + ": a flat ground.");
-                flat = true;
-            }
+            err = err.empty() ? err : "the template ground (" + template_path(double(voxel_size)) + "): " + err;
         }
-        if (flat) {
-            const ov::str err = compile_climate(flat_table(), Terrain::Mode::SPECIALISED);
-            OV_ERR_FAIL_COND_MSG(!err.empty(), "SDFCascade: the flat ground: " + err);
+        if (!err.empty()) {
+            return err;
         }
         prog.base = base; // compiled on the flat datum 0: the program's stretch and `up` read this one
         std::vector<std::pair<ov::str, Material::Params>> grounds;
@@ -519,6 +521,7 @@ vec4 base_stretch_gradient(vec4 g, int j) {
             grounds.emplace_back("biome:" + table.biomes[b].name, Climate::biome_material(table.biomes[b]));
         }
         set_ground_materials(grounds);
+        return ov::str();
     }
 
     ExactNoise::Float4 metres(const ExactNoise::Float4 &p_u, int p_lod) const { return to_metres(p_u, p_lod, voxel_size); }
@@ -526,7 +529,7 @@ vec4 base_stretch_gradient(vec4 g, int j) {
     Terrain::LevelProgram prog;
     std::vector<float> skirt_depth_table; // skirt_depth_m per LOD, see configure()
     std::vector<float> moment_skirt_table; // the moment skirt per LOD (metres, 0 without moment blobs), see configure()
-    BaseSurface base; // the ground's reference: flat at the datum (configure)
+    BaseSurface base; // the ground's reference: flat at the datum, or the planet (configure)
     float voxel_size = 0.5f;
     int k_max = 0; // a note's or a field's coarsest octave (lod_count + 4)
     Climate::Table table; // the climate's fields and biomes (places, looks, contents): climate_data's, or the template's

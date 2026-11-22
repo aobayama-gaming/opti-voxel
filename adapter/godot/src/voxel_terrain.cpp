@@ -22,6 +22,7 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_world_path"), &VoxelTerrain::get_world_path);
     ClassDB::bind_method(D_METHOD("set_world_json", "json", "dir"), &VoxelTerrain::set_world_json);
     ClassDB::bind_method(D_METHOD("restart_world", "json", "dir"), &VoxelTerrain::restart_world);
+    ClassDB::bind_method(D_METHOD("get_world_error"), &VoxelTerrain::get_world_error);
     ClassDB::bind_method(D_METHOD("set_terrain_mode", "mode"), &VoxelTerrain::set_terrain_mode);
     ClassDB::bind_method(D_METHOD("get_terrain_mode"), &VoxelTerrain::get_terrain_mode);
     ClassDB::bind_method(D_METHOD("get_voxel_size"), &VoxelTerrain::get_voxel_size);
@@ -966,8 +967,8 @@ bool VoxelTerrain::_start_world() {
     return true;
 }
 
-void VoxelTerrain::restart_world(const String &p_json, const String &p_dir) {
-    ERR_FAIL_NULL_MSG(main_device, "restart_world: the terrain is not in the tree (set_world_json before it enters).");
+bool VoxelTerrain::restart_world(const String &p_json, const String &p_dir) {
+    ERR_FAIL_NULL_V_MSG(main_device, false, "restart_world: the terrain is not in the tree (set_world_json before it enters).");
     OV_TRACE("terrain", "restart_world");
     main_device->post([device = main_device]() { device->park(); });
     ov::World::Kept kept; // the next world's mesher draws on the same pages, its discoverer on the same local device
@@ -987,17 +988,22 @@ void VoxelTerrain::restart_world(const String &p_json, const String &p_dir) {
     cfg().world_path.clear();
     cfg().world_json = ov_str(p_json);
     cfg().world_dir = ov_str(p_dir);
-    bool loaded = false;
+    bool started = false;
     {
         OV_TRACE("terrain", "restart_load");
-        loaded = world->load_world();
+        started = world->load_world();
     }
-    if (loaded) {
+    if (started) {
         OV_TRACE("terrain", "restart_start");
-        _start_world();
+        started = _start_world();
     }
     // After the new world's pipelines were made (posted in order): the old ones it didn't take.
     main_device->post([device = main_device]() { device->drop_parked(); });
+    return started;
+}
+
+String VoxelTerrain::get_world_error() const {
+    return godot_str(world->get_error());
 }
 
 // The instance edit's rotation (9 floats) and params (8): null when not given (identity / zero).

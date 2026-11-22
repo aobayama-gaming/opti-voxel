@@ -10,17 +10,21 @@ One terrain (the cascade), one instance path (its table), one world file. Read b
   `forest5cm*`, `earth`, `earth25`, `tiny`, and the template grounds `template_5cm` / `template_50cm`), `climate/world.json`
   the game's (`--preset=video`). `--preset=` names keep working. The ground is the biomes' graphs, compiled into one
   `Terrain::LevelProgram` (`docs/climate.md`, `docs/cascade-v2.md`); a world without biomes has the template ground's,
-  itself a world file (`SDFCascade::template_path`: the one of the run's voxel size; a voxel size without one, or a
-  template its run refuses, falls back to a flat ground with an ERR). A world whose climate or planet is refused is not
-  another world: the world file refuses a planet `BaseSurface::planet` refuses, `SDFCascade::get_world_error` says
-  why a climate (or a planet set in code) was refused, `World::start` doesn't start on either, and
-  `ClimateReport::check_world` and `CascadeCheck` (before any set runs) fail on them.
+  itself a world file (`SDFCascade::template_path`: the one of the run's voxel size). Nothing stands in for a refused
+  part: a world whose planet, climate (or template ground: a voxel size without one, or one its base refuses) or species
+  is refused has no ground at all, never the flat datum, the template or a flat ground instead. The world file refuses a
+  planet `BaseSurface::planet` refuses; `SDFCascade::get_world_error` says why the rest was (configure then builds
+  no program), `World::start` doesn't start and keeps the reason (`World::get_error`, `VoxelTerrain.get_world_error`:
+  the player's HUD and the biome mixer show it in red), and `ClimateReport::check_world` and `CascadeCheck` (before
+  any set runs) fail on it. An instance list naming a species the world doesn't have is refused (`SDFTable::species_error`),
+  and a fold text that doesn't compile fails the mesher's passes (`World::get_error` from the next frame), never the bare
+  cascade drawn without the instances.
   Engine tuning and debug flags stay flags.
 - **One terrain, one instance path.** The ground is always the cascade (`SDFCascade`, `src/sdf_cascade.hpp`: 3D
   height field, the program the compiler makes of the biomes; without biomes the template ground's, octaves k = 3 up to
-  the first whose amplitude reaches the 3.3 km cap, k = 19 at 5 cm (16 at 0.5 m), the notes past lods + 4 playing
+  the first whose amplitude reaches 3.3 km, k = 19 at 5 cm (16 at 0.5 m), the notes past lods + 4 playing
   nothing, octave k seeded make_octave(seed, k) so the same octaves and bits at any LOD count past it, steepness 1/8;
-  a 2 km planet's own world (`tiny.world.json`) stops them under its relief; datum at 300 m,
+  a 2 km planet's own world (`tiny.world.json`) stops them at 3.3 km wavelengths (819 m); datum at 300 m,
   absolute position only) and instances always go through its table (`SDFTable`, below). Don't add a second way to
   make either: a new terrain is a cascade preset (parameters), a new feature a library type. `VoxelTerrain.terrain_mode`
   picks a preset: 1 the default, 4 flat (`SDFCascade::Preset::FLAT`: the flat table, a constant output, the ground at
@@ -60,10 +64,11 @@ One terrain (the cascade), one instance path (its table), one world file. Read b
   (0, 0, 0), its +y pole at y = R, standing for the flat datum in the default world origin request ((0, 0, 0); any other
   is absolute) and in the hosts' scenes (`World::scene_shift`); `BaseSurface::planet` takes the switch LOD
   `BaseSurface::SWITCH_MARGIN` (2) over the radius form's float bound: 12 at Earth / 5 cm, 16 for Jupiter, 1 for a 2 km planet, 0
-  under ~0.5 km; a planet's climate (its program's output bound) is capped at `PLANET_RELIEF` (1/32) of its radius, so
-  a small planet stays a ball, and each note's amplitude at an eighth of that (`PLANET_HEADROOM`: a biome may multiply
-  them by up to 8, the shipped climates go to 4.5); a world over its cap is refused, the template's 3.3 km octaves
-  included, so a small planet's world brings its own ground, as `tiny.world.json` does):
+  under ~0.5 km; a note plays at its written amplitude on any base, and the compiler holds the program's output bound
+  to the base's honest limits only (`Climate::Ground`): its reach within `BaseSurface::ALT_LIMIT` either side (a carve,
+  reading `up`, its top only), and on a curved base its low side above the centre (minus the radius, the tube's on a
+  torus): a ground that would cross the centre is refused, the template's 3.3 km octaves on a 2 km planet included, so
+  a small planet's world brings its own ground, as `tiny.world.json` does):
   below `switch_lod` the curvature form d(c) + n.δ + 1/2 δ^T H δ around the centre of the point's region
   (the cell of 2^(L+6) voxels holding it, from the point and the LOD only), d(c), n, H from the CPU in double
   (`make_region` takes any base's exact value, gradient and Hessian: the unit test runs a torus); from it the

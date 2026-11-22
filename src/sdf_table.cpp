@@ -439,6 +439,17 @@ std::vector<Climate::InstanceShare> SDFTable::counted(Species::Kind p_kind, int 
     return out;
 }
 
+ov::str SDFTable::species_error() const {
+    for (const auto &[who, list] : lists_of(placing_climate(), instances, &Climate::Biome::instances, &Climate::Biome::instances_listed)) {
+        for (const Climate::InstanceShare &e : *list) {
+            if (std::none_of(species.begin(), species.end(), [&](const Species &p_s) { return p_s.name == e.species; })) {
+                return who + " grows '" + e.species + "', which the world's species don't have.";
+            }
+        }
+    }
+    return ov::str();
+}
+
 int64_t SDFTable::cell_side(double p_cell_m) const {
     return forest_cell_side(1, p_cell_m, param.voxel_size);
 }
@@ -448,10 +459,7 @@ std::vector<SDFTable::Group> SDFTable::groups() const {
     for (const auto &[who, list] : lists_of(placing_climate(), instances, &Climate::Biome::instances, &Climate::Biome::instances_listed)) {
         for (const Climate::InstanceShare &e : *list) {
             const auto named = std::find_if(species.begin(), species.end(), [&](const Species &p_s) { return p_s.name == e.species; });
-            if (named == species.end()) {
-                OV_ERR_PRINT("SDFTable: " + who + " grows '" + e.species + "', which the world's species don't have.");
-                continue;
-            }
+            OV_ERR_CONTINUE_MSG(named == species.end(), "SDFTable: " + who + " grows '" + e.species + "': configure refuses it first (species_error).");
             const int64_t side = cell_side(e.cell_m);
             auto g = std::find_if(out.begin(), out.end(), [&](const Group &p_g) { return p_g.kind == named->kind && p_g.side == side; });
             if (g == out.end()) {

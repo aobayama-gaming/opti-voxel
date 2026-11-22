@@ -104,7 +104,7 @@ ov::str WorldFile::parse(const ov::Value &p_data, const ov::str &p_dir, WorldFil
     }
     WorldFile w;
     const ov::Value planet = section(p_data, "planet", { "radius_m", "ring_m" }, err);
-    const ov::Value look = section(p_data, "look", { "atmosphere", "atmosphere_scale", "clouds", "relief_m" }, err);
+    const ov::Value look = section(p_data, "look", { "atmosphere", "atmosphere_scale", "clouds" }, err);
     ov::Value zone = section(p_data, "zone", { "side_m", "centre_m" }, err);
     const ov::Value centre = zone.get("centre_m", ov::Value::array());
     if (err.empty() && zone.has("centre_m") && !(centre.is_array() && centre.size() == 2 && centre[size_t(0)].is_number() && centre[size_t(1)].is_number())) {
@@ -143,10 +143,6 @@ ov::str WorldFile::parse(const ov::Value &p_data, const ov::str &p_dir, WorldFil
     w.atmosphere = look.get("atmosphere", w.atmosphere).as_bool();
     w.atmosphere_scale = look.get("atmosphere_scale", w.atmosphere_scale).as_double();
     w.clouds = look.get("clouds", w.clouds).as_bool();
-    w.relief_m = look.get("relief_m", w.relief_m).as_double();
-    if (!(w.relief_m > 0.0)) {
-        return "world: look: relief_m must be positive.";
-    }
     w.zone.side_m = zone.get("side_m", w.zone.side_m).as_double();
     if (centre.size() == 2) {
         w.zone.x_m = centre[size_t(0)].as_double();
