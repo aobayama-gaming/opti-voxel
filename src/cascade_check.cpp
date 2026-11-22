@@ -32,8 +32,16 @@ ov::bytes read_bytes(ov::gpu::Device *p_device, ov::gpu::Buffer p_buffer, uint64
 }
 
 constexpr uint32_t MAX_BATCH = 128;
-constexpr int CHUNKS_PER_PLACE = 14;
-constexpr int CHILDREN = 8;
+// How many chunks a LOD's batch takes (batch_chunks): per place, and children (each with its parent). The full run's
+// 64 per LOD, or the quick run's 20: every place and every 2^32 boundary still, a third of the CPU runs.
+struct Coverage {
+    int per_place;
+    int children;
+    int min_per_lod() const { return 4 * per_place + children; }
+    int max_batch() const { return 4 * per_place + 2 * children; } // the children's parents too
+};
+constexpr Coverage FULL{ 14, 8 };
+constexpr Coverage QUICK{ 4, 4 };
 constexpr uint32_t TIMING_CHUNKS = 128;
 // A slice of a batch (SetChecker::run): this many bytes of a level's channels per chunk-sized level box. A generic
 // program carries up to MAX_CHANNELS channels per level, and a whole batch of CPU levels (and once, its 48-channel
@@ -51,9 +59,9 @@ struct Pair {
     size_t parent;
 };
 
-// The batch of LOD L: 14 chunks near each of 4 places (0, +2^60, -2^60, straddling a 2^32-voxel boundary on
-// every axis), 8 more (the "children"), and the children's parents (LOD L + 1) when that LOD exists.
-std::vector<TestChunk> batch_chunks(int p_lod, int p_lods, const ChunkParam &p_param, std::vector<Pair> &r_pairs) {
+// The batch of LOD L: p_cov.per_place chunks near each of 4 places (0, +2^60, -2^60, straddling a 2^32-voxel boundary
+// on every axis), p_cov.children more (the "children"), and the children's parents (LOD L + 1) when that LOD exists.
+std::vector<TestChunk> batch_chunks(int p_lod, int p_lods, const ChunkParam &p_param, Coverage p_cov, std::vector<Pair> &r_pairs) {
     const int64_t span = (p_param.half_chunk_voxels() * 2) << p_lod;
     const int64_t P32 = int64_t(1) << 32;
     struct Place {
@@ -83,11 +91,11 @@ std::vector<TestChunk> batch_chunks(int p_lod, int p_lods, const ChunkParam &p_p
         chunks.push_back({ ChunkMath::chunk_at_voxel(v, p_lod, p_param), p_lod, p_place.name });
     };
     for (const Place &place : places) {
-        for (int i = 0; i < CHUNKS_PER_PLACE; i++) {
+        for (int i = 0; i < p_cov.per_place; i++) {
             add(place, i);
         }
     }
-    for (int i = 0; i < CHILDREN; i++) {
+    for (int i = 0; i < p_cov.children; i++) {
         add(places[i % 4], i);
         if (p_lod + 1 < p_lods) {
             const size_t child = chunks.size() - 1;
@@ -137,8 +145,8 @@ struct Checks {
 // level, bits) and the GPU's own level relation (G3).
 class SetChecker {
 public:
-    SetChecker(ov::gpu::Device *p_device, SpikeSet p_set, const ov::str &p_world, const ChunkParam &p_param, Checks &r_checks) :
-            device(p_device), set(p_set), param(p_param), checks(r_checks) {
+    SetChecker(ov::gpu::Device *p_device, SpikeSet p_set, const ov::str &p_world, const ChunkParam &p_param, Coverage p_cov, Checks &r_checks) :
+            device(p_device), set(p_set), param(p_param), cov(p_cov), checks(r_checks) {
         lods = configure_variant(sdf, p_set, p_world, param);
         ov::str err;
         layout = Terrain::gpu_layout(sdf.program(), err);
@@ -164,8 +172,11 @@ public:
     void run() {
         // The meshers' variant for every level and the samples; the debug variant (same scratch) re-runs
         // level 0 to read its channels.
-        if (!passes.create(device, &sdf, param, MAX_BATCH, input, param_ubo, samples) ||
-                !debug_passes.create(device, &sdf, param, MAX_BATCH, input, param_ubo, debug_samples, debug, &passes)) {
+        // Sized to the largest batch, not MAX_BATCH: each level reads its whole planar scratch back (hundreds of MB per
+        // level on a climate set at 128 chunks, most of the run).
+        const uint32_t batch_max = ov::min(MAX_BATCH, uint32_t(cov.max_batch()));
+        if (!passes.create(device, &sdf, param, batch_max, input, param_ubo, samples) ||
+                !debug_passes.create(device, &sdf, param, batch_max, input, param_ubo, debug_samples, debug, &passes)) {
             checks.example("set " + set_label(set) + ": the cascade passes failed to compile");
             checks.differing++;
             return;
@@ -176,7 +187,7 @@ public:
         const size_t slice = size_t(ov::max(uint64_t(1), SLICE_BYTES / (n * n * n * nv * 16)));
         for (int lod = 0; lod < lods; lod++) {
             std::vector<Pair> pairs;
-            const std::vector<TestChunk> batch = batch_chunks(lod, lods, param, pairs);
+            const std::vector<TestChunk> batch = batch_chunks(lod, lods, param, cov, pairs);
             for (size_t at = 0; at < batch.size(); at += slice) {
                 const size_t end = ov::min(at + slice, batch.size());
                 run_batch(std::vector<TestChunk>(batch.begin() + std::ptrdiff_t(at), batch.begin() + std::ptrdiff_t(end)));
@@ -189,6 +200,7 @@ private:
     SpikeSet set;
     int lods = 0;
     ChunkParam param;
+    Coverage cov;
     Checks &checks;
     SDFCascade sdf;
     Terrain::GpuLayout layout;
@@ -256,7 +268,7 @@ private:
         checks.chunks += count;
         passes.upload_items(ids.data(), count);
         debug_passes.upload_items(ids.data(), count); // the same input: its own regions
-        ov::bytes above; // level j = 1's scratch (G3)
+        ov::bytes above; // level j = 1's scratch (G3), planes of the batch's slots
         for (int j = passes.level_count(min_lod) - 1; j >= 0; j--) {
             passes.record_level(j, 0, count, ov::ivec2(min_lod, max_lod));
             if (j == 0) {
@@ -264,7 +276,7 @@ private:
             }
             device->sync();
             if (j > 0) {
-                // The scratch is planar (vec4 v of every slot together): the whole buffer.
+                // The scratch is planar (vec4 v of every slot together): the whole buffer, sized to the largest batch.
                 const ov::bytes scratch = read_bytes(device, (j & 1) ? passes.get_scratch_a() : passes.get_scratch_b());
                 compare_level(j, scratch, ov::bytes(), uint64_t(scratch.size()) / 16 / nv);
                 above = j == 1 ? scratch : above;
@@ -439,8 +451,8 @@ private:
     }
 };
 
-void check_set(ov::gpu::Device *p_device, SpikeSet p_set, const ov::str &p_world, const ChunkParam &p_param, Checks &r_checks) {
-    SetChecker checker(p_device, p_set, p_world, p_param, r_checks);
+void check_set(ov::gpu::Device *p_device, SpikeSet p_set, const ov::str &p_world, const ChunkParam &p_param, Coverage p_cov, Checks &r_checks) {
+    SetChecker checker(p_device, p_set, p_world, p_param, p_cov, r_checks);
     checker.run();
 }
 
@@ -541,8 +553,15 @@ ov::Value check_table(ov::gpu::Device *p_device, int p_lods, const ChunkParam &p
         p_device->sync();
         const ov::bytes got_bytes = read_bytes(p_device, samples, 0, ids.size() * cells * 16);
         const float *got = reinterpret_cast<const float *>(got_bytes.data());
+        // One chunk per task, tallied apart and merged in chunk order.
+        std::vector<Checks> tally(ids.size());
+        std::vector<int64_t> folded_c(ids.size(), 0);
+        parallel_for(uint32_t(ids.size()), "CascadeCheck::table", [&](uint32_t c) {
+            compare_table_chunk(sdf, *snap, ids[c], lod, param, got + c * cells * 4, tally[c], folded_c[c]);
+        });
         for (size_t c = 0; c < ids.size(); c++) {
-            compare_table_chunk(sdf, *snap, ids[c], lod, param, got + c * cells * 4, checks, folded);
+            checks.merge(tally[c]);
+            folded += folded_c[c];
         }
         checks.chunks += int64_t(ids.size());
     }
@@ -565,7 +584,7 @@ ov::Value check_table(ov::gpu::Device *p_device, int p_lods, const ChunkParam &p
 // run's last level slots (the pick derived on the level above, like the chunk passes), bit for bit; and how many biomes showed.
 // Empty for a set without a climate (4) or with fewer than 3 biomes (nothing for ok to count); a climate set whose
 // table was refused fails.
-ov::Value check_biomes(ov::gpu::Device *p_device, SpikeSet p_set, const ov::str &p_world, const ChunkParam &p_param) {
+ov::Value check_biomes(ov::gpu::Device *p_device, SpikeSet p_set, const ov::str &p_world, const ChunkParam &p_param, Coverage p_cov) {
     ov::Value d = ov::Value::object();
     if (base_set(p_set) == SpikeSet::L4) {
         return d;
@@ -598,7 +617,7 @@ ov::Value check_biomes(ov::gpu::Device *p_device, SpikeSet p_set, const ov::str 
     }
     for (int lod = 0; lod < lod_count && passes.is_valid(); lod++) {
         std::vector<Pair> pairs;
-        const std::vector<TestChunk> chunks = batch_chunks(lod, lod_count, param, pairs);
+        const std::vector<TestChunk> chunks = batch_chunks(lod, lod_count, param, p_cov, pairs);
         ov::bytes ids;
         ids.resize(int64_t(chunks.size()) * GPUFrame::CHUNK_INPUT_BYTES);
         ov::ivec2 lods(64, 0);
@@ -611,7 +630,11 @@ ov::Value check_biomes(ov::gpu::Device *p_device, SpikeSet p_set, const ov::str 
         p_device->sync();
         const ov::bytes got_bytes = read_bytes(p_device, materials, 0, chunks.size() * cells * 4);
         const uint32_t *got = reinterpret_cast<const uint32_t *>(got_bytes.data());
-        for (size_t c = 0; c < chunks.size(); c++) {
+        // The CPU runs are the check's cost: one chunk per task, tallied apart and merged in chunk order.
+        std::vector<Checks> tally(chunks.size());
+        std::vector<std::vector<int64_t>> seen_c(chunks.size(), std::vector<int64_t>(seen.size(), 0));
+        parallel_for(uint32_t(chunks.size()), "CascadeCheck::biome_materials", [&](uint32_t c) {
+            Checks &t = tally[c];
             const int l = chunks[c].lod;
             const Box box = chunk_box(chunks[c].id, param);
             const Terrain::Values level = Terrain::run(sdf.program(), box, l);
@@ -623,16 +646,22 @@ ov::Value check_biomes(ov::gpu::Device *p_device, SpikeSet p_set, const ov::str 
                 const ExactNoise::Float4 r = sdf.with_skirt(sdf.sdf(ch, p_p * (int64_t(1) << l), l), l, Float3{ float(i.x), float(i.y), float(i.z) });
                 const uint32_t want = r.w > 0.0f ? 0u : sdf.ground_material(int(level.at(sdf.program().pick, p_cpu_i).w));
                 const uint32_t g = got[c * cells + uint64_t(i.x) + uint64_t(cs) * (uint64_t(i.y) + uint64_t(cs) * uint64_t(i.z))];
-                seen[ov::min(want, uint32_t(Climate::MAX_BIOMES))]++;
-                checks.samples++;
+                seen_c[c][ov::min(want, uint32_t(Climate::MAX_BIOMES))]++;
+                t.samples++;
                 if (g != want) {
-                    checks.samples_differing++;
-                    if (checks.wants_example()) {
-                        checks.example(ov::format("LOD %d chunk %s (%s) sample %s: gpu %d cpu %d", l, WorldCoord::to_string(chunks[c].id), chunks[c].place,
+                    t.samples_differing++;
+                    if (t.wants_example()) {
+                        t.example(ov::format("LOD %d chunk %s (%s) sample %s: gpu %d cpu %d", l, WorldCoord::to_string(chunks[c].id), chunks[c].place,
                                 WorldCoord::to_string(i), g, want));
                     }
                 }
             });
+        });
+        for (size_t c = 0; c < chunks.size(); c++) {
+            checks.merge(tally[c]);
+            for (size_t b = 0; b < seen.size(); b++) {
+                seen[b] += seen_c[c][b];
+            }
         }
         checks.chunks += int64_t(chunks.size());
     }
@@ -819,6 +848,8 @@ ov::Value CascadeCheck::run(ov::gpu::Device &p_device, const ov::Value &p_option
     std::vector<SpikeSet> sets;
     const ov::str labels = p_options.get("sets", "4,4c").as_str();
     const int generic = p_options.get("generic", false).as_bool() ? GENERIC : 0;
+    const Coverage cov = p_options.get("quick", false).as_bool() ? QUICK : FULL;
+    report["quick"] = cov.per_place == QUICK.per_place;
     for (size_t from = 0; from <= labels.size();) {
         const size_t comma = std::min(labels.find(',', from), labels.size());
         SpikeSet set;
@@ -834,7 +865,7 @@ ov::Value CascadeCheck::run(ov::gpu::Device &p_device, const ov::Value &p_option
         for (const SpikeSet set : sets) {
             Checks checks;
             const uint64_t t0 = now_usec();
-            check_set(device, set, world_path, param, checks);
+            check_set(device, set, world_path, param, cov, checks);
             ov::Value d = ov::Value::object();
             d["chunks"] = checks.chunks;
             d["levels"] = checks.levels;
@@ -853,7 +884,7 @@ ov::Value CascadeCheck::run(ov::gpu::Device &p_device, const ov::Value &p_option
                 min_chunks = ov::min(min_chunks, v);
             }
             d["min_chunks_per_lod"] = min_chunks;
-            const bool set_ok = checks.values > 0 && checks.samples > 0 && checks.relation_points > 0 && min_chunks >= 64 && checks.differing == 0 &&
+            const bool set_ok = checks.values > 0 && checks.samples > 0 && checks.relation_points > 0 && min_chunks >= cov.min_per_lod() && checks.differing == 0 &&
                     checks.samples_differing == 0 && checks.relation_differing == 0;
             d["ok"] = set_ok;
             ok = ok && set_ok;
@@ -879,7 +910,7 @@ ov::Value CascadeCheck::run(ov::gpu::Device &p_device, const ov::Value &p_option
         }
         for (const SpikeSet set : climates) {
             const uint64_t t0 = now_usec();
-            ov::Value d = check_biomes(device, set, world_path, param);
+            ov::Value d = check_biomes(device, set, world_path, param, cov);
             if (d.is_empty()) {
                 continue;
             }

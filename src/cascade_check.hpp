@@ -6,7 +6,7 @@
 
 // The GPU cascade (cascade_glsl.hpp) against the CPU oracle (Terrain::run), with the meshers' level passes, on any
 // device:
-//   - G1: every channel of every level and the final sdf_sample of chunks of every LOD (>= 64 per LOD,
+//   - G1: every channel of every level and the final sdf_sample of chunks of every LOD (>= 64 per LOD, 20 quick,
 //     near 0, +-2^60 and straddling 2^32-voxel boundaries, in mixed-LOD batches): GPU == CPU bit for bit.
 //     The passes run one level at a time and each level's scratch is read back before the next one.
 //   - G3: on the GPU outputs, at the points a LOD-L chunk shares with its parent (LOD L+1): the GPU's level L+1
@@ -20,7 +20,7 @@
 namespace CascadeCheck {
 
 // p_device: a local device (synced). p_options: world (the bare set's and the table's, res://worlds/lods25.world.json), check (true), table (true), biomes (true),
-// points (true), timing (true), runs (10), sets ("4,4c").
+// points (true), timing (true), runs (10), sets ("4,4c"), quick (false: G1 / G3 / G10 on 20 chunks per LOD, not 64).
 ov::Value run(ov::gpu::Device &p_device, const ov::Value &p_options);
 
 } // namespace CascadeCheck

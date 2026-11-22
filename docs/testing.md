@@ -23,9 +23,15 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
   coarsest modulated octave reads vs the material), where each pair of biomes meets nearest the centre with the player's `--spawn=U,V` (metres along the base's tangent plane: x, z on the flat world), per-field range,
   the ground under each biome (mean altitude above the base, height std, mean slope), CPU us per point, `biomes_blend.png` /
   `biomes_pick.png` / `ground_height.png` / `field_*.png`. Tune a table from it before any GPU run.
-- `tools/cascade_test.sh [--no-build] [--world=PATH] [--check=0|1] [--points=0|1] [--table=0|1] [--timing=0|1] [--runs=10] [--sets=4,4c]`
+- `tools/cascade_test.sh [--no-build] [--full=0|1] [--world=PATH] [--check=0|1] [--points=0|1] [--table=0|1] [--timing=0|1] [--runs=10] [--sets=4,4c]`
   (`CascadeSpike` over the core's `CascadeCheck`, `res://debug/cascade_spike.tscn`, local RenderingDevice: needs a
-  window, ~3 min; on Dawn: `ov_dawn --cascade-check='{"timing":false}'`): the
+  window; on Dawn: `ov_dawn --cascade-check='{"timing":false}'`). **Quick by default**: 20 chunks per LOD (every
+  place and every 2^32 boundary, a third of the CPU runs) and no timing tables; `--full=1` takes the 64+ below and the
+  timing, for a large cascade change or before a release. The cost is the NVIDIA driver compiling a climate set's
+  specialised shader (4c: ~4 min, its G1 debug variant ~15 min): the script keeps its disk cache large and whole
+  (`__GL_SHADER_DISK_CACHE_SIZE` 10 GB, no cleanup), so a rerun with unchanged GLSL is a hit (G10 on 4c: 233 s -> 21
+  s); the first run after a GLSL change compiles (timeout `CASCADE_TIMEOUT`, 3600 s). The CPU oracle runs one chunk
+  per task on every core in G1, G9 and G10. The checks: the
   GPU cascade passes vs `Terrain::run` (the world's `LevelProgram`), every channel of every level (read back level by level) and the
   `sdf_sample` of 64+ chunks per LOD 0-24 near 0, +-2^60 and across 2^32 boundaries, in mixed-LOD batches,
   the bare ground `4` and `4c` (the example climate at 5 cm; `4f` its biomes on the template's notes with their curves),

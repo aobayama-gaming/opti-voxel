@@ -3,7 +3,7 @@ extends Node
 ## CPU oracle (Terrain::run), bit for bit, every level of chunks of every LOD, plus their GPU timing.
 ## Needs a GPU (not --headless). Run:
 ##   tools/cascade_test.sh       (or: godot --path project res://debug/cascade_spike.tscn -- --out=x.json)
-## Args: --world=<the bare set's world, res://worlds/lods25.world.json>, --check=0|1, --points=0|1, --timing=0|1, --runs=N (10), --sets=4,4c (4c: the example climate, 4f: its fields only), --generic=0|1 (the climates compiled generic),
+## Args: --world=<the bare set's world, res://worlds/lods25.world.json>, --check=0|1, --points=0|1, --timing=0|1, --runs=N (10), --sets=4,4c (4c: the example climate, 4f: its fields only), --generic=0|1 (the climates compiled generic), --full=0|1 (0: quick, 20 chunks per LOD and no timing),
 ## --out=<json>
 
 var args := {}
@@ -18,13 +18,16 @@ func _ready() -> void:
 	await get_tree().process_frame
 	var spike = ClassDB.instantiate("CascadeSpike")
 	add_child(spike)
+	# Quick by default (a third of the chunks, no timing); --full=1 for every chunk and the timing tables.
+	var full: bool = args.get("full", "0") == "1"
 	var options := {
+		"quick": not full,
 		"world": args.get("world", "res://worlds/lods25.world.json"),
 		"check": args.get("check", "1") == "1",
 		"points": args.get("points", "1") == "1",
 		"table": args.get("table", "1") == "1",
 		"biomes": args.get("biomes", "1") == "1",
-		"timing": args.get("timing", "1") == "1",
+		"timing": args.get("timing", "1" if full else "0") == "1",
 		"runs": int(args.get("runs", "10")),
 		"sets": args.get("sets", "4,4c"),
 		"generic": args.get("generic", "0") == "1",
