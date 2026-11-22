@@ -317,7 +317,12 @@ private:
                 return;
             }
             const Terrain::Values &level = cpu[c][size_t(top_c - m)];
-            OV_ERR_FAIL_COND(level.m != m);
+            if (level.m != m) { // the CPU's levels out of order: this level isn't compared, a failure
+                t.differing++;
+                t.example(ov::format("set %s LOD %d chunk %s: GPU level m = %d, the CPU's slot holds m = %d", set_label(set), lod_c,
+                        WorldCoord::to_string(chunks[c].id), m, level.m));
+                return;
+            }
             t.levels++;
             const Box &box = level.box;
             int64_t differing = 0;
@@ -575,7 +580,7 @@ ov::Value check_biomes(ov::gpu::Device *p_device, SpikeSet p_set, const ov::str 
     const int lod_count = configure_variant(sdf, p_set, p_world, param);
     if (sdf.get_climate() == nullptr) {
         d["ok"] = false;
-        d["error"] = "the climate was refused: " + sdf.get_climate_error();
+        d["error"] = "the set's world has no climate";
         return d;
     }
     if (sdf.get_climate()->biomes.size() < 3) {
@@ -817,15 +822,24 @@ ov::Value CascadeCheck::run(ov::gpu::Device &p_device, const ov::Value &p_option
     ChunkParam param;
     param.voxel_size = float(world.voxel_m);
     std::vector<SpikeSet> sets;
-    const ov::str labels = p_options.get("sets", "4,4c").as_str();
+    const ov::Value labels = p_options.get("sets", "4,4c");
     const int generic = p_options.get("generic", false).as_bool() ? GENERIC : 0;
-    for (size_t from = 0; from <= labels.size();) {
-        const size_t comma = std::min(labels.find(',', from), labels.size());
-        SpikeSet set;
-        if (parse_variant(labels.substr(from, comma - from), set)) {
-            sets.push_back(SpikeSet(int(set) | generic));
-        }
-        from = comma + 1;
+    ov::str error = labels.is_string() ? parse_sets(labels.as_str(), generic, sets) : ov::str("sets is a comma-separated string of labels.");
+    // Every set's world (and the example climate the biome check always runs) before any check: a set never runs on
+    // another world than its own.
+    std::vector<SpikeSet> worlds = sets;
+    if (p_options.get("biomes", true).as_bool()) {
+        worlds.push_back(SpikeSet(int(SpikeSet::L4C) | generic));
+    }
+    for (size_t i = 0; i < worlds.size() && error.empty(); i++) {
+        SDFCascade sdf;
+        ChunkParam set_param = param;
+        configure_variant(sdf, worlds[i], world_path, set_param, &error);
+        error = error.empty() ? error : "set " + set_label(worlds[i]) + ": " + error;
+    }
+    if (!error.empty()) {
+        report["error"] = error;
+        return report;
     }
     ov::gpu::Device *device = &p_device;
     bool ok = true;

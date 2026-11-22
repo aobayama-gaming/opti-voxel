@@ -59,12 +59,39 @@ BaseSurface BaseSurface::flat(int64_t p_datum_y) {
     return b;
 }
 
-BaseSurface BaseSurface::sphere(const VoxelPos &p_centre, double p_radius, int p_switch_lod) {
-    OV_ERR_FAIL_COND_V_MSG(p_switch_lod < 0 || p_switch_lod > MAX_SWITCH_LOD, BaseSurface(), ov::format("BaseSurface: the switch LOD must be in [0, %d].", MAX_SWITCH_LOD));
-    OV_ERR_FAIL_COND_V_MSG(!(p_radius > 0.0) || p_radius > std::ldexp(1.0, 60), BaseSurface(), "BaseSurface: the radius must be in (0, 2^60] voxels.");
-    OV_ERR_FAIL_COND_V_MSG(std::ldexp(p_radius, -p_switch_lod) > double(MAX_RADIUS_CELLS), BaseSurface(),
-            ov::format("BaseSurface: a radius of %f voxels needs a switch LOD of at least %d (the radius form's float error).", p_radius,
-                    int(std::ceil(std::log2(p_radius / double(MAX_RADIUS_CELLS))))));
+namespace {
+
+// Why BaseSurface::sphere refuses, empty if it doesn't.
+ov::str sphere_refusal(double p_radius, int p_switch_lod) {
+    if (p_switch_lod < 0 || p_switch_lod > BaseSurface::MAX_SWITCH_LOD) {
+        return ov::format("BaseSurface: the switch LOD must be in [0, %d].", BaseSurface::MAX_SWITCH_LOD);
+    }
+    if (!(p_radius > 0.0) || p_radius > std::ldexp(1.0, 60)) {
+        return "BaseSurface: the radius must be in (0, 2^60] voxels.";
+    }
+    if (std::ldexp(p_radius, -p_switch_lod) > double(BaseSurface::MAX_RADIUS_CELLS)) {
+        return ov::format("BaseSurface: a radius of %f voxels needs a switch LOD of at least %d (the radius form's float error).", p_radius,
+                int(std::ceil(std::log2(p_radius / double(BaseSurface::MAX_RADIUS_CELLS)))));
+    }
+    return ov::str();
+}
+
+// p_refusal into r_refusal (an ERR without one); whether it is empty.
+bool accepted(const ov::str &p_refusal, ov::str *r_refusal) {
+    if (r_refusal != nullptr) {
+        *r_refusal = p_refusal;
+    } else if (!p_refusal.empty()) {
+        OV_ERR_PRINT(p_refusal);
+    }
+    return p_refusal.empty();
+}
+
+} // namespace
+
+BaseSurface BaseSurface::sphere(const VoxelPos &p_centre, double p_radius, int p_switch_lod, ov::str *r_refusal) {
+    if (!accepted(sphere_refusal(p_radius, p_switch_lod), r_refusal)) {
+        return BaseSurface();
+    }
     BaseSurface b;
     b.base_kind = Kind::SPHERE;
     const int64_t snap = int64_t(1) << CENTRE_SHIFT;
@@ -74,16 +101,28 @@ BaseSurface BaseSurface::sphere(const VoxelPos &p_centre, double p_radius, int p
     return b;
 }
 
-BaseSurface BaseSurface::torus(const VoxelPos &p_centre, double p_ring, double p_tube, int p_switch_lod) {
-    OV_ERR_FAIL_COND_V_MSG(!(p_tube > 0.0) || !(p_ring >= MIN_RING_TUBES * p_tube), BaseSurface(),
-            ov::format("BaseSurface: a torus's ring must be at least %f times its tube.", MIN_RING_TUBES));
-    BaseSurface b = sphere(p_centre, p_ring + p_tube, p_switch_lod); // the radius form's limits hold on the outer radius
+BaseSurface BaseSurface::torus(const VoxelPos &p_centre, double p_ring, double p_tube, int p_switch_lod, ov::str *r_refusal) {
+    const ov::str ring_refusal = !(p_tube > 0.0) || !(p_ring >= MIN_RING_TUBES * p_tube)
+            ? ov::format("BaseSurface: a torus's ring must be at least %f times its tube.", MIN_RING_TUBES)
+            : ov::str();
+    if (!accepted(ring_refusal, r_refusal)) {
+        return BaseSurface();
+    }
+    BaseSurface b = sphere(p_centre, p_ring + p_tube, p_switch_lod, r_refusal); // the radius form's limits on the outer radius
     if (b.base_kind == Kind::SPHERE) {
         b.base_kind = Kind::TORUS;
         b.radius = p_tube;
         b.ring = p_ring;
     }
     return b;
+}
+
+BaseSurface BaseSurface::planet(double p_radius_m, double p_voxel_size, double p_ring_m, ov::str *r_refusal) {
+    const double r = p_radius_m / p_voxel_size;
+    const double ring = p_ring_m / p_voxel_size;
+    const int fit = int(std::ceil(std::log2((ring + r) / double(MAX_RADIUS_CELLS))));
+    const int switch_lod = ov::clamp(fit + SWITCH_MARGIN, 0, MAX_SWITCH_LOD);
+    return ring > 0.0 ? torus(VoxelPos(0, 0, 0), ring, r, switch_lod, r_refusal) : sphere(VoxelPos(0, 0, 0), r, switch_lod, r_refusal);
 }
 
 double BaseSurface::shape(const double p_v[3], double r_n[3], double r_h[6]) const {

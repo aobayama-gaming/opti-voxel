@@ -51,8 +51,8 @@ namespace Climate {
 //              50, "stretch_y": 4 (optional; a power of two: its noise squeezed along the base's up, y on the flat
 //              world, its wavelength along it 4 times the tangent ones; octave k takes at most 2^(k - 3) of it,
 //              BaseSurface::stretched), "warp": a warp node (optional input: the note read displaced). Its seed and
-//              lattice are make_octave(seed, k): one note whatever biome mixes it. A note the LOD count doesn't have
-//              (k outside [3, LODs + 4]) plays nothing: a world reads at any LOD count. The ground is a 3D noise whose
+//              lattice are make_octave(seed, k): one note whatever biome mixes it. A note finer than k = 3 is refused; one
+//              the LOD count doesn't reach (k > LODs + 4) plays nothing: a world reads at any LOD count. The ground is a 3D noise whose
 //              vertical slope is as large as its horizontal one: past dh/dy = 1 it folds into overhangs; stretched
 //              octaves keep it a height field where they dominate.
 //     "warp":  "in": any node strictly coarser than every note the warp moves (the gate, docs/cascade-v2.md), "amount_m":

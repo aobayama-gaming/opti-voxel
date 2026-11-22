@@ -11,7 +11,11 @@ One terrain (the cascade), one instance path (its table), one world file. Read b
   the game's (`--preset=video`). `--preset=` names keep working. The ground is the biomes' graphs, compiled into one
   `Terrain::LevelProgram` (`docs/climate.md`, `docs/cascade-v2.md`); a world without biomes has the template ground's,
   itself a world file (`SDFCascade::template_path`: the one of the run's voxel size; a voxel size without one, or a
-  template its run refuses, falls back to a flat ground with an ERR). Engine tuning and debug flags stay flags.
+  template its run refuses, falls back to a flat ground with an ERR). A world whose climate or planet is refused is not
+  another world: the world file refuses a planet `BaseSurface::planet` refuses, `SDFCascade::get_world_error` says
+  why a climate (or a planet set in code) was refused, `World::start` doesn't start on either, and
+  `ClimateReport::check_world` and `CascadeCheck` (before any set runs) fail on them.
+  Engine tuning and debug flags stay flags.
 - **One terrain, one instance path.** The ground is always the cascade (`SDFCascade`, `src/sdf_cascade.hpp`: 3D
   height field, the program the compiler makes of the biomes; without biomes the template ground's, octaves k = 3 up to
   the first whose amplitude reaches the 3.3 km cap, k = 19 at 5 cm (16 at 0.5 m), the notes past lods + 4 playing
@@ -54,8 +58,8 @@ One terrain (the cascade), one instance path (its table), one world file. Read b
   the default terrain keeps its bits (pinned in `test_sdf_cascade.cpp`): the only code that knows about y.
   `SPHERE` (the world file's `planet.radius_m`: centred on the voxel
   (0, 0, 0), its +y pole at y = R, standing for the flat datum in the default world origin request ((0, 0, 0); any other
-  is absolute) and in the hosts' scenes (`World::scene_shift`); `SDFCascade::planet_base` takes the switch LOD
-  `SWITCH_MARGIN` (2) over the radius form's float bound: 12 at Earth / 5 cm, 16 for Jupiter, 1 for a 2 km planet, 0
+  is absolute) and in the hosts' scenes (`World::scene_shift`); `BaseSurface::planet` takes the switch LOD
+  `BaseSurface::SWITCH_MARGIN` (2) over the radius form's float bound: 12 at Earth / 5 cm, 16 for Jupiter, 1 for a 2 km planet, 0
   under ~0.5 km; a planet's climate (its program's output bound) is capped at `PLANET_RELIEF` (1/32) of its radius, so
   a small planet stays a ball, and each note's amplitude at an eighth of that (`PLANET_HEADROOM`: a biome may multiply
   them by up to 8, the shipped climates go to 4.5); a world over its cap is refused, the template's 3.3 km octaves

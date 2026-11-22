@@ -68,14 +68,23 @@ public:
     };
 
     static BaseSurface flat(int64_t p_datum_y);
-    // p_centre is snapped down to a multiple of 2^CENTRE_SHIFT voxels. Refused (ERR, the default flat base): a switch
-    // LOD outside [0, MAX_SWITCH_LOD], a radius outside (0, 2^60], or over MAX_RADIUS_CELLS cells of the switch LOD.
-    static BaseSurface sphere(const VoxelPos &p_centre, double p_radius, int p_switch_lod = SWITCH_LOD);
+    // p_centre is snapped down to a multiple of 2^CENTRE_SHIFT voxels. Refused (the default flat base; why in r_refusal,
+    // empty if accepted, else an ERR): a switch LOD outside [0, MAX_SWITCH_LOD], a radius outside (0, 2^60], or over
+    // MAX_RADIUS_CELLS cells of the switch LOD.
+    static BaseSurface sphere(const VoxelPos &p_centre, double p_radius, int p_switch_lod = SWITCH_LOD, ov::str *r_refusal = nullptr);
     // A torus's smallest ring in tubes: a hole of half a tube, far wider than the relief and the air over it.
     static constexpr double MIN_RING_TUBES = 1.5;
     // A ring of p_ring voxels round the y axis, its tube p_tube: sphere()'s limits on the outer radius p_ring + p_tube, and
-    // p_ring >= MIN_RING_TUBES * p_tube (ERR, the default flat base).
-    static BaseSurface torus(const VoxelPos &p_centre, double p_ring, double p_tube, int p_switch_lod = SWITCH_LOD);
+    // p_ring >= MIN_RING_TUBES * p_tube (refused like sphere()).
+    static BaseSurface torus(const VoxelPos &p_centre, double p_ring, double p_tube, int p_switch_lod = SWITCH_LOD, ov::str *r_refusal = nullptr);
+    // A planet's switch LOD: SWITCH_MARGIN over the lowest whose cells keep the radius form's float error small
+    // (MAX_RADIUS_CELLS), which is SWITCH_LOD at Earth's radius and 5 cm. The curvature form below it holds ~3 LODs
+    // further (its neglected terms grow as the region over the radius), at any radius; a small planet goes down to 0,
+    // the radius form alone.
+    static constexpr int SWITCH_MARGIN = 2;
+    // The world's planet of p_radius_m at p_voxel_size, centred on the voxel (0, 0, 0) (SWITCH_MARGIN): a SPHERE, a TORUS
+    // of that tube round a ring of p_ring_m > 0, or refused like sphere() (WorldFile refuses such a world).
+    static BaseSurface planet(double p_radius_m, double p_voxel_size, double p_ring_m = 0.0, ov::str *r_refusal = nullptr);
     // SPHERE, TORUS: the (snapped) centre.
     const VoxelPos &centre() const { return anchor; }
     // SPHERE, TORUS: the first LOD of the radius form (below it, the curvature form's regions).
