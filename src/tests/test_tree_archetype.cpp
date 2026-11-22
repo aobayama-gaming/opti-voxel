@@ -326,7 +326,7 @@ TEST_CASE("SDFCascade forest: the trees are table records, trunks are solid, eva
     ChunkParam param;
     param.voxel_size = 0.05f;
     GroundSDF sdf;
-    sdf.set_zone(SDFTable::Zone{ 40.0 });
+    sdf.set_whole_region(SDFTable::Region{ 40.0 });
     sdf.set_instances(SDFTable::counted(default_species(), Archetype::Species::TREE, 30, 40.0));
     sdf.set_stream_sources(false); // the trees' spans
     sdf.set_moment_blobs(false); // the trees' records alone

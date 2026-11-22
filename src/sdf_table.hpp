@@ -24,7 +24,7 @@
 // (instance_table.hpp, archetype_table.hpp fold_onto; the ground is SDFCascade's). This class owns everything about
 // the instances: the library, the records and their snapshot (read from other threads), the GPU table, the runtime
 // edits (replayed from a world's edits file at configure), and the sources the instance lists place on the ground
-// (Zone), which only need the subclass's base and ground_under.
+// wherever it is, which only need the subclass's base and ground_under.
 class SDFTable : public SDFBase {
 public:
     static constexpr uint32_t ROCK_SEED = 0x20C4u;
@@ -58,21 +58,32 @@ public:
     // an edits file saves: WorldFile::save_edits). Records the scene placed are never edits.
     std::vector<Edit> live_edits() const;
 
-    // Where the instances stand (a world file's "zone"): a square of side side_m metres around (x_m, z_m) of the base's
-    // tangent plane (in front of the main_scene spawn by default), over every height the ground can reach in it; side 0:
-    // none. The biome features stand in it too (zone_box). Set before configure().
-    struct Zone {
+    // A box given in metres: a square of side side_m metres around (x_m, z_m) of the base's tangent plane (in front of
+    // the main_scene spawn by default), over every height the ground can reach in it (region_box: 4 half sides up and
+    // down from the ground under its centre); side 0: none.
+    struct Region {
         double side_m = 0.0;
         double x_m = -50.0;
         double z_m = -150.0;
     };
-    void set_zone(const Zone &p_zone) { zone = p_zone; }
+    // The box a whole build walks (set_stream_sources(false): the stream's oracle, the tests and checks that edit the
+    // records): the sources have no end, so a whole build without one is refused (configure's world error). Unused
+    // while streaming. Set before configure().
+    void set_whole_region(const Region &p_region) { whole_region = p_region; }
+    // Its box (region_box; once configured: the ground under its centre), invalid for none.
+    VoxelBox whole_box() const { return region_box(whole_region); }
+    // Where the biome features stand (a world file's "feature_region"): a world listing features without one is refused.
+    // TODO(feature stream): the features are placed whole over this box because Biome::sites walks every cell of it and
+    // the trees' keep-out scans every lake (in_lake). A streamed feature source keyed by feature-cell tiles, Biome::place
+    // memoised per cell (a pure function of it) and the keep-out read from the memo of the cells around a site would put
+    // them everywhere, like the trees, and close this region. Set before configure().
+    void set_feature_region(const Region &p_region) { feature_region = p_region; }
     // What grows where no biome lists its own "instances" (a world file's "instances"; the world without biomes): each
     // entry a species, its cell and its share (Climate::InstanceShare). Every entry of a kind (trees, rocks) and a cell,
-    // over these and the biomes' lists, is one source (cell_scatter.hpp) over the zone, each of its sites growing what
-    // its biome lists there (BiomePick, pick_share). Set before configure().
+    // over these and the biomes' lists, is one source (cell_scatter.hpp) over the whole ground, each of its sites growing
+    // what its biome lists there (BiomePick, pick_share). Set before configure().
     void set_instances(const std::vector<Climate::InstanceShare> &p_instances) { instances = p_instances; }
-    // Every species of p_kind in p_species at share 1, about p_count sites in a zone of side p_side_m metres (the cell
+    // Every species of p_kind in p_species at share 1, about p_count sites on a square of side p_side_m metres (the cell
     // forest_cell_side gives): a scene given as a count (the tests, the checks).
     static std::vector<Climate::InstanceShare> counted(const std::vector<Archetype::Species> &p_species, Archetype::Species::Kind p_kind, int p_count,
             double p_side_m);
@@ -104,8 +115,8 @@ public:
     void moment_blobs_reference(std::vector<Archetype::MomentBlob> &r_out) const;
     // The features (biome_features.hpp: lava lakes, floating islands) where no biome lists its own (a world file's
     // "features"; the world without biomes): each entry a kind, its cell, the chance a cell holds one and its radius range
-    // (Climate::FeatureShare). They stand in the zone, a cell's candidate where its biome's entry of its kind and cell
-    // keeps it (BiomePick). Set before configure().
+    // (Climate::FeatureShare). They stand in the feature region, a cell's candidate where its biome's entry of its kind
+    // and cell keeps it (BiomePick). Set before configure().
     void set_features(const std::vector<Climate::FeatureShare> &p_features) { features = p_features; }
     // The materials the records name (TableRecord::material): the page shader's material_tex.
     const Material::Library &get_materials() const override { return materials; }
@@ -124,15 +135,15 @@ public:
 
     // An instance erodes by at most this many cells between LOD L and L+1 (the band rule; 0 without it).
     float instance_erode_cells() const { return instance_band ? erode_rule.rate : 0.0f; }
-    // The skirts must hide the band rule's step, and the moment blobs' when the scene places instances that can have
-    // some (asked before configure: the blobs aren't built yet): each layer's are listed at its LOD alone, so the
+    // The skirts must hide the band rule's step, and the moment blobs' when the world places instances that can have
+    // some (places_instances: asked before configure, the blobs aren't built yet): each layer's are listed at its LOD alone, so the
     // far-field surfaces of a LOD L and a LOD L+1 chunk differ by up to MOMENT_SKIRT_CELLS cells of L (0.93 of the
     // skirt on a 4,000-rock scatter at LOD 3 | 4, the worst measured: test_cascade_table).
     static constexpr float MOMENT_SKIRT_CELLS = 2.5f;
     // The locality margins (skirt_depth) take it whole; the skirt walls only where a blob touches the sample
     // (SDFCascade's moment skirt), so the rest of the terrain keeps the band rule's.
     float min_skirt_depth(const ChunkParam &, int) const override {
-        const bool blobs = instance_band && moment_blobs && zone.side_m > 0.0;
+        const bool blobs = instance_band && moment_blobs && places_instances();
         return instance_erode_cells() + (blobs ? MOMENT_SKIRT_CELLS : 0.0f);
     }
     // The moment skirt in cells: MOMENT_SKIRT_CELLS when the table has moment layers (edits may add blobs where the build
@@ -144,7 +155,7 @@ public:
 
     // The node's world box grown by the cull band (2 chunk sizes at its LOD) against every instance's box, band or
     // not: a culled coarse node hides its subtree, where the instance is (instance_table.hpp). A streamed source's records
-    // stand on the ground: a node of its zone is kept while its corners are within the records' ground_reach of it.
+    // stand on the ground anywhere: a node is kept while its corners are within the records' ground_reach of it.
     bool cull_exempt(const ChunkId &p_node, int p_lod, float p_past_band_m) const override;
 
     // The streamed sources' gating (InstanceStream::admit; every chunk READY without them).
@@ -211,7 +222,7 @@ public:
     // scenes and the biome features stand (thread-safe).
     virtual VoxelPos ground_under(const VoxelPos &p_start) const = 0;
     // The ground under the point (p_u, p_v) LOD0 voxels of the base's tangent plane (BaseSurface::tangent_point): where
-    // the scenes given in metres (the zone, the gallery) stand.
+    // the boxes given in metres (Region) stand.
     VoxelPos ground_at(int64_t p_u, int64_t p_v) const { return ground_under(get_base().tangent_point(p_u, p_v)); }
     // Why an edit's inputs are refused (empty if they are fine): the GPU and the CPU only agree on finite, normal
     // floats, the box and the fold assume an orthonormal rotation, the table folds the four top-level operators, and
@@ -233,6 +244,9 @@ protected:
     // Empty, or the first instance entry (the world's or a biome's, of placing_climate) naming a species the world's
     // species don't have: a world error (SDFCascade::configure), never a list grown without it.
     ov::str species_error() const;
+    // Whether the world lists instances or features (its own lists; the subclass adds its biomes'), asked before configure
+    // (min_skirt_depth: the moment blobs' skirt).
+    virtual bool places_instances() const { return !instances.empty() || !features.empty(); }
 
     // The base palette (SDFGpuTable::base_palette): GROUND, then p_ground's materials, registered by name (their
     // parameters replaced on a reconfigure). Call from configure(); empty: {GROUND}.
@@ -269,7 +283,8 @@ private:
         int lod_max = 0;
     };
     std::vector<EditRegion> edit_regions;
-    Zone zone;
+    Region whole_region;
+    Region feature_region;
     std::vector<Climate::InstanceShare> instances;
     std::vector<Archetype::TreeSpan> trees; // the forest's trees, in id order
     std::vector<Archetype::Species> species;
@@ -283,7 +298,7 @@ private:
     mutable std::atomic<int64_t> verified_points{ 0 };
     mutable std::atomic<int64_t> verify_differences{ 0 };
     std::vector<Climate::FeatureShare> features;
-    bool has_features = false; // build_table: the zone has some, their library types added
+    bool has_features = false; // build_table: the lists name some, their library types added
     std::vector<Biome::LavaPool> lava_pools; // keeps trees and rocks out of the lakes (in_lake)
     Material::Library materials;
     bool instance_band = true; // false: a world's "instance_band" (the shapes gallery), tests
@@ -334,9 +349,8 @@ private:
     std::vector<Group> groups() const;
     // An entry's cell of p_cell_m metres in LOD0 voxels (forest_cell_side's rounding): its group's side.
     int64_t cell_side(double p_cell_m) const;
-    // A source of the zone: one site per cell of p_side voxels, over every height the ground can reach in it (4 times
-    // its half side up and down from the ground at the centre; the walk only tries the cells along the surface, so the
-    // empty air costs nothing), out of the lakes.
+    // A source over the whole ground: one site per cell of p_side voxels where the ground crosses it (the walk only tries
+    // the cells along the surface, so the empty air costs nothing), out of the lakes.
     Archetype::CellScatter scene_source(uint32_t p_salt, int64_t p_side) const;
     // A tree source: grown trees, a site's species its biome's (site_class).
     Archetype::CellScatter forest_source(const Archetype::TreeTypes &p_types, const Group &p_group, uint32_t p_salt) const;
@@ -347,18 +361,18 @@ private:
     // (pick_share), -1 where its biome grows none of them; the variant modulo their count when every biome grows each
     // at share 1. Thread-safe (sources call it).
     std::function<int(const Archetype::Site &)> site_class(const Group &p_group) const;
-    // Every site of p_source in its zone, appended to the records (each a contiguous run, kept whole or left out), and
-    // its stats under r_stats[p_name]; the sites' runs to r_spans if given.
+    // Every site of p_source in the whole region's box, appended to the records (each a contiguous run, kept whole or left
+    // out), and its stats under r_stats[p_name]; the sites' runs to r_spans if given.
     void add_source(const Archetype::CellScatter &p_source, const ov::str &p_name, ov::Value &r_stats, std::vector<Archetype::TreeSpan> *r_spans = nullptr);
     // The sources as keys of a stream whose slots start at p_slot_base, and their stats.
     void add_stream(uint32_t p_slot_base, ov::Value &r_stats);
-    // The zone's box (Zone): its square round the ground under its centre (p_on_base: the base's point there), 4 half
-    // sides up and down.
-    VoxelBox zone_box(bool p_on_base = false) const;
-    // The biome features' sites in the zone: each kind and cell the lists name, its candidates (Biome::sites) where
-    // their biome's entry keeps them (BiomePick; the world's list for a biome that lists none), at its radius.
+    // A region's box: its square round the ground under its centre (p_on_base: the base's point there), 4 half sides up
+    // and down. Invalid for side 0.
+    VoxelBox region_box(const Region &p_region, bool p_on_base = false) const;
+    // The biome features' sites in the feature region: each kind and cell the lists name, its candidates (Biome::sites)
+    // where their biome's entry keeps them (BiomePick; the world's list for a biome that lists none), at its radius.
     std::vector<Biome::Site> feature_sites() const;
-    // The biome features in the zone, appended to the records, and their stats.
+    // The biome features in the feature region, appended to the records, and their stats.
     void add_biomes(const Types &p_types, ov::Value &r_stats);
     // The moment blobs of the records placed so far (each listed at its layer's LOD only), appended, and their stats.
     void add_moment_blobs(int p_blob_type, ov::Value &r_stats);

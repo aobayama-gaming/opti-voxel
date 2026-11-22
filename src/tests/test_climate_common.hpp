@@ -98,13 +98,27 @@ inline ov::str note_graph(const ov::str &p_note, const ov::str &p_shape = ov::st
             ov::str(p_shape.empty() ? "n" : "s") + "\"}]}";
 }
 
-// An SDFCascade with a climate table (a file, res:// or absolute, or its data) at 5 cm and p_lods LODs; p_skirt_cells
-// caps the skirts (ChunkParam::skirt_depth), the default's when negative.
+// An SDFCascade with a climate table (a world file, res:// or absolute, with its feature region; or its data) at 5 cm and
+// p_lods LODs; p_skirt_cells caps the skirts (ChunkParam::skirt_depth), the default's when negative. p_ground_only
+// leaves the biomes' instances and features out (the ground alone: a lifted skirt finishes their records unbounded). A
+// file's world must configure: its world error is the failure's message.
 struct ClimateSDF {
     GroundSDF sdf; // today's species: the tables' instances name them
-    ClimateSDF(const char *p_path, int p_lods, float p_skirt_cells = -1.0f) {
-        CHECK(load_table(p_path, sdf.climate_data) == ov::str());
+    ClimateSDF(const char *p_path, int p_lods, float p_skirt_cells = -1.0f, bool p_specialize = true, bool p_ground_only = false) {
+        WorldFile world;
+        CHECK(WorldFile::load(p_path, world) == ov::str());
+        sdf.climate_data = world.climate_table;
+        if (p_ground_only && sdf.climate_data.has("biomes")) {
+            ov::Value &biomes = sdf.climate_data["biomes"];
+            for (size_t i = 0; biomes.is_array() && i < biomes.size(); i++) {
+                biomes.at(i).erase("instances");
+                biomes.at(i).erase("features");
+            }
+        }
+        sdf.set_feature_region(world.feature_region); // a table whose biomes list features names where they stand
+        sdf.specialize = p_specialize;
         configure(p_lods, p_skirt_cells);
+        CHECK_MESSAGE(sdf.get_world_error().empty(), sdf.get_world_error());
     }
     ClimateSDF(const ov::Value &p_data, int p_lods, bool p_specialize = true) {
         sdf.climate_data = p_data;

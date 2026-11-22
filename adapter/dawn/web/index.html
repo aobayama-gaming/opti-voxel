@@ -48,12 +48,11 @@
   // the review settings (FSR 3 x2, pixelate 2, lod error 1 | 3). The worlds are the Godot project's, preloaded.
   const forest = 'cam_pos=-52,320,-95&above_ground=5&pitch=-5&yaw=-90';
   const review = 'upscale=fsr3&render_scale=0.5&pixelate=2&lod_error=1&lod_error_back=3';
-  const worlds = 'world=res://worlds/forest5cm';
-  const million = `${review}&${worlds}_1m.world.json&${forest}`;
+  const world = 'world=res://worlds/forest5cm.world.json';
   const scenes = [
-    ['Forest', 'A million trees on 5 cm voxels, FSR 3 upscaling.', million],
+    ['Forest', 'A forest over the whole ground on 5 cm voxels, FSR 3 upscaling.', `${review}&${world}&${forest}`],
     ['Climate world', 'The same forest in a world of biomes.', `${review}&world=res://climate/world.json&${forest}`],
-    ['Small forest', '4,000 trees, no upscaler: for Firefox and smaller GPUs.', `pixelate=2&${worlds}.world.json&${forest}`],
+    ['Forest, no upscaler', 'The forest without FSR: for Firefox and smaller GPUs.', `pixelate=2&${world}&${forest}`],
     ['Bare terrain', 'The bare terrain at 0.5 m voxels, from the ground to the horizon.', 'world=res://worlds/default.world.json'],
   ];
   for (const [name, text, query] of scenes) {

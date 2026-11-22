@@ -3,7 +3,7 @@
  "engine": "engine.json",
  "climate": "climate.json",
  "species": "res://worlds/species.json",
- "zone": {"side_m": 5000},
+ "feature_region": {"side_m": 5000},
  "biomes": [
   {
    "name": "valley",

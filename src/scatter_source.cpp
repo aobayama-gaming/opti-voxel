@@ -209,8 +209,8 @@ int64_t ScatterSource::ground_reach(int p_lod) const {
     return ground_reaches.empty() ? 0 : ground_reaches[ov::min(ov::max(p_lod, 0), int(ground_reaches.size()) - 1)];
 }
 
-void ScatterSource::append_tiles(int p_kind, int p_lod, int64_t p_side, const VoxelBox &p_box, int64_t p_zone_grow, std::vector<SourceKey> &r_out) const {
-    for_each_tile(p_box.clipped(set.scatter.zone.grown(p_zone_grow)), p_side,
+void ScatterSource::append_tiles(int p_kind, int p_lod, int64_t p_side, const VoxelBox &p_box, std::vector<SourceKey> &r_out) const {
+    for_each_tile(p_box, p_side,
             [&](const VoxelPos &p_tile) { r_out.push_back(SourceKey{ set.id, p_kind, p_lod, p_tile }); });
 }
 
@@ -221,13 +221,12 @@ void ScatterSource::keys(const VoxelPos &p_lo, const VoxelPos &p_hi, int p_lod, 
     }
     const VoxelBox box{ p_lo, p_hi, true };
     // Every tile whose content can pass a box test in the box: a part tile's records lie within its box grown by the
-    // reach, and its bases in the zone; a blob tile's within blob_reach, its cells within a cell of the records' reach.
+    // reach; a blob tile's within blob_reach.
     if (p_lod < prof->lod_end) {
-        append_tiles(SourceKey::PARTS, part_key_lod(p_lod), part_tile_side(p_lod), box.grown(part_grow(p_lod)), 0, r_out);
+        append_tiles(SourceKey::PARTS, part_key_lod(p_lod), part_tile_side(p_lod), box.grown(part_grow(p_lod)), r_out);
     }
     if (has_layer(p_lod)) {
-        const int64_t c = layer_cell(p_lod);
-        append_tiles(SourceKey::BLOBS, p_lod, blob_tile_cells(p_lod) * c, box.grown(blob_grow(p_lod)), int64_t(std::ceil(prof->reach)) + c, r_out);
+        append_tiles(SourceKey::BLOBS, p_lod, blob_tile_cells(p_lod) * layer_cell(p_lod), box.grown(blob_grow(p_lod)), r_out);
     }
 }
 
@@ -243,13 +242,11 @@ void ScatterSource::inputs(const SourceKey &p_key, std::vector<SourceKey> &r_out
         return;
     }
     if (p_key.kind == SourceKey::PARTS) {
-        // A LOD-0 tile reads its site tile when a base can lie in it; a coarser one the site tiles of its cube the zone's
-        // walk keeps (CellScatter::site_tiles: the walk stopped at their level, so no air tile is asked for). A site tile
-        // is a node of that walk (site_level), and a tile it drops walks to no site from the same level.
+        // A LOD-0 tile reads its site tile; a coarser one the site tiles of its cube the source's walk keeps
+        // (CellScatter::site_tiles: the walk stopped at their level, so no air tile is asked for). A site tile is a node of
+        // that walk (site_level), and a tile it drops walks to no site from the same level.
         if (p_key.lod == 0) {
-            if (tile_box(p_key).intersects(set.scatter.zone)) {
-                r_out.push_back(SourceKey{ set.id, SourceKey::SITES, 0, p_key.tile });
-            }
+            r_out.push_back(SourceKey{ set.id, SourceKey::SITES, 0, p_key.tile });
         } else {
             std::vector<VoxelPos> tiles;
             set.scatter.site_tiles(tile_box(p_key), site_level, tiles);
@@ -260,7 +257,7 @@ void ScatterSource::inputs(const SourceKey &p_key, std::vector<SourceKey> &r_out
     } else if (p_key.kind == SourceKey::BLOBS && part_layer(p_key.lod)) {
         // The LOD-0 part tiles whose records can have their centroid in the tile's cells or MARGIN_CELLS past them.
         const VoxelBox region = tile_box(p_key).grown(MARGIN_CELLS * layer_cell(p_key.lod));
-        append_tiles(SourceKey::PARTS, 0, part_tile_side(0), region.grown(int64_t(std::ceil(prof->reach))), 0, r_out);
+        append_tiles(SourceKey::PARTS, 0, part_tile_side(0), region.grown(int64_t(std::ceil(prof->reach))), r_out);
     } else if (p_key.kind == SourceKey::BLOBS && has_layer(p_key.lod)) {
         // A far layer: the proxy tiles its region meets (each walked once, shared by the blob tiles around it).
         proxy_tiles(proxy_region(p_key), p_key.lod, r_out);
@@ -268,7 +265,7 @@ void ScatterSource::inputs(const SourceKey &p_key, std::vector<SourceKey> &r_out
 }
 
 void ScatterSource::proxy_tiles(const VoxelBox &p_region, int p_layer, std::vector<SourceKey> &r_out) const {
-    append_tiles(SourceKey::PROXIES, p_layer, blob_tile_cells(p_layer) * layer_cell(p_layer), p_region, proxy_side(p_layer), r_out); // in proxy_zone
+    append_tiles(SourceKey::PROXIES, p_layer, blob_tile_cells(p_layer) * layer_cell(p_layer), p_region, r_out);
 }
 
 const SourceContent &ScatterSource::input(const SourceKey &p_key, const Inputs &p_inputs, size_t p_i, SourceContent &r_local) const {
@@ -325,10 +322,7 @@ void ScatterSource::walk_tiles(const SourceKey *p_keys, size_t p_count, SourceCo
         }
         // From the regions' level: the sites a tile keeps are those a region walk keeps over it (surface_sites); a proxy's
         // base needn't be on the LOD-0 ground.
-        const VoxelBox box = tile_box(key).clipped(proxy_zone(key.lod));
-        if (box.valid) {
-            walks[i] = SiteWalk{ box, proxy_side(key.lod), s.salt ^ PROXY_SALT, false, proxy_level(key.lod), &r_outs[i]->sites };
-        }
+        walks[i] = SiteWalk{ tile_box(key), proxy_side(key.lod), s.salt ^ PROXY_SALT, false, proxy_level(key.lod), &r_outs[i]->sites };
     }
     surface_sites_many(walks.data(), p_count, s.walk_field());
     for (size_t i = 0; i < p_count; i++) {
@@ -343,11 +337,11 @@ int64_t ScatterSource::proxy_grow(int p_layer) const {
 }
 
 VoxelBox ScatterSource::proxy_region(const SourceKey &p_key) const {
-    return tile_box(p_key).grown(proxy_grow(p_key.lod)).clipped(proxy_zone(p_key.lod));
+    return tile_box(p_key).grown(proxy_grow(p_key.lod));
 }
 
 int ScatterSource::proxy_level(int p_layer) const {
-    // Every tile's region before the zone clips it has the same extent: the level of any of them.
+    // Every tile's region has the same extent: the level of any of them.
     return walk_level(tile_box(SourceKey{ set.id, SourceKey::BLOBS, p_layer, VoxelPos() }).grown(proxy_grow(p_layer)), proxy_side(p_layer));
 }
 
@@ -419,7 +413,7 @@ void ScatterSource::near_items(const SourceKey &p_key, const Inputs &p_inputs, s
 
 void ScatterSource::far_items(const SourceKey &p_key, const Inputs &p_inputs, std::vector<MomentItem> &r_items) const {
     // One proxy per surface cell of g voxels: the sites of its patch of ground ((g / side)^2 cells' worth, one site per
-    // source cell on flat ground, times the share of the cell inside the zone), each what the mean site has lost at the
+    // source cell on flat ground), each what the mean site has lost at the
     // layer turned to the up there. A point mass at its site: the hashed sites, two per cell side, already spread over the
     // cells as the sites do (spreading each over its patch as well made the blobs 1.6-2 times too wide).
     const int64_t g = proxy_side(p_key.lod);
@@ -438,22 +432,16 @@ void ScatterSource::far_items(const SourceKey &p_key, const Inputs &p_inputs, st
             std::copy_if(p_walk.sites.begin(), p_walk.sites.end(), std::back_inserter(sites), [&region](const CellSite &p_s) { return region.contains(p_s.site.base); });
         });
         std::sort(sites.begin(), sites.end(), [](const CellSite &p_a, const CellSite &p_b) { return cell_order(p_a.cell, p_b.cell); });
-    } else if (region.valid) {
+    } else {
         const SiteWalk walk{ region, g, s.salt ^ PROXY_SALT, false, proxy_level(p_key.lod), &sites }; // in cell order
         surface_sites_many(&walk, 1, batch_of(s.ground));
     }
-    const double side = double(s.side);
+    const double weight = (double(g) / double(s.side)) * (double(g) / double(s.side));
     for (const CellSite &cs : sites) {
         const VoxelPos &base = cs.site.base;
-        double inside = 1.0;
-        for (int a = 0; a < 3; a++) {
-            const int64_t lo = cs.cell[a] * g;
-            inside *= double(ov::max<int64_t>(0, ov::min(lo + g - 1, s.zone.hi[a]) - ov::max(lo, s.zone.lo[a]) + 1)) / double(g);
-        }
-        if (!(inside > 0.0) || (s.accept && !s.accept(base))) {
+        if (s.accept && !s.accept(base)) {
             continue;
         }
-        const double weight = (double(g) / side) * (double(g) / side) * inside;
         // The proxy stands for sites of its own class (a tree's species: its proxy site's, hashed like a site's).
         const int c = s.class_of(cs.site);
         if (c < 0) {

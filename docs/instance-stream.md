@@ -2,12 +2,14 @@
 
 `CellScatter` sources, `ScatterSource` keys, `InstanceStream` and how `SDFTable` wires them.
 
-- **Sources (`src/cell_scatter.*`):** the scatter and the forest are two `CellScatter`s {salt, zone, side, ground, up,
-  accept, generate}: a site's records are a pure function of its cell, so two halves of a zone give the whole
-  (unit-tested). `SDFTable::get_sources()`, streamed (below; stats under `get_debug_stats()["table"]["scatter" | "trees"]`:
-  the profile, and `["stream"]`), or with `--stream=0` (`VoxelTerrain.archetype_stream`, bench and player) placed whole in
-  the table at configure by `add_source` (count, records per site, moments per material; the reference, and the tests that
-  edit their records by id). Biome features and the edits (an edits file's, `docs/terrain.md`) stay table records (whole-build blobs). `SourceProfile`
+- **Sources (`src/cell_scatter.*`):** the scatter and the forest are two `CellScatter`s {salt, side, ground, up,
+  accept, generate} with no end: they cover the whole ground (any planet), the view bounding what is computed (the
+  discoverer, `admit`, the chunks' keys). A site's records are a pure function of its cell, so two halves of a box give
+  the whole and a wider box the same sites in it (unit-tested). `SDFTable::get_sources()`, streamed (below; stats under
+  `get_debug_stats()["table"]["scatter" | "trees"]`: the profile, and `["stream"]`), or with `--stream=0`
+  (`VoxelTerrain.archetype_stream`) placed whole in the table at configure by `add_source` over the box the caller gives
+  (`SDFTable::set_whole_region`: the stream's oracle, the checks and the tests that edit their records by id; a world
+  with instances and no such box is refused). Count, records per site, moments per material. Biome features and the edits (an edits file's, `docs/terrain.md`) stay table records (whole-build blobs). `SourceProfile`
   reads `SAMPLES` (256) hashed sites per class at the origin (`CellScatter::classes`: a site's class is `classify`'s,
   the forest's species of its biome, -1 where none grows, or its variant modulo the class count; class c grown by
   `generate_class`, one class bit for bit as before): reach, `lod_end`, k / margin max (times
@@ -15,21 +17,25 @@
   lod)`: what a far proxy of a site of that class stands for; `blob_reach` takes the widest class's); unit-tested to bound
   every record of the forest and the scatter (`covers`). A source with a `profile_key` (the forest's: voxel size, its
   species' parameters, type ids; the scatter's: its rocks') takes its profile from a process-wide registry keyed by it plus the salt, finish, layer params and LOD
-  count: every forest of a voxel size shares one, whatever its zone or density (stats `profile_classes`,
+  count: every forest of a voxel size shares one, whatever its acceptance or density (stats `profile_classes`,
   `profile_shared`).
   **Keys (`src/scatter_source.*`):** `ScatterSource` cuts a source into keys `{source, PARTS | BLOBS | SITES | PROXIES,
   lod, tile}`, each a pure function of itself: `keys(box, lod)` (conservative, unit-tested against every tile's records),
   `inputs(key)`, `content(key, inputs)`, `ground_reach(lod)`. SITES and PROXIES hold a walk and no records
   (`SourceContent::sites`, never listed, kept resident: the walk is ~80% of a part tile's CPU): `SITES` (lod 0) on the
-  LOD-0 part-tile grid (8 source cells), `PROXIES L` on far layer L's blob grid (the proxies' walk of its own tile in
-  `proxy_zone`, from `proxy_level`: an unclipped region's octree level; a far blob tile reads the tiles its `proxy_region`
-  meets and sorts their sites in it by cell: the region's walk from that level by construction, `surface_sites`'
-  `p_min_level`, unit-tested on the cascade too; the old blobs bit for bit where the zone doesn't clip the region). A
+  LOD-0 part-tile grid (8 source cells), `PROXIES L` on far layer L's blob grid (the proxies' walk of its own tile,
+  from `proxy_level`: a region's octree level; a far blob tile reads the tiles its `proxy_region` meets and sorts their
+  sites in it by cell: the region's walk from that level by construction, `surface_sites`' `p_start_level`, unit-tested
+  on the cascade too). A
   PARTS tile of LOD L (side doubled until it holds 2 chunks) grows the sites of its box: at LOD 0 those of its `SITES`
   tile (its one input: the near layers read it), coarser the site tiles of its cube that can hold a site, merged in cell
-  order. Every walk of a source starts at its zone's level (`CellScatter::sites`: `surface_sites`' `p_min_level` =
-  `walk_level(zone, side)`), so a box keeps exactly the sites the zone's walk keeps in it (a box's own level is coarser for
-  a wider box and may prune a cell a finer start keeps); a site tile is a node of that walk (`site_level`: the LOD-0 tile
+  order. Every walk of a source starts at its `CellScatter::start_level` (`site_walk_level`: the coarsest level whose
+  nodes are at most `SITE_WALK_NODE_M`, 1.5 km, wide: level 8 for 5 m cells; every node of that level meeting the box:
+  `CellScatter::sites`, `surface_sites`' `p_start_level`; a start of 2^10 cells, 5 km nodes, pruned a whole forest on
+  the template ground's relief, the walk's plane test holding over a km only), so a site is a function of its cell alone and any box
+  keeps exactly the sites any other keeps where they meet (a box's own level is coarser for a wider box and may prune a
+  cell a finer start keeps; before the sources had no end, every walk started at the level of the world's square); a
+  site tile is a node of that walk (`site_level`: the LOD-0 tile
   side over the cell side), so the walk stopped there (`CellScatter::site_tiles`, `surface_nodes`: a few coarse readings,
   in the key's expansion job) names the tiles a coarse tile asks for, and a tile it drops walks to no site. The 1M
   forest's LOD 6-7 tiles asked 4,096 site tiles each as jobs before (758k jobs, 98 s of workers); one walk of the coarse
@@ -46,7 +52,7 @@
   mass within 20%, peak within 40%, 45% on a layer losing bark only (layer 4 at 41%: peaks far under the iso), unit test;
   3 = the exact layers). The stream keeps three LRU chains: the evictable
   keys with records (slots, the entries cap `ENTRIES_MAX`), the walks (`WALKS_MAX` 2^20, `Settings::walks`: ~450 B per
-  walk + 56 per site, the 1M zone's ~500k stay resident; `walks_ready`) and those holding input records (not placed,
+  walk + 56 per site, the old 1M square's ~500k stayed resident; `walks_ready`) and those holding input records (not placed,
   count > 0: the inputs cap pops its oldest in O(1), the walks and placed keys never relinked); `computed_by_key` names
   `sites 0` and `proxies L`. An air site tile's walk is one evaluation (unit test: on a LOD-7 footprint on the cascade,
   89% of the tiles, 3% of the evaluations; the ground tiles ~330 each), so no emptiness test runs before it.
@@ -90,8 +96,9 @@
   placement seq} (`record_bytes`: the snapshot's changed pages and the keys placed since). `VoxelTerrain::_process` calls
   `SDFBase::poll()` (the stream, then `poll_rebuild`) before the meshers. Unit tests: a streamed chunk's list folds like
   the CPU's point (`evaluate`) bit for bit, with the uploaded spans; the LOD L | L+1 field step stays in the skirt on the
-  streamed scatter and forest. Presets `forest5cm_1m` (1M trees on 5 x 5 km) and `forest5cm_41m` (41M on 32 x 32 km): the
-  stream computes what the view asks for, so their configure is forest5cm's.
+  streamed scatter and forest. The streamed slots are fixed (`InstanceStream::SLOTS_MAX`, 2^21 records: what the
+  forests' old square estimate already reached); the forest has no end, so `forest5cm` is every forest preset (the
+  1M viewer's `forest5cm_1m` names it too): the stream computes what the view asks for.
 
 ## Site walks in lockstep, on the GPU
 

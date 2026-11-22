@@ -239,13 +239,10 @@ bool SDFTable::cull_exempt(const ChunkId &p_node, int p_lod, float p_past_band_m
         return true;
     }
     // The corners are the bare ground's distance: the node holds a point within its band of the ground, so within the
-    // band plus the reach of a source's records when it can hold one (the corner test's own slope bound).
-    const int64_t span = int64_t(param.chunk_voxel_dimension()) << p_lod;
-    const VoxelPos lo = ChunkMath::chunk_min_voxel(p_node, param);
-    const VoxelBox node{ lo, lo + VoxelPos(span, span, span), true };
+    // band plus the reach of a source's records, which stand on the ground anywhere (the corner test's own slope bound).
     for (const std::shared_ptr<const ScatterSource> &s : streamed) {
         const int64_t reach = s->ground_reach(p_lod);
-        if (reach > 0 && double(p_past_band_m) <= double(reach) * param.voxel_size && node.clipped(s->setup().scatter.zone.grown(reach)).valid) {
+        if (reach > 0 && double(p_past_band_m) <= double(reach) * param.voxel_size) {
             return true;
         }
     }
@@ -519,11 +516,14 @@ std::vector<SDFTable::Group> SDFTable::groups() const {
     return out;
 }
 
-VoxelBox SDFTable::zone_box(bool p_on_base) const {
+VoxelBox SDFTable::region_box(const Region &p_region, bool p_on_base) const {
+    if (!(p_region.side_m > 0.0)) {
+        return VoxelBox();
+    }
     const double vs = param.voxel_size;
-    const VoxelPos ground = ground_at(std::llround(zone.x_m / vs), std::llround(zone.z_m / vs));
+    const VoxelPos ground = ground_at(std::llround(p_region.x_m / vs), std::llround(p_region.z_m / vs));
     const VoxelPos centre = p_on_base ? get_base().on_base(ground) : ground;
-    const int64_t half = std::llround(0.5 * zone.side_m / vs);
+    const int64_t half = std::llround(0.5 * p_region.side_m / vs);
     const VoxelPos reach(half, 4 * half, half);
     return VoxelBox{ centre - reach, centre + reach, true };
 }
@@ -531,10 +531,8 @@ VoxelBox SDFTable::zone_box(bool p_on_base) const {
 CellScatter SDFTable::scene_source(uint32_t p_salt, int64_t p_side) const {
     CellScatter s;
     s.salt = p_salt;
-    s.side = zone.side_m > 0.0 ? p_side : 0;
-    if (s.side > 0) {
-        s.zone = zone_box();
-    }
+    s.side = p_side;
+    s.start_level = site_walk_level(p_side, param.voxel_size);
     s.ground = [this](const VoxelPos &p_v, int p_lod) { return ground_field(p_v, p_lod); };
     s.ground_batch = [this](const VoxelPos *p_voxels, const int *p_lods, int p_count, ExactNoise::Float4 *r_out) {
         ground_field_batch(p_voxels, p_lods, p_count, r_out);
@@ -632,8 +630,9 @@ CellScatter SDFTable::scatter_source(const Types &p_types, const Group &p_group,
 void SDFTable::add_source(const CellScatter &p_source, const ov::str &p_name, ov::Value &r_stats, std::vector<TreeSpan> *r_spans) {
     const uint64_t start_us = ov::now_usec();
     std::vector<CellSite> sites;
-    if (p_source.valid()) {
-        p_source.sites(p_source.zone, sites);
+    const VoxelBox box = region_box(whole_region);
+    if (p_source.valid() && box.valid) {
+        p_source.sites(box, sites);
     }
     // Each site's records are independent (up_at and the library are const): on the worker pool, a batch at a time (the
     // records wait for their turn), then admitted in site order (the record ids don't change).
@@ -723,7 +722,7 @@ void SDFTable::add_stream(uint32_t p_slot_base, ov::Value &r_stats) {
     }
     InstanceStream::Settings settings;
     settings.slot_base = p_slot_base;
-    settings.slot_capacity = ov::min<uint32_t>(InstanceStream::slot_budget(streamed), SDFGpuTable::LIST_ID_MASK + 1 - p_slot_base);
+    settings.slot_capacity = ov::min<uint32_t>(InstanceStream::SLOTS_MAX, SDFGpuTable::LIST_ID_MASK + 1 - p_slot_base);
     stream = std::make_shared<InstanceStream>(streamed, param, settings, StreamExecutor::pool());
     if (std::atomic_load(&field_gpu)) {
         stream->set_walk_batch(WALK_BATCH_GPU); // a reconfigure keeps the attached field
@@ -758,8 +757,8 @@ std::vector<Biome::Site> SDFTable::feature_sites() const {
             cells[entry.cell] = ov::max(cells[entry.cell], e.chance);
         }
     }
-    // Each kind and cell's candidates in the zone (on the base: the sites are its points).
-    const VoxelBox box = zone_box(true);
+    // Each kind and cell's candidates in the region (on the base: the sites are its points).
+    const VoxelBox box = region_box(feature_region, true);
     const BaseSurface &base = get_base();
     std::vector<Biome::Site> all, sites;
     for (const auto &[cell, chance] : cells) {
@@ -958,9 +957,9 @@ ov::str SDFTable::build_table(int p_lod_count) {
     lib.add(make_die_type());
     lib.add(make_stairs_type());
     lib.add(make_tunnel_cube_type());
-    // The feature types only where the zone has some (the library's indices, the blob's, stay as without them).
+    // The feature types only where the lists name some (the library's indices, the blob's, stay as without them).
     const auto feature_lists = lists_of(placing_climate(), features, &Climate::Biome::features, &Climate::Biome::features_listed);
-    has_features = zone.side_m > 0.0 && std::any_of(feature_lists.begin(), feature_lists.end(), [](const auto &p_l) { return !p_l.second->empty(); });
+    has_features = std::any_of(feature_lists.begin(), feature_lists.end(), [](const auto &p_l) { return !p_l.second->empty(); });
     if (has_features) {
         types.biome = Biome::add_types(lib, vs);
     }
@@ -999,6 +998,10 @@ ov::str SDFTable::build_table(int p_lod_count) {
             return ov::format("edits: entry %d: ", int64_t(i)) + error;
         }
     }
+    if (has_features && !(feature_region.side_m > 0.0)) {
+        return "features: the lists name features but the world gives no feature_region (they are placed over a bounded box until "
+               "they stream: SDFTable::set_feature_region).";
+    }
     // The biome features first: the scatter and the forest keep out of the lakes (their basins cut the ground away).
     ov::Value scene_stats = ov::Value::object();
     add_biomes(types, scene_stats);
@@ -1011,6 +1014,11 @@ ov::str SDFTable::build_table(int p_lod_count) {
         const uint32_t salt = first ? base : ExactNoise::hash3(base, uint32_t(g.side), uint32_t(uint64_t(g.side) >> 32)).x;
         const ov::str name = ov::str(tree ? "trees" : "scatter") + (first ? ov::str() : ov::format("_%d", g.side));
         sources.push_back(Source{ name, g.kind, tree ? forest_source(tree_types, g, salt) : scatter_source(types, g, salt) });
+    }
+    const bool any_source = std::any_of(sources.begin(), sources.end(), [](const Source &p_s) { return p_s.scatter.valid(); });
+    if (!stream_sources && any_source && !(whole_region.side_m > 0.0)) {
+        return "instances: placed whole (the stream off) only over a box the caller gives (SDFTable::set_whole_region: the checks' "
+               "oracle); a world streams them.";
     }
     if (!stream_sources) {
         const std::vector<const Species *> world_trees = species_of(species, Species::TREE);

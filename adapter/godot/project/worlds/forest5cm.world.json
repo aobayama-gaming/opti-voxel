@@ -1,13 +1,10 @@
 {
- "comment": "The perf target: a 5 cm forest.",
+ "comment": "The perf target: a 5 cm forest, one tree per 25 m^2 over the whole ground (streamed: the view asks for what it sees).",
  "engine": {
   "voxel_m": 0.05,
   "lods": 15
  },
  "biomes": "res://worlds/ground.biomes.json",
- "zone": {
-  "side_m": 316
- },
  "species": "res://worlds/species.json",
  "instances": [
   {

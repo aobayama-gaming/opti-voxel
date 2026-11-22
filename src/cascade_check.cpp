@@ -530,7 +530,7 @@ ov::Value check_table(ov::gpu::Device *p_device, int p_lods, const ChunkParam &p
     err = err.empty() ? WorldFile::load_species(WorldFile::SPECIES, species) : err;
     OV_ERR_FAIL_COND_V_MSG(!err.empty(), d, "CascadeCheck: the table check's world: " + err);
     sdf.set_species(species);
-    sdf.set_zone(SDFTable::Zone{ 160.0 });
+    sdf.set_whole_region(SDFTable::Region{ 160.0 });
     sdf.set_instances(SDFTable::counted(species, Archetype::Species::ROCK, 600, 160.0));
     sdf.set_stream_sources(false); // placed whole: the chunks' lists are the snapshot's (the streamed ones: unit tests)
     param.skirt_depth = ov::max(param.skirt_depth, sdf.min_skirt_depth(param, p_lods));

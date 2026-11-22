@@ -169,7 +169,7 @@ struct WalkCell {
 };
 
 // One box's walk of the nodes of side << stop meeting it that the surface may cross: an absolute octree walk from the
-// coarsest level whose node holds the box (at least the start level asked), keeping a node while the coarse plane at
+// start level asked (-1: the coarsest level whose node holds the box), keeping a node while the coarse plane at
 // its centre crosses it (plane_meets). Once done, kept holds its cells in cell order. Walked from the stop level or
 // below, every node meeting the box, with no reading (their centres' fields left unset).
 struct CellWalk {
@@ -182,12 +182,12 @@ struct CellWalk {
     std::vector<WalkCell> kept;
     bool done = false;
 
-    CellWalk(const VoxelBox &p_box, int64_t p_side, int p_min_level, int p_stop_level) : box(p_box), side(p_side), stop(p_stop_level) {
+    CellWalk(const VoxelBox &p_box, int64_t p_side, int p_start_level, int p_stop_level) : box(p_box), side(p_side), stop(p_stop_level) {
         if (p_side <= 0) {
             done = true;
             return;
         }
-        level = std::max(walk_level(p_box, p_side), std::min(p_min_level, 62));
+        level = p_start_level >= 0 ? std::min(p_start_level, 62) : walk_level(p_box, p_side);
         if (p_stop_level > 0 && level <= p_stop_level) {
             for (const VoxelPos &n : nodes_meeting(p_box, p_side << p_stop_level)) {
                 kept.push_back(WalkCell{ n, ExactNoise::Float4() }); // nodes_meeting's order is z y x: cell order
@@ -330,12 +330,20 @@ int walk_level(const VoxelBox &p_box, int64_t p_side) {
     return level;
 }
 
-void surface_nodes(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, const FieldBatchFn &p_field, int p_level, int p_min_level,
+int site_walk_level(int64_t p_side, double p_voxel_m) {
+    int level = 0;
+    while (p_side > 0 && level < 62 && std::ldexp(double(p_side) * p_voxel_m, level + 1) <= SITE_WALK_NODE_M) {
+        level++;
+    }
+    return level;
+}
+
+void surface_nodes(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, const FieldBatchFn &p_field, int p_level, int p_start_level,
         std::vector<VoxelPos> &r_out) {
     if (p_side <= 0 || p_level < 0 || p_level > 62) {
         return;
     }
-    std::vector<CellWalk> walk{ CellWalk(VoxelBox{ p_lo, p_hi, true }, p_side, p_min_level, p_level) };
+    std::vector<CellWalk> walk{ CellWalk(VoxelBox{ p_lo, p_hi, true }, p_side, p_start_level, p_level) };
     walk_cells(walk, p_field, nullptr);
     for (const WalkCell &c : walk[0].kept) {
         r_out.push_back(c.cell);
@@ -358,11 +366,11 @@ void surface_sites_many(const SiteWalk *p_walks, size_t p_count, const FieldBatc
     std::vector<int64_t> sides(p_count);
     walks.reserve(p_count);
     for (size_t w = 0; w < p_count; w++) {
-        walks.emplace_back(p_walks[w].box, p_walks[w].side, p_walks[w].min_level, 0);
+        walks.emplace_back(p_walks[w].box, p_walks[w].side, p_walks[w].start_level, 0);
         sides[w] = p_walks[w].side;
     }
     walk_cells(walks, p_field, r_stats);
-    // Every kept cell's candidate (over the pool: a whole zone keeps millions), then the ones that exist.
+    // Every kept cell's candidate (over the pool: a whole build's box keeps millions), then the ones that exist.
     std::vector<Candidate> all;
     for (size_t w = 0; w < p_count; w++) {
         for (const WalkCell &k : walks[w].kept) {
@@ -403,8 +411,8 @@ void surface_sites_many(const SiteWalk *p_walks, size_t p_count, const FieldBatc
 }
 
 void surface_sites(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, uint32_t p_salt, const FieldFn &p_field, std::vector<CellSite> &r_out,
-        bool p_snap, int p_min_level) {
-    const SiteWalk walk{ VoxelBox{ p_lo, p_hi, true }, p_side, p_salt, p_snap, p_min_level, &r_out };
+        bool p_snap, int p_start_level) {
+    const SiteWalk walk{ VoxelBox{ p_lo, p_hi, true }, p_side, p_salt, p_snap, p_start_level, &r_out };
     surface_sites_many(&walk, 1, batch_of(p_field));
 }
 

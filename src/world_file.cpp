@@ -249,7 +249,7 @@ ov::str WorldFile::save_edits(const ov::str &p_path, const std::vector<SDFTable:
 }
 
 ov::str WorldFile::parse(const ov::Value &p_data, const ov::str &p_dir, WorldFile &r_world) {
-    ov::str err = unknown_key(p_data, "file", { "engine", "climate", "planet", "look", "zone", "instances", "features", "species", "biomes", "instance_band", "edits" });
+    ov::str err = unknown_key(p_data, "file", { "engine", "climate", "planet", "look", "instances", "features", "feature_region", "species", "biomes", "instance_band", "edits" });
     if (!err.empty()) {
         return err;
     }
@@ -270,13 +270,13 @@ ov::str WorldFile::parse(const ov::Value &p_data, const ov::str &p_dir, WorldFil
     WorldFile w;
     const ov::Value planet = section(p_data, "planet", { "radius_m", "ring_m" }, err);
     const ov::Value look = section(p_data, "look", { "atmosphere", "atmosphere_scale", "clouds" }, err);
-    ov::Value zone = section(p_data, "zone", { "side_m", "centre_m" }, err);
-    const ov::Value centre = zone.get("centre_m", ov::Value::array());
-    if (err.empty() && zone.has("centre_m") && !(centre.is_array() && centre.size() == 2 && centre[size_t(0)].is_number() && centre[size_t(1)].is_number())) {
-        err = "world: zone: centre_m is [x, z] in metres.";
+    ov::Value region = section(p_data, "feature_region", { "side_m", "centre_m" }, err);
+    const ov::Value centre = region.get("centre_m", ov::Value::array());
+    if (err.empty() && region.has("centre_m") && !(centre.is_array() && centre.size() == 2 && centre[size_t(0)].is_number() && centre[size_t(1)].is_number())) {
+        err = "world: feature_region: centre_m is [x, z] in metres.";
     }
-    zone.erase("centre_m");
-    for (const auto &part : { std::pair<const char *, ov::Value>{ "engine", engine }, { "planet", planet }, { "zone", zone } }) {
+    region.erase("centre_m");
+    for (const auto &part : { std::pair<const char *, ov::Value>{ "engine", engine }, { "planet", planet }, { "feature_region", region } }) {
         err = err.empty() ? not_a_number(part.second, part.first) : err;
     }
     if (!err.empty()) {
@@ -308,13 +308,13 @@ ov::str WorldFile::parse(const ov::Value &p_data, const ov::str &p_dir, WorldFil
     w.atmosphere = look.get("atmosphere", w.atmosphere).as_bool();
     w.atmosphere_scale = look.get("atmosphere_scale", w.atmosphere_scale).as_double();
     w.clouds = look.get("clouds", w.clouds).as_bool();
-    w.zone.side_m = zone.get("side_m", w.zone.side_m).as_double();
+    w.feature_region.side_m = region.get("side_m", w.feature_region.side_m).as_double();
     if (centre.size() == 2) {
-        w.zone.x_m = centre[size_t(0)].as_double();
-        w.zone.z_m = centre[size_t(1)].as_double();
+        w.feature_region.x_m = centre[size_t(0)].as_double();
+        w.feature_region.z_m = centre[size_t(1)].as_double();
     }
-    if (!(w.zone.side_m >= 0.0 && std::isfinite(w.zone.side_m))) {
-        return "world: zone: side_m must be >= 0.";
+    if (!(w.feature_region.side_m >= 0.0 && std::isfinite(w.feature_region.side_m))) {
+        return "world: feature_region: side_m must be >= 0.";
     }
     if (p_data.has("instances")) {
         err = Climate::parse_instances(p_data["instances"], "instances", w.instances);

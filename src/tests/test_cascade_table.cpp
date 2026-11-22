@@ -21,14 +21,14 @@ using ExactNoise::float_bits;
 
 namespace {
 
-// A configured cascade terrain with a scatter (rocks and pillars in the default zone: SDFTable::counted), placed
+// A configured cascade terrain with a scatter (rocks and pillars in the default whole region: SDFTable::counted), placed
 // whole in the table: these tests are the index's, they count its records and lists and edit them by id.
 // The scatter's records alone (p_moments false): the tests count records and lists; the moment blobs have their own.
 struct ScatteredCascade {
     ChunkParam param;
     GroundSDF sdf;
     explicit ScatteredCascade(int p_count, double p_area = 200.0, int p_lods = 15, bool p_moments = false) {
-        sdf.set_zone(SDFTable::Zone{ p_area });
+        sdf.set_whole_region(SDFTable::Region{ p_area });
         sdf.set_instances(SDFTable::counted(default_species(), Archetype::Species::ROCK, p_count, p_area));
         sdf.set_stream_sources(false);
         sdf.set_moment_blobs(p_moments);
@@ -228,7 +228,6 @@ TEST_CASE("SDFCascade table: the skirt covers the ground's step plus the instanc
         CHECK(double(rocks.sdf.skirt_depth_m(l)) == doctest::Approx(double(bare.sdf.skirt_depth_m(l)) + Archetype::ERODE_CELLS * cell_m).epsilon(1e-6));
     }
     GroundSDF unbanded;
-    unbanded.set_zone(SDFTable::Zone{ 200.0 });
     unbanded.set_instances(SDFTable::counted(default_species(), Archetype::Species::ROCK, 50, 200.0));
     unbanded.set_instance_band(false);
     unbanded.configure(bare.param, 15);
@@ -389,7 +388,7 @@ TEST_CASE("SDFCascade table: the field step between LOD L and L+1 stays within t
         ChunkParam param;
         param.voxel_size = scene.voxel;
         GroundSDF sdf;
-        sdf.set_zone(SDFTable::Zone{ scene.area_m });
+        sdf.set_whole_region(SDFTable::Region{ scene.area_m }); // the scenes placed whole
         std::vector<Climate::InstanceShare> grown = SDFTable::counted(default_species(), Archetype::Species::ROCK, scene.rocks, scene.area_m);
         for (const Climate::InstanceShare &t : SDFTable::counted(default_species(), Archetype::Species::TREE, scene.trees, scene.area_m)) {
             grown.push_back(t);
@@ -401,7 +400,7 @@ TEST_CASE("SDFCascade table: the field step between LOD L and L+1 stays within t
         param.skirt_depth = MAX(param.skirt_depth, sdf.min_skirt_depth(param, 15));
         sdf.configure(param, 15);
         const int64_t window = std::llround(scene.area_m / double(scene.voxel));
-        const VoxelPos centre(std::llround(SDFTable::Zone().x_m / double(scene.voxel)), 0, std::llround(SDFTable::Zone().z_m / double(scene.voxel)));
+        const VoxelPos centre(std::llround(SDFTable::Region().x_m / double(scene.voxel)), 0, std::llround(SDFTable::Region().z_m / double(scene.voxel)));
         const int64_t above = std::llround(scene.above_m / double(scene.voxel));
         const int64_t ground_c = sdf.ground_at(centre.x, centre.z).y;
         for (int lod = 0; lod <= 6; lod++) {
@@ -527,8 +526,8 @@ TEST_CASE("SDFCascade table: list lengths are flat in the number of instances at
         for (int lod = 0; lod <= 12; lod++) {
             for (uint32_t i = 0; i < 48; i++) {
                 const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ i, uint32_t(lod), 0x7111u });
-                const int64_t x = std::llround((SDFTable::Zone().x_m + (double(h.x >> 8) / 16777216.0 - 0.5) * area) / 0.5);
-                const int64_t z = std::llround((SDFTable::Zone().z_m + (double(h.y >> 8) / 16777216.0 - 0.5) * area) / 0.5);
+                const int64_t x = std::llround((SDFTable::Region().x_m + (double(h.x >> 8) / 16777216.0 - 0.5) * area) / 0.5);
+                const int64_t z = std::llround((SDFTable::Region().z_m + (double(h.y >> 8) / 16777216.0 - 0.5) * area) / 0.5);
                 snap->chunk_list(chunk_at_voxel(VoxelPos(x, t.sdf.ground_at(x, z).y, z), lod, t.param), list);
                 longest[run][lod] = MAX(longest[run][lod], int64_t(list.size()));
             }
@@ -719,7 +718,6 @@ TEST_CASE("SDFCascade table: a streamed chunk's list folds like the CPU's points
     ChunkParam param;
     param.voxel_size = 0.05f;
     GroundSDF sdf;
-    sdf.set_zone(SDFTable::Zone{ 40.0 });
     sdf.set_instances(SDFTable::counted(default_species(), Archetype::Species::TREE, 30, 40.0));
     param.skirt_depth = MAX(param.skirt_depth, sdf.min_skirt_depth(param, 18));
     sdf.configure(param, 18);
@@ -728,7 +726,7 @@ TEST_CASE("SDFCascade table: a streamed chunk's list folds like the CPU's points
     if (stream == nullptr) {
         return;
     }
-    const int64_t x = std::llround(SDFTable::Zone().x_m / 0.05), z = std::llround(SDFTable::Zone().z_m / 0.05);
+    const int64_t x = std::llround(SDFTable::Region().x_m / 0.05), z = std::llround(SDFTable::Region().z_m / 0.05);
     const VoxelPos centre(x, sdf.ground_at(x, z).y, z);
     // An edit over the centre: a sphere smooth-unioned into the canopy, after the streamed records in fold order.
     const uint32_t scene_end = sdf.get_snapshot()->records.size();
@@ -880,9 +878,9 @@ TEST_CASE("SDFCascade table: the fold variant culls per cube, the bare variants 
     CHECK(glsl_reserved_words_used("uint ok; /* unterminated sample") == std::vector<std::string>());
 }
 
-// The features' candidates are the base's points: a zone over high ground still holds them (its box centred on the base;
-// centred on the ground, it ended above the base), and a cell too large is refused.
-TEST_CASE("SDFCascade table: a zone over ground far above the base keeps its features") {
+// The features' candidates are the base's points: a feature region over high ground still holds them (its box centred on
+// the base; centred on the ground, it ended above the base), and a cell too large is refused.
+TEST_CASE("SDFCascade table: a feature region over ground far above the base keeps its features") {
     ChunkParam param;
     param.voxel_size = 0.5f;
     GroundSDF probe;
@@ -898,7 +896,7 @@ TEST_CASE("SDFCascade table: a zone over ground far above the base keeps its fea
     }
     CHECK_OR_RETURN(found);
     GroundSDF sdf;
-    sdf.set_zone(SDFTable::Zone{ side_m, x_m, z_m });
+    sdf.set_feature_region(SDFTable::Region{ side_m, x_m, z_m });
     sdf.set_features({ Climate::FeatureShare{ "floating_island", 8.0, 1.0, 2.0, 3.0 } });
     sdf.configure(param, 15);
     const ov::Value stats = sdf.get_gpu_table()->get_stats();

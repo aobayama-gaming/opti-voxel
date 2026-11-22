@@ -1,21 +1,17 @@
 ## Named argument sets shared by bench.gd and player.gd: `--preset=NAME` puts the preset's arguments
 ## before the command line's, so an explicit argument overrides the preset's.
 
+const FOREST5CM := ["--world=res://worlds/forest5cm.world.json", "--lod_error=2", "--altitude=20",
+	"--cam_pos=-52,320,-95", "--above_ground=5", "--pitch=-5", "--yaw=-90", "--fly_dist=150", "--fly_seconds=6"]
+
 const PRESETS := {
-	# The perf target: a 5 cm forest at lod_error 2. The camera args place the bench camera 5 m above
-	# the ground at the main_scene spawn, looking along the fly path (+X); the player ignores them and
-	# starts --altitude metres above the ground (the bench ignores that one).
-	"forest5cm": ["--world=res://worlds/forest5cm.world.json", "--lod_error=2", "--altitude=20",
-		"--cam_pos=-52,320,-95", "--above_ground=5", "--pitch=-5", "--yaw=-90", "--fly_dist=150", "--fly_seconds=6"],
-	# forest5cm ten times wider in area at the same density (one tree per 25 m^2): 40,000 trees on 1 km.
-	"forest5cm_x10": ["--world=res://worlds/forest5cm_x10.world.json", "--lod_error=2", "--altitude=20",
-		"--cam_pos=-52,320,-95", "--above_ground=5", "--pitch=-5", "--yaw=-90", "--fly_dist=150", "--fly_seconds=6"],
-	# The streamed forest at forest5cm's density on 5 x 5 km (1M trees) and 32 x 32 km (41M): only the keys the view asks
-	# for are computed, so the same configure time and memory as forest5cm.
-	"forest5cm_1m": ["--world=res://worlds/forest5cm_1m.world.json", "--lod_error=2", "--altitude=20",
-		"--cam_pos=-52,320,-95", "--above_ground=5", "--pitch=-5", "--yaw=-90", "--fly_dist=150", "--fly_seconds=6"],
-	"forest5cm_41m": ["--world=res://worlds/forest5cm_41m.world.json", "--lod_error=2", "--altitude=20",
-		"--cam_pos=-52,320,-95", "--above_ground=5", "--pitch=-5", "--yaw=-90", "--fly_dist=150", "--fly_seconds=6"],
+	# The perf target: a 5 cm forest at lod_error 2, one tree per 25 m^2 over the whole ground (streamed: only the keys the
+	# view asks for are computed). The camera args place the bench camera 5 m above the ground at the main_scene spawn,
+	# looking along the fly path (+X); the player ignores them and starts --altitude metres above the ground (the bench
+	# ignores that one).
+	"forest5cm": FOREST5CM,
+	# The 1M viewer's name from when the forest stood on a 5 km square: the same forest now.
+	"forest5cm_1m": FOREST5CM,
 	# The look for videos (player only): the 1M forest of the climate's world, at error 2 front and back, FSR 2 from 50% then 2x2 pixel blocks, the flashlight, no mesher budget
 	# and the frame-time overlay, no SSAO and the sky's ambient light x1.5 (lighter under the trees; the LUT is kept). Run
 	# with `--render-thread safe` (FSR 2).
@@ -23,7 +19,7 @@ const PRESETS := {
 		"--cam_pos=-52,320,-95", "--above_ground=5", "--pitch=-5", "--yaw=-90",
 		"--lod_error_back=2", "--upscale=fsr2", "--render_scale=0.5",
 		"--pixelate=2", "--flashlight=1", "--mesher_budget=0", "--overlay=video", "--ssao=0", "--ambient=1.5"],
-	# Biome features (lava lakes, floating islands) within 2 km of the scene centre. The bench camera looks at a
+	# Biome features (lava lakes, floating islands) within 2 km of the scene centre (the world's feature_region). The bench camera looks at a
 	# lava lake from 60 m up, two floating islands behind it.
 	"biomes": ["--world=res://worlds/biomes.world.json", "--cam_pos=-560,2650,850", "--above_ground=60", "--yaw=45", "--pitch=-18"],
 }

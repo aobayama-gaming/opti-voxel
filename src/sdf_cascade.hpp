@@ -112,17 +112,37 @@ public:
     // The scenes' sites read their biome from the world's climate (SDFTable's sources, BiomePick).
     const Climate::Table *placing_climate() const override { return get_climate(); }
     const Terrain::LevelProgram *placing_program() const override { return &prog; }
+    // The world's lists, or a biome of climate_data listing instances or features (not compiled yet: min_skirt_depth is
+    // asked before configure).
+    bool places_instances() const override {
+        if (SDFTable::places_instances()) {
+            return true;
+        }
+        const ov::Value biomes = climate_data.get("biomes", ov::Value::array());
+        for (size_t i = 0; biomes.is_array() && i < biomes.size(); i++) {
+            const ov::Value &b = biomes[i];
+            for (const char *key : { "instances", "features" }) {
+                if (b.is_object() && b.has(key) && !b[key].is_empty()) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
     // Why configure() built no world, empty if it built the one it was given: a refused planet, climate (or none) or
     // species, or edit (SDFTable::set_edits). Then there is no program, no table and no skirts: nothing may sample it
     // (World::start, ClimateReport, CascadeCheck refuse it).
     const ov::str &get_world_error() const { return world_error; }
-    // Configured on p_world's planet, climate, species, band rule, edits, voxel size and LOD count (r_param.voxel_size
-    // set): get_world_error.
+    // Configured on p_world's planet, climate, species, instances (streamed), features and their region, band rule, edits,
+    // voxel size and LOD count (r_param.voxel_size set): get_world_error.
     const ov::str &configure_world(const WorldFile &p_world, ChunkParam &r_param) {
         planet_radius_m = p_world.planet_radius_m;
         planet_ring_m = p_world.planet_ring_m;
         climate_data = p_world.climate_table;
         set_species(p_world.species);
+        set_instances(p_world.instances);
+        set_features(p_world.features);
+        set_feature_region(p_world.feature_region);
         set_instance_band(p_world.instance_band);
         set_edits(p_world.edits);
         r_param.voxel_size = float(p_world.voxel_m);

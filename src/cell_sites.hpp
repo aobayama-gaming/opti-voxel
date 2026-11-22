@@ -60,26 +60,27 @@ bool cell_site(const VoxelPos &p_cell, int64_t p_side, uint32_t p_salt, const Fi
 
 // cell_site of every cell meeting [p_lo, p_hi] (LOD0 voxels, inclusive) whose site lies in it, with its cell, in cell
 // order. The cells tried come from an absolute octree walk (nodes of p_side * 2^k voxels aligned on their own
-// multiples, from the coarsest level whose node holds the box) that reads the coarse field once at each node's centre
+// multiples, from the start level down) that reads the coarse field once at each node's centre
 // and keeps the node while the plane it gives crosses the node, give or take SITE_SLACK cells plus SITE_BEND node sides
 // (the ground bends away from the plane, and the cascade's field changes faster than its gradient over tens of metres);
 // a kept cell's reading is the one cell_site uses. An empty box costs one evaluation. Without p_snap, the sites stay on
-// the coarse plane (no LOD-0 evaluation: far proxies, which only weigh where the sites are). The walk starts at level
-// p_min_level at least: two boxes walked from the same level (each node at it holding them) test the same nodes over every
-// cell they share, so they keep the same sites there, by construction (a box's own level depends on its extent, and a
-// coarser ancestor may prune a cell a finer start keeps). On the worker pool (not from inside a pool task, unless it holds
-// an InlineParallelFor).
+// the coarse plane (no LOD-0 evaluation: far proxies, which only weigh where the sites are). The walk starts at
+// p_start_level, from every node of that level meeting the box (-1: the box's own walk_level, one node or a few): two
+// boxes walked from the same level test the same nodes over every cell they share, so they keep the same sites there, by
+// construction (a box's own level depends on its extent, and a coarser ancestor may prune a cell a finer start keeps). A
+// start level far finer than the box walks many nodes at once: a source's start (SITE_WALK_LEVEL) holds any tile it walks.
+// On the worker pool (not from inside a pool task, unless it holds an InlineParallelFor).
 struct CellSite {
     VoxelPos cell;
     Site site;
 };
 void surface_sites(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, uint32_t p_salt, const FieldFn &p_field, std::vector<CellSite> &r_out,
-        bool p_snap = true, int p_min_level = 0);
+        bool p_snap = true, int p_start_level = -1);
 // The nodes of p_side << p_level voxels (in node units, cell order) meeting [p_lo, p_hi] that surface_sites' walk from
-// p_min_level keeps down to that level: a node it drops holds no site of a box walked from p_min_level (a node's verdict
-// is its centre's reading, whatever the box). Every node meeting the box when the walk would start at p_level or below.
-// Same pool rule as surface_sites.
-void surface_nodes(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, const FieldBatchFn &p_field, int p_level, int p_min_level,
+// p_start_level keeps down to that level: a node it drops holds no site of a box walked from p_start_level (a node's
+// verdict is its centre's reading, whatever the box). Every node meeting the box when the walk would start at p_level or
+// below. Same pool rule as surface_sites.
+void surface_nodes(const VoxelPos &p_lo, const VoxelPos &p_hi, int64_t p_side, const FieldBatchFn &p_field, int p_level, int p_start_level,
         std::vector<VoxelPos> &r_out);
 // surface_sites of many boxes at once, each walk its own (box, cells, salt, snap, start level): the same sites, appended to
 // each walk's out in cell order. The walks advance in rounds (a level, then each snap step) and a round reads the field
@@ -91,7 +92,7 @@ struct SiteWalk {
     int64_t side = 0;
     uint32_t salt = 0;
     bool snap = true;
-    int min_level = 0;
+    int start_level = -1;
     std::vector<CellSite> *out = nullptr;
 };
 struct WalkStats {
@@ -101,8 +102,17 @@ struct WalkStats {
 };
 void surface_sites_many(const SiteWalk *p_walks, size_t p_count, const FieldBatchFn &p_field, WalkStats *r_stats = nullptr);
 
-// The level surface_sites starts a box at: the coarsest whose nodes (p_side << level voxels) hold its extent.
+// The level surface_sites starts a box at by default: the coarsest whose nodes (p_side << level voxels) hold its extent.
 int walk_level(const VoxelBox &p_box, int64_t p_side);
+// Where every walk of a procedural source's sites starts (CellScatter::start_level: its site tiles, its coarse part
+// tiles' site_tiles, a whole build's box), so a site is a function of its absolute cell alone, whatever box asked for
+// it: the coarsest level whose nodes (p_side << level LOD0 voxels of p_voxel_m metres) are at most SITE_WALK_NODE_M
+// wide (level 8 for 5 m cells, 5 for 30 m rocks; 0 when a cell is wider). A size in metres, not in cells: the walk's
+// plane test (SITE_BEND) holds over a km of the ground's relief, not over 5 km (a start at 2^10 cells dropped every
+// site of a 60 m forest on the template ground: its 5 km node's centre read 7 km deep). A few rounds above a site
+// tile's own level (each round one reading per tile, an ancestor shared by its neighbours read once).
+inline constexpr double SITE_WALK_NODE_M = 1500.0;
+int site_walk_level(int64_t p_side, double p_voxel_m);
 inline constexpr double SITE_SLACK = 0.25;
 inline constexpr double SITE_BEND = 0.25;
 

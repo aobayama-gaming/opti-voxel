@@ -139,7 +139,7 @@ TEST_CASE("BiomePick: a forest grows each site's species from its biome, at its 
         ChunkParam param;
         param.voxel_size = 0.05f;
         sdf->climate_data = p_climate;
-        sdf->set_zone(SDFTable::Zone{ 60.0 });
+        sdf->set_whole_region(SDFTable::Region{ 60.0 });
         sdf->set_instances(SDFTable::counted(default_species(), Archetype::Species::TREE, 160, 60.0));
         sdf->set_stream_sources(false);
         sdf->set_moment_blobs(false);
@@ -152,6 +152,18 @@ TEST_CASE("BiomePick: a forest grows each site's species from its biome, at its 
     const auto chosen = forest(two_biomes(conifers, "[]"));
     CLIMATE_REQUIRE(chosen->get_climate() != nullptr);
     const std::vector<TreeSpan> &trees = chosen->get_trees();
+    // The source's walk start prunes no site the box's own walk keeps (a start at 2^10 cells, 4.7 km nodes, dropped every
+    // one on the template ground).
+    CLIMATE_REQUIRE(!chosen->get_sources().empty());
+    {
+        const CellScatter &sc = chosen->get_sources()[0].scatter;
+        const VoxelBox box = chosen->whole_box();
+        std::vector<CellSite> own, from_start;
+        surface_sites(box.lo, box.hi, sc.side, sc.salt, sc.ground, own, true, -1);
+        surface_sites(box.lo, box.hi, sc.side, sc.salt, sc.ground, from_start, true, sc.start_level);
+        CHECK(!own.empty());
+        CHECK(from_start.size() == own.size());
+    }
     CHECK(trees.size() > 10);
     CHECK(chosen->get_sources().size() == 1); // the world's list grows nowhere: not a source
     for (const TreeSpan &t : trees) {

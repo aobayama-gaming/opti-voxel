@@ -60,21 +60,6 @@ void InstanceStream::stop() {
     jobs.clear(); // the running drain tasks find nothing more
 }
 
-uint32_t InstanceStream::slot_budget(const std::vector<std::shared_ptr<const ScatterSource>> &p_sources) {
-    double records = 0.0;
-    for (const std::shared_ptr<const ScatterSource> &s : p_sources) {
-        const CellScatter &c = s->setup().scatter;
-        if (!c.valid()) {
-            continue;
-        }
-        // A surface crosses the zone: about one site per cell of its widest face.
-        const VoxelPos e = c.zone.hi - c.zone.lo + VoxelPos(1, 1, 1);
-        const double face = std::max({ double(e.x) * double(e.y), double(e.y) * double(e.z), double(e.z) * double(e.x) });
-        records += face / (double(c.side) * double(c.side)) * s->profile().records_per_site;
-    }
-    return uint32_t(std::clamp(2.0 * records, double(SLOTS_MIN), double(SLOTS_MAX)));
-}
-
 void InstanceStream::chunk_keys(const ChunkId &p_chunk, std::vector<SourceKey> &r_out) const {
     r_out.clear();
     thread_local std::vector<SourceKey> one;
@@ -530,7 +515,7 @@ bool InstanceStream::place(Entry &r_entry) {
         if (!room) {
             if (stats.slots_full++ == 0) {
                 OV_ERR_PRINT(ov::format("InstanceStream: %d records don't fit the %d slots, even past the keys asked for in the last %d frames: the "
-                                        "chunks needing them wait (InstanceStream::slot_budget).",
+                                        "chunks needing them wait (InstanceStream::SLOTS_MAX).",
                         r_entry.count, settings.slot_capacity, GRACE_FRAMES));
             }
             // Its parked chunks go back to their mesher (their pins released, room comes back): asked again, LATER.

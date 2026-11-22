@@ -39,7 +39,9 @@ public:
         // recenter() moves the render origin to the camera once it is farther than this from it (metres, on any axis):
         // render positions stay small, so float precision holds anywhere in the world. 0: never (a fixed origin).
         float rebase_distance_m = 1024.0f;
-        bool archetype_stream = true; // false: every source walked at configure (the oracle of the stream)
+        // false: every source placed whole at configure (the stream's oracle), which needs a box only the checks give
+        // (SDFTable::set_whole_region): a world with instances is refused.
+        bool archetype_stream = true;
         float lod_pixel_error = 2.0f;
         float lod_pixel_error_back = 0.0f; // 0: lod_pixel_error everywhere
         std::vector<float> lod_pixel_errors; // per LOD, replaces lod_pixel_error (0 or past the end: lod_pixel_error)

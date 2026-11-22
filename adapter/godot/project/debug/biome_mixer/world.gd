@@ -11,7 +11,7 @@ const EngineInfo := preload("res://debug/biome_mixer/engine_info.gd")
 # The world's keys that are the mixer's, not the file's.
 const MIXER_KEYS := ["fields", "path", "current", "mode", "view", "mixer_version", "name"]
 # The world file's keys that may name a file (WorldFile: relative to the world file).
-const SECTIONS := ["engine", "climate", "look", "zone", "instances", "features", "species"]
+const SECTIONS := ["engine", "climate", "look", "instances", "features", "species"]
 # The format the mixer writes (3: single-octave notes, warp nodes; 4: multifractals with a parent).
 const VERSION := 4
 # The World mode's view settings, beside the Biome mode's (the mixer's VIEW_DEFAULTS) in the world's "view".

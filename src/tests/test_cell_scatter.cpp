@@ -43,12 +43,12 @@ bool same_record(const TableRecord &p_a, const TableRecord &p_b) {
 
 } // namespace
 
-TEST_CASE("Cell scatter: two halves of a box give the whole, sites and records; accept leaves sites out") {
+TEST_CASE("Cell scatter: two halves of a box give the whole, sites and records, as a wider box does; accept leaves sites out") {
     const VoxelPos origin(int64_t(1) << 36, 2000, -(int64_t(1) << 35));
     CellScatter s;
     s.salt = 0xABCDu;
     s.side = 60;
-    s.zone = VoxelBox{ origin - VoxelPos(1500, 600, 1500), origin + VoxelPos(1500, 600, 1500), true };
+    s.start_level = site_walk_level(s.side, 0.05);
     s.ground = hills_field(origin);
     s.up = [](const VoxelPos &) { return UP_Y; };
     s.generate = two_spheres;
@@ -56,11 +56,19 @@ TEST_CASE("Cell scatter: two halves of a box give the whole, sites and records; 
     if (!(s.valid())) {
         return;
     }
-    // A query wider than the zone: clipped to it.
-    std::vector<CellSite> whole, a, b;
-    s.sites(s.zone.grown(5000), whole);
+    const VoxelBox box{ origin - VoxelPos(1500, 600, 1500), origin + VoxelPos(1500, 600, 1500), true };
+    std::vector<CellSite> whole, wider, a, b;
+    s.sites(box, whole);
+    // A wider query keeps the same sites in the box (every walk starts at start_level: a site is its cell's alone).
+    s.sites(box.grown(5000), wider);
+    wider.erase(std::remove_if(wider.begin(), wider.end(), [&box](const CellSite &p_s) { return !box.contains(p_s.site.base); }), wider.end());
+    CHECK(wider.size() == whole.size());
+    for (size_t i = 0; i < ov::min(wider.size(), whole.size()); i++) {
+        CHECK(wider[i].cell == whole[i].cell);
+        CHECK(wider[i].site.base == whole[i].site.base);
+    }
     const int64_t mid = origin.x + 137;
-    VoxelBox left = s.zone, right = s.zone;
+    VoxelBox left = box, right = box;
     left.hi.x = mid;
     right.lo.x = mid + 1;
     s.sites(left, a);
@@ -79,7 +87,7 @@ TEST_CASE("Cell scatter: two halves of a box give the whole, sites and records; 
         CHECK(halves[i].site.base == whole[i].site.base);
         CHECK(halves[i].site.seed == whole[i].site.seed);
         CHECK(halves[i].site.variant == whole[i].site.variant);
-        CHECK(s.zone.contains(whole[i].site.base));
+        CHECK(box.contains(whole[i].site.base));
         std::vector<TableRecord> x, y;
         s.grow(whole[i].site, -1, x);
         s.grow(halves[i].site, -1, y);
@@ -94,7 +102,7 @@ TEST_CASE("Cell scatter: two halves of a box give the whole, sites and records; 
     // Accept: the sites left out are exactly the refused ones.
     s.accept = [mid](const VoxelPos &p_v) { return p_v.x > mid; };
     std::vector<CellSite> accepted;
-    s.sites(s.zone, accepted);
+    s.sites(box, accepted);
     CHECK(accepted.size() == b.size());
 }
 
@@ -104,7 +112,7 @@ TEST_CASE("Cell scatter: the profile bounds every record of the forest and the s
     ChunkParam param;
     param.voxel_size = 0.05f;
     GroundSDF sdf;
-    sdf.set_zone(SDFTable::Zone{ 80.0 });
+    sdf.set_whole_region(SDFTable::Region{ 80.0 }); // the box whose sites are checked (the sources stream)
     std::vector<Climate::InstanceShare> grown = SDFTable::counted(default_species(), Archetype::Species::TREE, 200, 80.0);
     for (const Climate::InstanceShare &r : SDFTable::counted(default_species(), Archetype::Species::ROCK, 400, 80.0)) {
         grown.push_back(r);
@@ -121,7 +129,7 @@ TEST_CASE("Cell scatter: the profile bounds every record of the forest and the s
         CAPTURE(name);
         const SourceProfile profile(sdf.get_library(), source.scatter, sdf.record_finish(), MomentLayerParams(), 18);
         std::vector<CellSite> sites;
-        source.scatter.sites(source.scatter.zone, sites);
+        source.scatter.sites(sdf.whole_box(), sites);
         int64_t records = 0, outside = 0;
         std::vector<TableRecord> grown;
         for (const CellSite &cs : sites) {

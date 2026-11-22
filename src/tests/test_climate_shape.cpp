@@ -106,7 +106,7 @@ TEST_CASE("Climate shape: the step between LOD L and L+1 stays within the skirt 
     for (const auto &[path, lods] : { std::pair{ "res://climate/example.json", 15 }, std::pair{ "res://climate/eight_biomes_test.json", 15 }, std::pair{ "res://climate/programs_test.json", 15 },
                  std::pair{ "res://climate/shaped_test.json", 15 } }) {
         CAPTURE(std::string(path));
-        ClimateSDF c(path, lods, 1e6f);
+        ClimateSDF c(path, lods, 1e6f, true, true); // the ground's step: its instances and features left out
         CLIMATE_REQUIRE(c.sdf.get_climate() != nullptr);
         const double vs = 0.05;
         for (const int lod : { 0, 3, 6, 9, 12 }) {
@@ -154,9 +154,7 @@ TEST_CASE("Climate shape: the level shader's text is filled, the generic one the
                  "res://climate/caves_test.json", "res://climate/graph_test.json", "res://climate/notes_test.json" }) {
         CAPTURE(std::string(path));
         for (const bool specialize : { true, false }) {
-            ov::Value data;
-            CHECK(load_table(path, data) == ov::str());
-            ClimateSDF c(data, 15, specialize);
+            ClimateSDF c(path, 15, -1.0f, specialize);
             CLIMATE_REQUIRE(c.sdf.get_climate() != nullptr);
             for (const bool fold : { false, true }) {
                 Cascade::ShaderParams params;

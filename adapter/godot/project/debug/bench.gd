@@ -66,8 +66,9 @@ extends Node3D
 ##                                planet, climate, look (default: the scene's, res://worlds/default.world.json)
 ##   --terrain=shapes             the hard-CSG shapes gallery: --world=res://worlds/shapes.world.json (a constant
 ##                                ground, the gallery in its edits file)
-##   Instances (around x -50 z -150 m, on the ground):
-##   --stream=0                   place the scatter and the forest whole at configure instead of streaming them
+##   Instances (wherever the ground is, streamed):
+##   --stream=0                   place them whole at configure: refused for a world with instances (a whole build
+##                                needs a box only the checks give, SDFTable::set_whole_region)
 ##   --lod_error=F                LOD screen-space error target (default 2.0; higher = coarser)
 ##   --lod_error_back=F           error outside the view cone, reached behind the camera (default 0 = lod_error)
 ##   --lod_errors=F,F,...         error per LOD from LOD 0 (0 or past the list: lod_error); sets each LOD's chunk count

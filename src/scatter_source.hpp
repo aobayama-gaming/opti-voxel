@@ -19,10 +19,10 @@
 //   - a proxy tile (SourceKey::PROXIES) of a far layer L, on its blob-tile grid: the proxies' walk of its own box; a blob
 //     tile reads the proxy tiles its region meets (far_items), so each is walked once for the blob tiles around it.
 // - A part tile of LOD L (SourceKey::PARTS): a cube of part_tile_side(L) voxels, its side PART_TILE_CELLS source cells
-//   doubled until it holds two chunks of the LOD. It grows the sites of its box in the zone (CellScatter::grow, finished
+//   doubled until it holds two chunks of the LOD. It grows the sites of its box (CellScatter::grow, finished
 //   like the table's) and keeps one group per site: at LOD 0 every record (a record no LOD lists still weighs in the
 //   blobs), coarser the ones listed at L. A LOD-0 tile reads its site tile (1:1: the near layers read the sites through
-//   it); a coarser one reads the site tiles of its cube that can hold a site (the zone-level walk stopped at their level,
+//   it); a coarser one reads the site tiles of its cube that can hold a site (the source's walk stopped at their level,
 //   CellScatter::site_tiles: a few readings per tile, no air tile asked for) and merges them in cell order, so every LOD
 //   shares the site tiles' walks and snaps. A LOD whose side
 //   is a finer LOD's has no key of its own: its chunks read that LOD's (part_key_lod) and filter at their LOD. A chunk
@@ -37,7 +37,7 @@
 //   - the layers above: a cell holds several sites, then thousands, and reading every record is out of the question: the
 //     items are proxies, one per cell of 1 / PROXY_PER_CELL layer cell along the surface (surface_sites, unsnapped, the
 //     PROXIES tiles around it), each what the profile's mean site of its class (a tree's species) has lost at the layer
-//     times the sites its patch of ground holds in the zone. Their cost per tile is the same at any layer and any site count.
+//     times the sites its patch of ground holds. Their cost per tile is the same at any layer and any site count.
 namespace Archetype {
 
 struct SourceKey {
@@ -137,13 +137,10 @@ public:
     VoxelBox tile_box(const SourceKey &p_key) const;
     // The side of a layer's proxy cells (voxels).
     int64_t proxy_side(int p_layer) const { return ov::max<int64_t>(1, layer_cell(p_layer) / PROXY_PER_CELL); }
-    // Where a layer's proxies weigh: the zone grown by a proxy cell (outside it a proxy weighs nothing).
-    VoxelBox proxy_zone(int p_layer) const { return set.scatter.zone.grown(proxy_side(p_layer)); }
-    // The box a far layer's blob tile reads proxies in: its cells and MARGIN_CELLS past them, plus the records' reach, in
-    // proxy_zone.
+    // The box a far layer's blob tile reads proxies in: its cells and MARGIN_CELLS past them, plus the records' reach.
     VoxelBox proxy_region(const SourceKey &p_key) const;
-    // The level a layer's proxy walks start at (surface_sites' p_min_level): an unclipped region's, so a proxy tile keeps
-    // the sites a region walk would over it, by construction.
+    // The level a layer's proxy walks start at (surface_sites' p_start_level): a region's, so a proxy tile keeps the sites
+    // a region walk would over it, by construction.
     int proxy_level(int p_layer) const;
 
     // The keys whose records' box test at p_lod can pass somewhere in [p_lo, p_hi] (LOD0 voxels, inclusive), in key order.
@@ -151,11 +148,11 @@ public:
     // keys() over a chunk's samples.
     void chunk_keys(const ChunkId &p_chunk, const ChunkParam &p_param, std::vector<SourceKey> &r_out) const;
     // How far from the ground the records listed at p_lod or finer reach with their influence margins (voxels; 0: none):
-    // the discoverer keeps a node of the zone whose corners are this close to the ground (SDFTable::cull_exempt).
+    // the discoverer keeps a node whose corners are this close to the ground (SDFTable::cull_exempt).
     int64_t ground_reach(int p_lod) const;
-    // The keys p_key's content reads: a LOD-0 part tile its site tile (if it meets the zone), a part layer's blob tile the
-    // LOD-0 part tiles around it (key order), a far layer's the proxy tiles its region meets (proxy_region, key order), a
-    // coarser part tile the site tiles of its cube the zone's walk keeps (key order); none otherwise. A coarse part tile's
+    // The keys p_key's content reads: a LOD-0 part tile its site tile, a part layer's blob tile the LOD-0 part tiles
+    // around it (key order), a far layer's the proxy tiles its region meets (proxy_region, key order), a coarser part tile
+    // the site tiles of its cube the source's walk keeps (key order); none otherwise. A coarse part tile's
     // walks its site tiles' octree down to their level: on the worker pool (not from a pool task without InlineParallelFor).
     void inputs(const SourceKey &p_key, std::vector<SourceKey> &r_out) const;
 
@@ -182,9 +179,8 @@ private:
     std::vector<int> part_key_lods; // part_key_lod per LOD
     std::vector<int64_t> ground_reaches; // ground_reach per LOD
 
-    // Appends the keys (p_kind, p_lod) of the tiles of p_side voxels that meet p_box and the zone grown by p_zone_grow,
-    // in cell order.
-    void append_tiles(int p_kind, int p_lod, int64_t p_side, const VoxelBox &p_box, int64_t p_zone_grow, std::vector<SourceKey> &r_out) const;
+    // Appends the keys (p_kind, p_lod) of the tiles of p_side voxels that meet p_box, in cell order.
+    void append_tiles(int p_kind, int p_lod, int64_t p_side, const VoxelBox &p_box, std::vector<SourceKey> &r_out) const;
     // How far a layer's blobs can reach from their tile's box (voxels; the influence margin at the layer excluded).
     int64_t blob_reach(int p_layer) const;
     // How far a tile's records can pass a box test from its box at a LOD: a part tile's (from its bases), a blob tile's.

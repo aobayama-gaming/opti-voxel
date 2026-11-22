@@ -148,7 +148,7 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
     }
     world_origin_chunk = chunk_param.origin_chunk;
 
-    sdf->set_zone(content.zone);
+    sdf->set_feature_region(content.feature_region);
     sdf->set_instances(content.instances);
     sdf->set_species(content.species);
     sdf->set_stream_sources(config.archetype_stream);

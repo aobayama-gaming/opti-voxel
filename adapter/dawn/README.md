@@ -73,8 +73,8 @@ google-chrome --ozone-platform=x11 --enable-unsafe-webgpu \
 Under Wayland its WebGPU canvas loses the device on the first frame (`vkAllocateMemory failed with
 VK_ERROR_OUT_OF_DEVICE_MEMORY`); so does headless Chrome's, whose offscreen `?shot=` still works.
 
-The URL query gives the flags: `ov_dawn.html?upscale=fsr3&pixelate=2&world=res://worlds/forest5cm_1m.world.json` is
-`--viewer --upscale=fsr3 --pixelate=2 --world=res://worlds/forest5cm_1m.world.json` (the 1M forest at 5 cm); `?check` (or `frame-check`, `cascade-check`) runs that
+The URL query gives the flags: `ov_dawn.html?upscale=fsr3&pixelate=2&world=res://worlds/forest5cm.world.json` is
+`--viewer --upscale=fsr3 --pixelate=2 --world=res://worlds/forest5cm.world.json` (the 5 cm forest); `?check` (or `frame-check`, `cascade-check`) runs that
 check and `?shot=/x.png` renders offscreen into the page's file system (`Module.FS.readFile('/x.png')`). A click locks
 the mouse, Escape frees it. `build.sh` needs emsdk (`EMSDK`, at the version of `web/emsdk_version.txt`) and fetches the
 Dawn of `web/dawn_revision.txt` with its dependencies into `OV_DAWN_SRC` when there is no checkout there (it warns on

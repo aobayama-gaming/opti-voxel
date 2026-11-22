@@ -5,11 +5,12 @@ One terrain (the cascade), one instance path (its table), one world file. Read b
 - **A run loads a world.** Every terrain setting is data: `World::Settings::world_path` (`VoxelTerrain.world_path`, `--world=PATH`
   on bench, player, Dawn and the tools; the web's `?world=`) names a world file (`WorldFile`, format in `src/world_file.hpp`). Its
   `engine` (a path or inline: `voxel_m`, `lods`, the master variables) and `climate` (a path or inline: the fields, none for no
-  fields) sit beside `planet`, `look`, `zone`, `instances`, `species` (a path or the list), `features`, `biomes` (a path
-  or the list), `instance_band` (false: every instance whole at every LOD) and `edits` (a path or inline: the edits file
+  fields) sit beside `planet`, `look`, `instances` (they grow over the whole ground, streamed), `species` (a path or the list),
+  `features` and `feature_region` (the square they stand in until they stream: `SDFTable::set_feature_region`; a world
+  whose lists name features needs one), `biomes` (a path or the list), `instance_band` (false: every instance whole at every LOD) and `edits` (a path or inline: the edits file
   below); every key is optional to the file (the cascade refuses no `biomes`), and an empty `world_path` is `WorldFile::DEFAULT_PATH`
   (`worlds/default.world.json`). A variant is another file: `adapter/godot/project/worlds/` holds the presets' and the
-  tools' (`default`, `cm`, `lods25`, `biomes`, `forest5cm*`, `earth`, `earth25`, `tiny`, `tiny_biomes`, `shapes`), `climate/world.json`
+  tools' (`default`, `cm`, `lods25`, `biomes`, `forest5cm`, `earth`, `earth25`, `tiny`, `tiny_biomes`, `shapes`), `climate/world.json`
   the game's (`--preset=video`). `--preset=` names keep working. **The world is the file:** the ground is the biomes'
   graphs, compiled into one `Terrain::LevelProgram` (`docs/climate.md`, `docs/cascade-v2.md`), and a world names its
   ground: one without biomes is refused (`SDFCascade::attach_climate`: "a world names its ground"). The bare worlds name

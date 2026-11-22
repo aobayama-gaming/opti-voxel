@@ -91,7 +91,7 @@ The SDF program IR, the GPU table, the locality and band rules, the index and ru
   list build ms. `SDFBase::cull_exempt` (`near_instance`, from the index: per-LOD occupancy + coarser
   nodes' boxes) feeds the discoverer's no-cull rule, band or not: a node near an instance's box is never
   culled (asked only when the corners would cull; a streamed source's node also while its nearest corner is within
-  `ground_reach(lod)` past the cull band, in its zone). FrameSpike's table probe checks the library + fold (with
+  `ground_reach(lod)` past the cull band, anywhere: the sources have no end). FrameSpike's table probe checks the library + fold (with
   erosion) GPU == CPU. **To add a
   library type:** a `Builder` in `archetype_table.cpp` using `t_local` / `t_param` / `t_perlin*` and a
   bounds lambda of the params, then `DefLibrary::add` (a new *op* also needs the "Adding an op" list).
@@ -123,6 +123,6 @@ The SDF program IR, the GPU table, the locality and band rules, the index and ru
   `VoxelTerrain.restart_world` keeps. The bench's
   `--scenario=edit --edits=N` scripts add / move / remove edits, then settles; audit /
   discovery_audit should stay `ok`. The world file's rock entries (`instances`, a biome's or the world's: a
-  rock or pillar of its `species`, `boulder` or `pillar` in `worlds/species.json`, and its `cell_m`) scatter rocks and pillars over its `zone` (a square of `side_m` metres
-  around `centre_m`, default (-50, -150) m: `SDFTable::Zone`), one per cell site (`SCATTER_SITE_SALT` for a kind's finest
+  rock or pillar of its `species`, `boulder` or `pillar` in `worlds/species.json`, and its `cell_m`) scatter rocks and pillars over the whole ground (streamed;
+  `SDFTable::set_whole_region`'s square for a whole build), one per cell site (`SCATTER_SITE_SALT` for a kind's finest
   cell), the species its biome's (BiomePick), turned to `up_at`.

@@ -33,7 +33,6 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_cloud_weather", "cover", "wind_mps"), &VoxelTerrain::set_cloud_weather);
     ClassDB::bind_method(D_METHOD("set_sun_direction", "towards_sun"), &VoxelTerrain::set_sun_direction);
     ClassDB::bind_method(D_METHOD("get_planet_radius"), &VoxelTerrain::get_planet_radius);
-    ClassDB::bind_method(D_METHOD("get_world_zone_m"), &VoxelTerrain::get_world_zone_m);
     ClassDB::bind_method(D_METHOD("set_archetype_stream", "enabled"), &VoxelTerrain::set_archetype_stream);
     ClassDB::bind_method(D_METHOD("get_archetype_stream"), &VoxelTerrain::get_archetype_stream);
     ClassDB::bind_method(D_METHOD("set_lod_pixel_error", "error"), &VoxelTerrain::set_lod_pixel_error);
@@ -316,10 +315,6 @@ void VoxelTerrain::set_world_origin_z(int64_t p_voxel) {
 
 int64_t VoxelTerrain::get_world_origin_z() const {
     return cfg().world_origin_request.z;
-}
-
-double VoxelTerrain::get_world_zone_m() const {
-    return world->world_file().zone.side_m;
 }
 
 double VoxelTerrain::get_planet_radius() const {

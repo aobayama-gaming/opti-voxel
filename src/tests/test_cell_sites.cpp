@@ -350,7 +350,7 @@ TEST_CASE("Cell sites: boxes walked in lockstep keep each box's sites, in rounds
     int64_t sites = 0;
     for (size_t w = 0; w < walks.size(); w++) {
         const SiteWalk &s = walks[w];
-        surface_sites(s.box.lo, s.box.hi, s.side, s.salt, ground, want[w], s.snap, s.min_level);
+        surface_sites(s.box.lo, s.box.hi, s.side, s.salt, ground, want[w], s.snap, s.start_level);
         std::vector<Site> expected;
         for (const CellSite &cs : want[w]) {
             expected.push_back(cs.site);
@@ -367,4 +367,20 @@ TEST_CASE("Cell sites: boxes walked in lockstep keep each box's sites, in rounds
     CHECK(stats.rounds <= level + 1 + SNAP_STEPS + 1);
     CHECK(stats.unique < stats.readings);
     MESSAGE(walks.size(), " walks: ", stats.rounds, " rounds, ", stats.readings, " readings asked, ", stats.unique, " read");
+}
+
+// A source's walk starts at nodes of at most SITE_WALK_NODE_M, whatever its cell or voxel: the plane test's bend holds
+// over a km of relief (a start at 2^10 cells, 4.7 km nodes, pruned a whole forest on the template ground).
+TEST_CASE("Cell sites: a source's walk starts at nodes of at most SITE_WALK_NODE_M") {
+    CHECK(site_walk_level(100, 0.05) == 8); // 5 m cells: 1.28 km
+    CHECK(site_walk_level(95, 0.05) == 8);
+    CHECK(site_walk_level(600, 0.05) == 5); // 30 m rocks: 960 m
+    CHECK(site_walk_level(10, 0.5) == 8); // 5 m cells at 0.5 m
+    CHECK(site_walk_level(40000, 0.05) == 0); // a cell wider than the node
+    CHECK(site_walk_level(0, 0.05) == 0);
+    for (const int64_t side : { int64_t(16), int64_t(60), int64_t(140), int64_t(1000) }) {
+        const int l = site_walk_level(side, 0.05);
+        CHECK(std::ldexp(double(side) * 0.05, l) <= SITE_WALK_NODE_M);
+        CHECK(std::ldexp(double(side) * 0.05, l + 1) > SITE_WALK_NODE_M);
+    }
 }

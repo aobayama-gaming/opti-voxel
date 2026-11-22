@@ -2,9 +2,12 @@
 
 The numbers perf PRs are measured against (`tools/bench_ab.sh`, `bench.sh --profile=1`).
 
-- **Perf target:** `--preset=forest5cm` (`adapter/godot/project/debug/presets.gd`: 4,000 trees, 5 cm voxels, lod_error 2,
-  the camera in the forest) with `--scenario=fly`, aiming at 60 fps while moving at error 2 (stretch: 1).
-  Perf PRs report it next to the default bench; the player takes the same `--preset` (main_scene).
+- **Perf target:** `--preset=forest5cm` (`adapter/godot/project/debug/presets.gd`: one tree per 25 m^2 over the whole
+  ground, 5 cm voxels, lod_error 2, the camera in the forest) with `--scenario=fly`, aiming at 60 fps while moving at
+  error 2 (stretch: 1). Perf PRs report it next to the default bench; the player takes the same `--preset` (main_scene).
+  **Every forest number below is stale** (the engine cleanup, its 5/5): they were measured on a forest standing on a
+  square (forest5cm's 316 m: 4,000 trees; the 1M forest's 5 km), and the forest now has no end, so the view meets trees
+  out to the horizon. A new baseline is owed on the unbounded forest before the next perf PR compares against them.
   Baseline on the cascade (PR #48, 1280x720, budget 4, 2 runs): steady frame p50 13.7 ms (render GPU 14.0), fly out
   p50 11.7 ms, back 13.5 ms, 30.4 M live triangles, 865 MB of pages; open: the fly drops half its chunks on the way
   out and re-meshes for 6.4 s after the return (623 ms on the old fBm ground). The PR #34 numbers below were measured on

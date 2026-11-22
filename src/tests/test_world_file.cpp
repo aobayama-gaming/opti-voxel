@@ -23,8 +23,8 @@ TEST_CASE("WorldFile: every key is optional and defaults to the engine's default
     CHECK(w.climate_table.is_empty());
     CHECK(w.atmosphere);
     CHECK(w.clouds);
-    CHECK(w.zone.side_m == 0.0);
-    CHECK(w.zone.x_m == SDFTable::Zone().x_m);
+    CHECK(w.feature_region.side_m == 0.0);
+    CHECK(w.feature_region.x_m == SDFTable::Region().x_m);
     CHECK(w.instances.empty());
     CHECK(w.species.empty()); // a world names its species (worlds/species.json: today's)
 }
@@ -32,7 +32,7 @@ TEST_CASE("WorldFile: every key is optional and defaults to the engine's default
 TEST_CASE("WorldFile: inline sections reach their fields") {
     WorldFile w;
     CHECK(parse(R"({"engine": {"voxel_m": 0.05, "lods": 25}, "planet": {"radius_m": 2000, "ring_m": 9000},
-        "look": {"atmosphere": false, "atmosphere_scale": 2, "clouds": false}, "zone": {"side_m": 8, "centre_m": [3, -4]},
+        "look": {"atmosphere": false, "atmosphere_scale": 2, "clouds": false}, "feature_region": {"side_m": 8, "centre_m": [3, -4]},
         "instances": [{"species": "conifer", "cell_m": 5}, {"species": "boulder", "cell_m": 40, "share": 3}], "features": [{"kind": "lava_lake", "cell_m": 640, "chance": 0.6, "radius_m": [18, 45]}]})",
                   w) == ov::str());
     CHECK(w.voxel_m == 0.05);
@@ -42,9 +42,9 @@ TEST_CASE("WorldFile: inline sections reach their fields") {
     CHECK(!w.atmosphere);
     CHECK(w.atmosphere_scale == 2.0);
     CHECK(!w.clouds);
-    CHECK(w.zone.side_m == 8.0);
-    CHECK(w.zone.x_m == 3.0);
-    CHECK(w.zone.z_m == -4.0);
+    CHECK(w.feature_region.side_m == 8.0);
+    CHECK(w.feature_region.x_m == 3.0);
+    CHECK(w.feature_region.z_m == -4.0);
     CLIMATE_REQUIRE(w.instances.size() == 2);
     CHECK(w.instances[0].species == "conifer");
     CHECK(w.instances[0].cell_m == 5.0);
@@ -87,9 +87,10 @@ TEST_CASE("WorldFile: a refused file leaves the world untouched and says why") {
     w.lods = 3;
     CHECK(ov::contains(parse(R"({"trees_count": 1})", w), "unknown key 'trees_count'"));
     CHECK(ov::contains(parse(R"({"engine": {"voxels": 1}})", w), "unknown key 'voxels'"));
-    CHECK(ov::contains(parse(R"({"zone": {"cuont": 1}})", w), "unknown key 'cuont'"));
-    CHECK(ov::contains(parse(R"({"zone": {"centre_m": [1]}})", w), "centre_m is [x, z]"));
-    CHECK(ov::contains(parse(R"({"zone": {"side_m": -1}})", w), "side_m must be >= 0"));
+    CHECK(ov::contains(parse(R"({"zone": {"side_m": 316}})", w), "unknown key 'zone'")); // the instances have no square: they stream
+    CHECK(ov::contains(parse(R"({"feature_region": {"cuont": 1}})", w), "unknown key 'cuont'"));
+    CHECK(ov::contains(parse(R"({"feature_region": {"centre_m": [1]}})", w), "centre_m is [x, z]"));
+    CHECK(ov::contains(parse(R"({"feature_region": {"side_m": -1}})", w), "side_m must be >= 0"));
     CHECK(ov::contains(parse(R"({"instances": [{"species": "conifer"}]})", w), "'cell_m' is required"));
     CHECK(ov::contains(parse(R"({"instances": {"species": "conifer"}})", w), "a list of instances"));
     CHECK(ov::contains(parse(R"({"features": [{"kind": "lava_lake", "cell_m": 640, "radius_m": [5, 2]}]})", w), "0 < lo <= hi"));
@@ -119,7 +120,7 @@ TEST_CASE("WorldFile: world.json finds its engine and climate next to it") {
     CHECK(WorldFile::load("res://climate/world.json", w) == ov::str());
     CHECK(w.voxel_m == 0.05);
     CHECK(w.lods == 15);
-    CHECK(w.zone.side_m == 5000.0);
+    CHECK(w.feature_region.side_m == 0.0); // trees and rocks, no feature
     CHECK(w.instances.empty()); // every biome lists its own
     const ov::Value &biomes = w.climate_table["biomes"];
     CHECK(biomes[size_t(0)].has("instances"));
@@ -142,7 +143,7 @@ TEST_CASE("WorldFile: an empty object is the default world") {
 // world, and every CascadeCheck set's, loads and configures as itself.
 TEST_CASE("WorldFile: the project's worlds load and configure as themselves, no planet or climate refused") {
     for (const char *path : { "res://worlds/default.world.json", "res://worlds/cm.world.json", "res://worlds/lods25.world.json", "res://worlds/biomes.world.json",
-                 "res://worlds/forest5cm.world.json", "res://worlds/forest5cm_x10.world.json", "res://worlds/forest5cm_1m.world.json", "res://worlds/forest5cm_41m.world.json",
+                 "res://worlds/forest5cm.world.json",
                  "res://worlds/earth.world.json", "res://worlds/earth25.world.json", "res://worlds/tiny.world.json", "res://worlds/tiny_biomes.world.json",
                  "res://worlds/shapes.world.json",
                  "res://climate/world.json", "res://climate/example.json",
@@ -296,13 +297,12 @@ TEST_CASE("SDFTable: the library's type names are unique and found by name") {
 TEST_CASE("SDFTable: the edits replay after the scene, live, and save to the same records") {
     GroundSDF sdf;
     ChunkParam param;
-    sdf.set_zone(SDFTable::Zone{ 200.0 });
     sdf.set_instances(SDFTable::counted(default_species(), Archetype::Species::ROCK, 400, 200.0));
     const VoxelPos centre = [&] {
-        GroundSDF probe; // the ground under the zone's centre, where a carving sphere goes
+        GroundSDF probe; // the ground under the scene's centre, where a carving sphere goes
         probe.configure(param, 15);
-        const SDFTable::Zone zone;
-        return probe.ground_at(std::llround(zone.x_m / param.voxel_size), std::llround(zone.z_m / param.voxel_size));
+        const SDFTable::Region region;
+        return probe.ground_at(std::llround(region.x_m / param.voxel_size), std::llround(region.z_m / param.voxel_size));
     }();
     std::vector<SDFTable::Edit> edits = corner_edits();
     edits[0].anchor = centre;
@@ -353,7 +353,6 @@ TEST_CASE("SDFTable: the edits replay after the scene, live, and save to the sam
     CHECK(read_edits(WorldFile::edits_text(now), saved) == ov::str());
     CLIMATE_REQUIRE(saved.size() == now.size());
     GroundSDF again;
-    again.set_zone(SDFTable::Zone{ 200.0 });
     again.set_instances(SDFTable::counted(default_species(), Archetype::Species::ROCK, 400, 200.0));
     again.set_edits(saved);
     again.configure(param, 15);

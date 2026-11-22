@@ -59,7 +59,7 @@ struct StreamFixture {
         CellScatter &c = s.scatter;
         c.salt = 0x57E4Au;
         c.side = 16;
-        c.zone = VoxelBox{ origin - VoxelPos(512, 32, 512), origin + VoxelPos(511, 32, 511), true };
+        c.start_level = site_walk_level(c.side, 0.05);
         const int64_t oy = origin.y;
         c.ground = [oy](const VoxelPos &p_v, int) { return ExactNoise::Float4{ 0.0f, 1.0f, 0.0f, float(p_v.y - oy) }; };
         c.up = [](const VoxelPos &) { return UP_Y; };
@@ -231,7 +231,7 @@ bool placed_before(const StreamFixture &p_fx, const ChunkId &p_before, const Chu
     return a.first >= 0 && b.first >= 0 && a.second < b.first;
 }
 
-// The LOD-0 chunks of a grid over the zone's middle, by their count of own keys (fewest first; ties by position): a chunk
+// The LOD-0 chunks of a grid round the origin, by their count of own keys (fewest first; ties by position): a chunk
 // in the middle of a part tile reads one, one at a tile corner four.
 std::vector<ChunkId> chunks_by_keys(const StreamFixture &p_fx) {
     std::vector<std::pair<size_t, ChunkId>> by;

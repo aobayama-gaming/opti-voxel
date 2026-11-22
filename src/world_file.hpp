@@ -18,9 +18,9 @@
 //     "climate": "climate.json" or { "fields": [ field... ] },       the fields that place the biomes; none: no fields
 //     "planet": { "radius_m": 0, "ring_m": 0 },
 //     "look": { "atmosphere": true, "atmosphere_scale": 0, "clouds": true },
-//     "zone": { "side_m": 0, "centre_m": [-50, -150] },
 //     "instances": [ { "species": "conifer", "cell_m": 5, "share": 1 }... ],
 //     "features": [ { "kind": "lava_lake", "cell_m": 640, "chance": 0.6, "radius_m": [18, 45] }... ],
+//     "feature_region": { "side_m": 0, "centre_m": [-50, -150] },
 //     "species": "species.json" or [ species... ],
 //     "biomes": "ground.biomes.json" or [ biome..., default biome ],
 //     "instance_band": true,
@@ -32,9 +32,11 @@
 // features), merged here and compiled there (at the engine's values). A world names its ground: without biomes the
 // cascade refuses it (SDFCascade::attach_climate); GROUND_BIOMES is the template ground's. "species" are what the
 // instances name (species.hpp; none without the key, worlds/species.json today's trees and rocks); "instances" what grows
-// where no biome lists its own, each entry a species, its cell and its share (Climate::parse_instances), over the "zone"
-// (SDFTable::Zone: a square of side_m metres round centre_m, x and z; side 0: none); "features" likewise what stands on a
-// biome that lists none, each entry a kind, its cell, its chance and its radius (Climate::parse_features).
+// where no biome lists its own, each entry a species, its cell and its share (Climate::parse_instances), over the whole
+// ground (streamed: the view asks for what it sees); "features" likewise what stands on a biome that lists none, each
+// entry a kind, its cell, its chance and its radius (Climate::parse_features), over the "feature_region" (SDFTable::Region:
+// a square of side_m metres round centre_m, x and z), which a world whose lists name features must give until the
+// features stream (SDFTable::set_feature_region's TODO).
 // "instance_band" false keeps every instance whole at every LOD (SDFTable::set_instance_band: no erosion, no drop, no
 // moment blobs; the shapes gallery's hard-CSG creases). "edits" are the runtime edits the world starts with
 // (SDFTable::set_edits), what an edits file holds:
@@ -64,7 +66,7 @@ struct WorldFile {
     bool atmosphere = true;
     double atmosphere_scale = 0.0;
     bool clouds = true; // the volumetric clouds in it (Clouds), their layer's scale as the atmosphere's
-    SDFTable::Zone zone; // SDFTable::set_zone
+    SDFTable::Region feature_region; // SDFTable::set_feature_region
     std::vector<Climate::InstanceShare> instances; // SDFTable::set_instances
     std::vector<Climate::FeatureShare> features; // SDFTable::set_features
     std::vector<Archetype::Species> species; // SDFTable::set_species
