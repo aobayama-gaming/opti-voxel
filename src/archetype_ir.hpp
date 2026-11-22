@@ -16,8 +16,12 @@
 //
 // Registers are dual numbers, Float4 (x, y, z: gradient, w: value), forward-mode derivatives: every
 // program yields a value and its gradient, like terrain_sdf. Units: values in LOD0 voxels, gradients per
-// voxel of the evaluated LOD (2^lod LOD0 voxels, so an INPUT's gradient is 2^lod). Every LOD factor is an
-// exact power of two: values are the same bits at every LOD, gradients scale exactly (unit-tested).
+// voxel of the evaluated LOD (2^lod LOD0 voxels, so a T_INPUT's gradient is 2^lod times its rotation row).
+// Every LOD factor is an exact power of two: values are the same bits at every LOD, gradients scale exactly
+// (unit-tested).
+//
+// A program reads the position only through its instance's record (DefRecord: anchor, rotation, salt): the
+// same program is the same shape wherever an instance anchors it, and nothing reads an absolute frame.
 //
 // Exactness rules (exact_noise.hpp): only + - *, compares and selects, floor, abs, det_rsqrt and the exact
 // noise; no division, no sqrt, no mix / dot / length / normalize; constants as raw bits; no denormal. The
@@ -42,7 +46,6 @@ using Reg = int32_t;
 enum class Op : uint8_t {
     CONST, // `value`
     PARAM, // params[index]: an instance parameter, a constant once flattened
-    INPUT, // float(sat_diff(p[axis], anchors[index][axis], INPUT_LIMIT)) + p.frac[axis]; gradient 2^lod on axis
     ADD,
     SUB,
     MUL,
@@ -54,26 +57,24 @@ enum class Op : uint8_t {
     FLOOR, // flat
     RSQRT, // det_rsqrt(a), a = max(x, c) or max(c, x), c a constant > 0 (validate)
     DIST, // a / |grad a|: first-order distance, gradient normalised (to 2^lod); grad a must not be flat
-    PERLIN3, // one exact-noise octave times `value` (amp): wavelength 2^k voxels, seed, lattice offset; +0 where the band rule drops it
-    PERLIN2, // the same over (x, z)
-    // Table Defs (archetype_table.hpp): the instance's frame, parameters and noise lattice come from
-    // its record (run() with a DefRecord) instead of being baked in. The compiler never emits these in
-    // a scene program, so a compiled Program stays a function of the position alone.
+    // The instance's frame, parameters and noise lattice come from its record (run() with a DefRecord).
     T_INPUT, // axis: the local coordinate `axis` of the record's frame: R (p - anchor), the full rotation
     T_PARAM, // index: params[index] of the record
-    T_PERLIN3, // PERLIN3 with the record's anchor subtracted from the lattice offset and the seed salted
-    T_PERLIN2,
+    // One exact-noise octave times `value` (amp): wavelength 2^k voxels, seed salted by the record's, lattice
+    // offset minus the record's anchor; +0 where the band rule drops it.
+    T_PERLIN3,
+    LAST = T_PERLIN3, // validate's bound
 };
 
 struct Instr {
     Op op = Op::CONST;
-    uint8_t axis = 0; // INPUT
+    uint8_t axis = 0; // T_INPUT
     bool flat = false; // gradient statically zero (set by Builder::emit, checked by validate)
     Reg a = -1;
     Reg b = -1;
     Reg c = -1;
     Reg d = -1;
-    int32_t index = 0; // INPUT anchor, PARAM index
+    int32_t index = 0; // PARAM, T_PARAM index
     float value = 0.0f; // CONST value, noise amplitude
     // Noise: ExactNoise::Octave's fields (amp is `value`).
     int k = 0;
@@ -84,9 +85,9 @@ struct Instr {
     float band = 0.0f;
 };
 
-// The per-instance data a Table Def's T_* ops read (archetype_table.hpp's TableRecord is the CPU
-// record; the GPU reads the same fields from a DefRecord storage buffer). Passed to run() / the
-// interpreter; a null pointer is only valid for a program without T_* ops.
+// The per-instance data the T_* ops read (archetype_table.hpp's TableRecord is the CPU record; the GPU
+// reads the same fields from a DefRecord storage buffer). Passed to run() / the interpreter; a null
+// pointer is only valid for a program without T_* ops.
 struct DefRecord {
     VoxelPos anchor;
     float rotation[9] = { 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f };
@@ -94,7 +95,7 @@ struct DefRecord {
     uint32_t salt = 0; // the noise salt: seed ^ salt, 0 when the instance's seed is 0
 };
 
-// Saturation of INPUT's integer offset (voxels): exact below 2^24, rounded identically above.
+// Saturation of T_INPUT's integer offset (voxels): exact below 2^24, rounded identically above.
 inline constexpr int32_t INPUT_LIMIT = 1 << 30;
 // Floor of |grad|^2 in DIST and the output normalisation, per LOD0 voxel (times 4^lod).
 inline constexpr int GRAD_FLOOR_EXP = -40;
@@ -102,7 +103,6 @@ inline constexpr int MAX_REGISTERS = 4096;
 
 struct Program {
     std::vector<Instr> code;
-    std::vector<VoxelPos> anchors;
     std::vector<float> params;
     Reg output = -1;
     // Epilogue: value * out_scale (e.g. voxels to metres); gradient normalised to length 1 if `normalize`.
@@ -126,7 +126,7 @@ bool is_flat(const Instr &p_in, const std::vector<Instr> &p_code);
 int op_arity(Op p_op);
 
 // The output of p_program at p_pos for a chunk of LOD p_lod: (gradient, value) after the epilogue.
-// p_record is required for a program with T_* ops (a Table Def), ignored otherwise.
+// p_record is required for a program with T_* ops.
 Float4 run(const Program &p_program, const WorldPos &p_pos, int p_lod, const DefRecord *p_record = nullptr);
 
 // Every register (before the epilogue), for tests and probes.
@@ -155,18 +155,14 @@ class Builder {
 public:
     Program program;
 
-    int anchor(const VoxelPos &p_anchor);
     Reg constant(float p_value);
     Reg param(int p_index);
-    Reg input(int p_axis, int p_anchor = 0);
-    // The position relative to anchor p_anchor (x, y, z inputs).
-    Local local(int p_anchor = 0);
-    // Table Defs (archetype_table.hpp): read the instance's record instead of baked constants.
+    // The instance's record (DefRecord): its frame, parameters and noise lattice.
     Reg t_input(int p_axis);
+    // The position in the record's frame (x, y, z inputs).
     Local t_local();
     Reg t_param(int p_index);
     Reg t_perlin3(int p_k, uint32_t p_seed, const Vector3i64 &p_offset, float p_amp);
-    Reg t_perlin2(int p_k, uint32_t p_seed, const Vector3i64 &p_offset, float p_amp);
     Reg add(Reg p_a, Reg p_b);
     Reg sub(Reg p_a, Reg p_b);
     Reg mul(Reg p_a, Reg p_b);
@@ -178,8 +174,6 @@ public:
     Reg floor(Reg p_a);
     Reg rsqrt(Reg p_a);
     Reg dist(Reg p_a);
-    Reg perlin3(int p_k, uint32_t p_seed, const Vector3i64 &p_offset, float p_amp);
-    Reg perlin2(int p_k, uint32_t p_seed, const Vector3i64 &p_offset, float p_amp);
 
     // With a constant operand.
     Reg add(Reg p_a, float p_b) { return add(p_a, constant(p_b)); }
@@ -206,8 +200,6 @@ public:
     // Polynomial smooth min of radius p_k (> 0): min(a, b) - p_k / 4 at worst, gradient h grad a + (1 - h) grad b.
     Reg smooth_min(Reg p_a, Reg p_b, float p_k);
     Reg smooth_max(Reg p_a, Reg p_b, float p_k);
-    // Sum of the set's octaves from 0, like ExactNoise::fbm (same value bits).
-    Reg fbm(const ExactNoise::OctaveSet &p_set);
 
     Program finish(Reg p_output);
 
@@ -215,8 +207,8 @@ public:
     Reg emit(const Instr &p_instr);
 };
 
-// A fuzzed program for the probes: p_ops random instructions (every op, guarded RSQRT, inputs scaled down so
-// values stay moderate), anchors drawn from p_anchors. Deterministic in p_seed.
-Program random_program(uint32_t p_seed, const std::vector<VoxelPos> &p_anchors, int p_ops);
+// A fuzzed program for the probes: p_ops random instructions (every op but the parameters, guarded RSQRT,
+// inputs scaled down so values stay moderate), in the frame of the record it runs with. Deterministic in p_seed.
+Program random_program(uint32_t p_seed, int p_ops);
 
 } // namespace Archetype

@@ -58,7 +58,7 @@ depth = h(p) - up(p) = -g(p)
   rock into "near the surface" and the skirts build walls kilometres down (`docs/gotchas.md`: the SDFDummy terrain had
   caves until 5cc9c76 and hit exactly this. Its fix, the distance to the band outside it, is `T` here).
 - `smax_r` instead of `max`: a hard max creases the walls, and opposed gradients there cancel to a zero normal
-  (`vertex_normal`'s fallback).
+  (`vertex_normal`'s straight-up fallback).
 
 **Layers, the depth biomes.** A world has a few cave layers, each a band (`top_m`, `floor_m`) with its own notes,
 threshold and squash: shallow tunnels at 5–60 m, big caverns at 200–600 m, and so on. The surface biome scales each

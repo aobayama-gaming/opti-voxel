@@ -120,7 +120,7 @@ to every change, and a reviewer may reject a PR on any of them.
 ## Docs (read the one you touch)
 | Doc | Covers | Source |
 |---|---|---|
-| `docs/pipelines.md` | the GPU Direct mesher, page layout, GPU budget and cost model, compaction, dual contouring | `GPU_*mesher*`, `quad_page_pool*`, `page_format.hpp`, `gpu_cost_model.hpp`, `gpu_glsl.hpp` |
+| `docs/pipelines.md` | the GPU Direct mesher, page layout, GPU budget and cost model, compaction | `GPU_*mesher*`, `quad_page_pool*`, `page_format.hpp`, `gpu_cost_model.hpp`, `gpu_glsl.hpp` |
 | `docs/integer-frame.md` | int64 ids, `WorldPos`, GPU words, origin, LOD range and clip planes, exact noise, Morton keys | `world_coord.hpp`, `gpu_frame.hpp`, `chunk_math*`, `exact_noise*` |
 | `docs/terrain.md` | world files, presets and `--terrain`, the table folded into the cascade samples, the base surface (flat / sphere) | `world_file*`, `sdf_cascade*`, `sdf_table*`, `base_surface*` |
 | `docs/cascade.md` | Hermite cascade, CPU runs and GPU passes, specialised and generic text, lattice-only evaluation | `cascade*`, `level_program*`, `level_glsl*` |
@@ -158,7 +158,7 @@ Details and flags: `docs/testing.md`.
 | `cascade*`, `level_program*`, `level_glsl*`, `graph_compile*`, `exact_noise*`, `gpu_frame.hpp`, `sdf_cascade*`, `cascade_points_gpu*`, `local_points_gpu*` | `tools/cascade_test.sh` (needs a window) |
 | `cell_sites*`, `field_gpu*`, `scatter_source*` walks | a 1M load with `--walk_verify=1` (`--preset=forest5cm_1m`), forest5cm `--walk_gpu=0` vs `1` chunk digests |
 | `world_coord.hpp`, `gpu_frame.hpp`, `chunk_math`, `exact_noise*`, the SDF, a new noise or SDF term | `tools/frame_test.sh` (+ an entry in `make_probes()`) |
-| the discoverer, the SDF, the cascade passes | `tools/discovery_audit.sh -- --terrain=cascade --discovery_compare=1` (and `--world=res://worlds/lods25.world.json`) |
+| the discoverer, the SDF, the cascade passes | `tools/discovery_audit.sh -- --discovery_compare=1` (and `--world=res://worlds/lods25.world.json`) |
 | `chunk_memory`, the discoverer's publish, the meshers' result path | a fly with `--destroy_verify=1` |
 | `QuadPagePool` | `res://debug/spike.tscn` (`check.sh --spike`) |
 | the bark, `value_noise`, the page shader's normals | `tools/bark_seams.sh` |

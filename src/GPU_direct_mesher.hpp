@@ -17,6 +17,7 @@
 #include "ov/types.hpp"
 #include "ov/value.hpp"
 
+#include <atomic>
 #include <mutex>
 #include <vector>
 
@@ -93,6 +94,9 @@ public:
     // released before. p_keep_pool: the pages are not freed but returned, every one released (the next world's mesher
     // starts on them: a restart neither frees nor makes a page); null otherwise.
     QuadPagePool *destroy(bool p_keep_pool = false);
+    // Whether the device's thread failed to create the passes (a pass or the cascade's bare or fold text didn't
+    // compile): nothing is meshed. Read on any thread, after initialize() (World::frame reports it).
+    bool has_failed() const { return rt_failed.load(std::memory_order_acquire); }
 
     // The chunks to mesh (replacing the queue), loaded in the order of ChunkMath::load_queue for p_view.
     void send_chunk(const LODHashSet &p_chunks, const ScanView &p_view);
@@ -123,10 +127,6 @@ public:
     bool is_audit_idle() const { return audit_queue.empty() && audit_in_flight.is_empty() && gate.idle(ChunkGate::AUDIT); }
 
     void set_debug_view(int p_view);
-    // Dual contouring of Hermite data (DC-lite) in the vertex pass: sharp UNION / SUBTRACT creases
-    // are placed on the crease instead of the Surface Nets mass point (gpu_glsl.hpp). Set it before
-    // initialize(): the device's thread compiles the vertex shader in _rt_initialize.
-    void set_dual_contouring(bool p_enable) { dual_contouring = p_enable; }
     ov::Value get_stats();
     // Main thread: the dispatch's sub-timers since the start (VoxelTerrain's sections).
     DispatchTimes get_dispatch_times() const {
@@ -172,9 +172,7 @@ private:
     Settings settings;
     ov::gpu::Device *device = nullptr;
     PageHost *host = nullptr; // outlives the device-thread work posted here (the pool deletes itself before _rt_destroy)
-    // Dual contouring of Hermite data (DC-lite) in the vertex pass (gpu_glsl.hpp). Set before
-    // initialize(): the worker compiles the vertex shader there.
-    bool dual_contouring = false;
+    std::atomic<bool> rt_failed{ false }; // has_failed: set by _rt_initialize
 
     QuadPagePool *pool = nullptr;
     PalettePool palettes; // blocks: main thread; texture: the device's thread
@@ -325,7 +323,6 @@ private:
     void _flush_kills();
     void _flush_hidden();
     bool _compact_pages(const std::vector<int> &p_pages, VoxelState &r_state);
-    void _release_page_if_dead(int p_page);
     void _update_dirty_bounds();
     RenderBox _chunk_aabb(const ChunkId &p_chunk) const;
     // The merged _chunk_aabb of p_count chunks (at least one), the i-th one p_id(i).

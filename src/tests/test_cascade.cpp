@@ -22,12 +22,11 @@ using ExactNoise::float_bits;
 
 namespace {
 
-// 5 cm voxels, octaves up to 62 (the deepest carry), no cap below the exact range.
+// 5 cm voxels, octaves up to 62 (the deepest carry), the flat base.
 Climate::Ground ground() {
     Climate::Ground g;
     g.voxel_size = 0.05;
     g.k_max = ExactNoise::MAX_K;
-    g.amp_cap = exact_pow2(40);
     return g;
 }
 

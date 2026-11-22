@@ -3,8 +3,9 @@ extends Node3D
 ##   godot --path project --resolution 1280x720 res://debug/bench.tscn -- \
 ##       --scenario=load --out=/tmp/stats.json --shot=loaded:/tmp/a.png
 ##
-## Args (all optional):
-##   --preset=NAME                a named argument set (debug/presets.gd; forest5cm = the perf target),
+## Args (all optional; those that set a VoxelTerrain property, and --grade, are parsed by Presets.apply_args,
+## the player's parser too):
+##   --preset=NAME               a named argument set (debug/presets.gd; forest5cm = the perf target),
 ##                                explicit arguments override it
 ##   --scenario=load|fly|turn|turn_walk|edit|dig|rise|approach load: load + steady phase. fly: load, fly out and back, settle, steady.
 ##                                turn: load, --turns=N full turns of the camera's yaw (default 1), --turn_seconds
@@ -57,25 +58,17 @@ extends Node3D
 ##   --trace_max=N                the trace's event cap (default 2000000, ~120 B of JSON each), the rest dropped
 ##   --audit=1                    after steady, classify every drawn quad slot of every page;
 ##                                writes per-chunk mesh digests to chunks.json next to --out
-##   --dual_contouring=1          DC-lite vertex placement (sharp UNION/SUBTRACT creases)
 ##   --batch=N --pages=N --cap=N  mesher batch size, pages per batch, page capacity (quads)
 ##   --batches_per_frame=N        mesher batches dispatched per frame at most (default 4, at most 16)
 ##   --mesher_budget=MS           estimated GPU ms of mesh batches per frame (default 0 = whole batches)
 ##   --max_in_flight=N            mesher batches waiting for their directory at most (default 3 per batch per frame)
 ##   --world=PATH                 the world file (VoxelTerrain.world_path, src/world_file.hpp): voxel size, LODs, trees,
 ##                                planet, climate, look (default: the scene's, res://worlds/default.world.json)
-##   --terrain=cascade|shapes
-##                                VoxelTerrain.terrain_mode (default cascade: the Hermite cascade terrain,
-##                                SDFCascade; shapes: its flat preset under the
-##                                hard-CSG shapes gallery, SDFTable::Scene::SHAPES)
-##   Instances (around x -50 z -150 m, on the ground):
-##   --instance_band=0            keep every instance at every LOD (no band rule; the reference)
-##   --stream=0                   place the scatter and the forest whole at configure instead of streaming them
-##   --stream_part_sides=N        streamed moment layers read the records while their cell is under N source cells,
-##                                proxies above (default 1; 3 = the whole build's blobs)
-##   --moments=0                  leave out the far field of the dropped instances (their moments' blobs)
-##   --instance_erode=F           the band rule's erosion, cells per LOD (default 1): the skirt, the fastest a part shrinks
-##   --instance_resolve=F         a part is kept while its half thickness holds F cells (default 1); it erodes just before its drop
+##   --terrain=shapes             the hard-CSG shapes gallery: --world=res://worlds/shapes.world.json (a constant
+##                                ground, the gallery in its edits file)
+##   Instances (wherever the ground is, streamed):
+##   --stream=0                   place them whole at configure: refused for a world with instances (a whole build
+##                                needs a box only the checks give, SDFTable::set_whole_region)
 ##   --lod_error=F                LOD screen-space error target (default 2.0; higher = coarser)
 ##   --lod_error_back=F           error outside the view cone, reached behind the camera (default 0 = lod_error)
 ##   --lod_errors=F,F,...         error per LOD from LOD 0 (0 or past the list: lod_error); sets each LOD's chunk count
@@ -99,23 +92,15 @@ extends Node3D
 ##                                LOD0 voxel instead of the world origin. On a planet the
 ##                                scene otherwise stands over its +y pole (VoxelTerrain.get_scene_shift); --pitch /
 ##                                --yaw turn the camera about the local up, the fly and walk paths stay level
-##   --discovery_cull=0|1         discoverer cull mode (0 none, 1 legacy corners; default 1)
-##   --discovery_cache=0|1        discoverer: remember node verdicts across scans (default 1)
-##   --discovery_verify=1         discoverer: recompute every cached verdict, ERROR on a mismatch
 ##   --destroy_verify=1           check every scan delta and incremental destroy check against the full recompute, ERROR on a mismatch
-##   --discoverer=cpu|gpu         VoxelTerrain.discoverer_mode: where the cull test's corners are evaluated
-##                                (default: gpu for the cascade terrain, cpu otherwise)
+##   --discoverer=cpu|gpu         VoxelTerrain.discoverer_mode: where the cull test's corners are evaluated (default gpu)
 ##   --discovery_compare=1        discoverer: diff every scan against a fresh CPU scan, ERROR on a difference
 ##   --walk_gpu=0|1               VoxelTerrain.walk_gpu: the streamed sources' site walks read the ground on the GPU (default 1)
-##   --walk_batch=N               site walks: walk keys a drain task walks together on the GPU field (default 64)
 ##   --walk_verify=1              site walks: every batch of the GPU's readings read again on the CPU, ERROR on a difference
 ##   --discovery_audit=1          after steady, rebuild the scan without culling and count the
 ##                                quads of every culled chunk on the GPU (any quad = a miss = a hole)
-##   --depth_grab=1               after steady, read one frame's scene depth and its camera back to depth.f32 +
-##                                depth.json next to --out (DepthGrab); with --audit=1, tools/occlusion_census.py
-##                                <run> tells which loaded chunks that depth hides
 ##
-## Checks after steady run in this order: discovery_audit, depth_grab, audit.
+## Checks after steady run in this order: discovery_audit, audit.
 ##
 ## Render GPU/CPU time is only read during the "steady" phase: reading it forces a
 ## render-thread sync, which would distort the load/fly frame timings.
@@ -150,8 +135,6 @@ var phase_results := {}
 var timed_out := false
 var audit_report := {}
 var discovery_audit_report := {}
-const DepthGrabScript := preload("res://debug/depth_grab.gd")
-var depth_grab = null  # --depth_grab=1: a DepthGrab
 var checks := []  # remaining post-steady checks
 var profile_main := []  # --profile=1: one entry per frame
 var profile_gpu := []  # --profile=1: one entry per captured renderer frame
@@ -172,13 +155,6 @@ func _ready() -> void:
 		var c: PackedStringArray = args["cam_pos"].split(",")
 		camera.global_position = Vector3(float(c[0]), float(c[1]), float(c[2]))
 	start_pos = camera.global_position
-	if args.has("depth_grab"):
-		depth_grab = DepthGrabScript.new()
-		if camera.compositor == null:
-			camera.compositor = Compositor.new()
-		var effects := camera.compositor.compositor_effects
-		effects.append(depth_grab)
-		camera.compositor.compositor_effects = effects
 
 	vp_rid = get_viewport().get_viewport_rid()
 	RenderingServer.viewport_set_measure_render_time(vp_rid, true)
@@ -200,99 +176,16 @@ func _ready() -> void:
 			push_warning("BENCH: --profile=1 without a debugger: the renderer only times the viewport (use bench.sh --profile=1)")
 	if args.get("trace", "0") == "1":
 		terrain.debug_trace_start(int(args.get("trace_max", "2000000")))
-	if args.has("batch"):
-		terrain.direct_batch_size = int(args["batch"])
-	if args.has("pages"):
-		terrain.direct_pages_per_batch = int(args["pages"])
-	if args.has("cap"):
-		terrain.direct_page_capacity = int(args["cap"])
-	if args.has("batches_per_frame"):
-		terrain.direct_batches_per_frame = int(args["batches_per_frame"])
-	if args.has("mesher_budget"):
-		terrain.direct_gpu_budget_ms = float(args["mesher_budget"])
-	if args.has("max_in_flight"):
-		terrain.direct_max_in_flight = int(args["max_in_flight"])
-	terrain.debug_view = int(args.get("view", "0"))
-	if args.get("grade", "1") == "0":
-		Presets.ungrade(self)
-	terrain.dual_contouring = args.get("dual_contouring", "0") == "1"
-	if not Presets.removed_args().is_empty():
+	if not Presets.apply_args(terrain, self, Presets.user_args()):
 		set_process(false)
 		get_tree().quit(1)
 		return
-	if args.has("world"):
-		terrain.world_path = args["world"]
-	var terrains := {"cascade": 1, "shapes": 4}
-	var terrain_arg: String = args.get("terrain", "cascade")
-	if not terrains.has(terrain_arg):
-		push_error("BENCH: unknown --terrain=%s (expected cascade or shapes)" % terrain_arg)
-		set_process(false)
-		get_tree().quit(1)
-		return
-	if args.has("moments"):
-		terrain.archetype_moments = args["moments"] != "0"
-	if args.has("instance_band"):
-		terrain.archetype_band = args["instance_band"] != "0"
-	if args.has("stream"):
-		terrain.archetype_stream = args["stream"] != "0"
-	if args.has("stream_part_sides"):
-		terrain.archetype_stream_part_sides = int(args["stream_part_sides"])
-	if args.has("instance_erode"):
-		terrain.archetype_erode = float(args["instance_erode"])
-	if args.has("instance_resolve"):
-		terrain.archetype_resolve = float(args["instance_resolve"])
-	terrain.terrain_mode = terrains[terrain_arg]
-	if args.has("compact"):
-		terrain.direct_compaction = args["compact"] == "1"
-	if args.has("compact_extent"):
-		terrain.direct_compact_max_extent = float(args["compact_extent"])
-	if args.has("lod_error"):
-		terrain.lod_pixel_error = float(args["lod_error"])
-	if args.has("lod_errors"):
-		terrain.lod_pixel_errors = PackedFloat32Array(Array(str(args["lod_errors"]).split(",")).map(func(e): return e.to_float()))
-	if args.has("lod_error_back"):
-		terrain.lod_pixel_error_back = float(args["lod_error_back"])
-	if args.has("lod_view_margin"):
-		terrain.lod_view_margin_deg = float(args["lod_view_margin"])
-	if args.has("lod_view_memory"):
-		terrain.lod_view_memory_m = float(args["lod_view_memory"])
-	if args.has("lod_far_limit"):
-		terrain.lod_far_limit = args["lod_far_limit"] != "0"
-	if args.has("skirt"):
-		terrain.skirt_depth = float(args["skirt"])
-	if args.has("discovery_cull"):
-		terrain.discovery_cull_mode = int(args["discovery_cull"])
-	if args.has("discovery_cache"):
-		terrain.discovery_cache = args["discovery_cache"] == "1"
-	terrain.discovery_verify = args.get("discovery_verify", "0") == "1"
-	terrain.destroy_verify = args.get("destroy_verify", "0") == "1"
-	if args.has("walk_gpu"):
-		terrain.walk_gpu = args["walk_gpu"] == "1"
-	terrain.walk_verify = args.get("walk_verify", "0") == "1"
-	if args.has("walk_batch"):
-		terrain.walk_batch = int(args["walk_batch"])
-	if args.has("discoverer"):
-		var discoverers := {"cpu": 0, "gpu": 1}
-		if not discoverers.has(args["discoverer"]):
-			push_error("BENCH: unknown --discoverer=%s (expected cpu or gpu)" % args["discoverer"])
-			set_process(false)
-			get_tree().quit(1)
-			return
-		terrain.discoverer_mode = discoverers[args["discoverer"]]
-	terrain.discovery_compare = args.get("discovery_compare", "0") == "1"
-	if args.has("rebase_m"):
-		terrain.rebase_distance_m = float(args["rebase_m"])
 	terrain.origin_shifted.connect(_on_origin_shifted)
 	if args.get("still", "0") == "1":
 		for child in get_children():
 			if child is VoxelSky:
 				child.cloud_wind = Vector2.ZERO
 				child.wind_sway_m = 0.0
-	if args.has("origin"):
-		var o: PackedStringArray = args["origin"].split(",")
-		terrain.world_origin_x = o[0].to_int()
-		terrain.world_origin_y = o[1].to_int()
-		terrain.world_origin_z = o[2].to_int()
 	# The scene (camera, lights) moves with --camera_voxel: placed relative to that absolute voxel instead of the world
 	# origin (the one the terrain will start at: the same world point seen from another origin, as in
 	# tools/origin_parity.sh); on a planet without it, over the +y pole. Before the terrain starts: its first scan is
@@ -308,7 +201,7 @@ func _ready() -> void:
 			child.global_position += shift
 	start_pos = camera.global_position
 	add_child(terrain)
-	var above_ground: String = args.get("above_ground", "" if terrain.terrain_mode == 4 or args.has("cam_pos") else "50")
+	var above_ground: String = args.get("above_ground", "" if args.has("cam_pos") else "50")
 	if above_ground != "":
 		_place_above_ground(float(above_ground))  # the fly path starts there too
 		start_pos = camera.global_position
@@ -473,7 +366,7 @@ func _run_edits() -> void:
 			else:
 				terrain.move_instance(idx, vox[0], vox[1], vox[2])
 		else:
-			var id: int = terrain.add_instance(0, vox[0], vox[1], vox[2],
+			var id: int = terrain.add_instance(terrain.get_type_index("sphere"), vox[0], vox[1], vox[2],
 				PackedFloat32Array(), PackedFloat32Array([4.0 / vt]), 3, 1.0 / vt)
 			if id >= 0:
 				edit_ids.append(id)
@@ -484,9 +377,6 @@ func _run_edits() -> void:
 # 1.5 m radius) starting along the view, one per frame, then the left-click tube for --drag_s seconds: a
 # 20 m SUBTRACT capsule from 0.5 m ahead of the camera whose direction sweeps 10 degrees either side
 # (re-placed every frame, as when the player turns), then removed.
-const CAPSULE_TYPE := 1  # SDFTable's library: 0 sphere, 1 capsule, 2 rock (build_table)
-
-
 func _dig_capsule(vt: float, pos: Vector3, fwd: Vector3, length: float, radius: float, op: int, id: int) -> int:
 	var up := Vector3.UP
 	if absf(fwd.dot(up)) > 0.99:
@@ -497,7 +387,7 @@ func _dig_capsule(vt: float, pos: Vector3, fwd: Vector3, length: float, radius: 
 	var v := _voxel_of(pos, vt)
 	if id < 0:
 		var params := PackedFloat32Array([length / vt, radius / vt])
-		return terrain.add_instance(CAPSULE_TYPE, v[0], v[1], v[2], rot, params, op, 0.3 / vt)
+		return terrain.add_instance(terrain.get_type_index("capsule"), v[0], v[1], v[2], rot, params, op, 0.3 / vt)
 	terrain.move_instance(id, v[0], v[1], v[2], rot)
 	return id
 
@@ -647,7 +537,7 @@ func _process(delta: float) -> void:
 		"steady":
 			if phase_frame >= steady:
 				_end_phase()
-				for c in ["discovery_audit", "depth_grab", "audit"]:
+				for c in ["discovery_audit", "audit"]:
 					if args.has(c):
 						checks.append(c)
 				_next_check()
@@ -657,10 +547,6 @@ func _process(delta: float) -> void:
 			if not report.is_empty():
 				discovery_audit_report = report
 				print("BENCH: discovery_audit ", JSON.stringify(report))
-				_next_check()
-				return
-		"depth_grab":
-			if depth_grab.write(args["out"].get_base_dir() if args.has("out") else "user://", camera, terrain):
 				_next_check()
 				return
 		"audit":
@@ -688,8 +574,6 @@ func _next_check() -> void:
 	match c:
 		"discovery_audit":
 			terrain.debug_audit_discovery()
-		"depth_grab":
-			depth_grab.request()
 		"audit":
 			terrain.debug_audit_pages()
 

@@ -1,4 +1,4 @@
-#include "test_common.hpp"
+#include "test_ground.hpp"
 
 #include "chunk_palette.hpp"
 #include "moment_layers.hpp"
@@ -15,11 +15,11 @@ namespace {
 // A dense 5 cm forest (crowns touching) with or without its moment blobs.
 struct Forest {
     ChunkParam param;
-    SDFCascade sdf;
+    GroundSDF sdf;
     explicit Forest(bool p_moments) {
         param.voxel_size = 0.05f;
-        sdf.set_zone(SDFTable::Zone{ 100.0 });
-        sdf.set_instances(SDFTable::counted(Archetype::Species::TREE, 400, 100.0));
+        sdf.set_whole_region(SDFTable::Region{ 100.0 });
+        sdf.set_instances(SDFTable::counted(default_species(), Archetype::Species::TREE, 400, 100.0));
         sdf.set_stream_sources(false); // the whole build's blobs, the table's records
         sdf.set_moment_blobs(p_moments);
         param.skirt_depth = MAX(param.skirt_depth, sdf.min_skirt_depth(param, 18));
@@ -41,8 +41,8 @@ struct Forest {
 void small_forest(SDFCascade &r_sdf, bool p_moments, std::vector<uint32_t> &r_parts) {
     ChunkParam param;
     param.voxel_size = 0.05f;
-    r_sdf.set_zone(SDFTable::Zone{ 60.0 });
-    r_sdf.set_instances(SDFTable::counted(Archetype::Species::TREE, 120, 60.0));
+    r_sdf.set_whole_region(SDFTable::Region{ 60.0 });
+    r_sdf.set_instances(SDFTable::counted(default_species(), Archetype::Species::TREE, 120, 60.0));
     r_sdf.set_stream_sources(false); // its records are edited by id
     r_sdf.set_moment_blobs(p_moments);
     param.skirt_depth = MAX(param.skirt_depth, r_sdf.min_skirt_depth(param, 18));
@@ -58,7 +58,7 @@ void small_forest(SDFCascade &r_sdf, bool p_moments, std::vector<uint32_t> &r_pa
 // Edit p_step of a scripted sequence: a tree part removed, one moved by up to 10 m, or a 1-3 m sphere added near the
 // forest; its time (microseconds).
 int64_t edit_step(SDFCascade &p_sdf, const std::vector<uint32_t> &p_parts, uint32_t p_step) {
-    const int64_t cx = std::llround(SDFTable::Zone().x_m / 0.05), cz = std::llround(SDFTable::Zone().z_m / 0.05);
+    const int64_t cx = std::llround(SDFTable::Region().x_m / 0.05), cz = std::llround(SDFTable::Region().z_m / 0.05);
     const auto t0 = std::chrono::steady_clock::now();
     const ExactNoise::UVec3 h = ExactNoise::pcg3d(ExactNoise::UVec3{ p_step, 0xED17u, 0x5u });
     const uint32_t id = p_parts[h.x % p_parts.size()];
@@ -78,7 +78,7 @@ int64_t edit_step(SDFCascade &p_sdf, const std::vector<uint32_t> &p_parts, uint3
 } // namespace
 
 TEST_CASE("Moment edits: after adds, moves and removes the table holds the blobs a whole rebuild makes") {
-    SDFCascade sdf;
+    GroundSDF sdf;
     std::vector<uint32_t> parts;
     small_forest(sdf, true, parts);
     int64_t compared = 0;
@@ -112,7 +112,7 @@ TEST_CASE("Moment edits: after adds, moves and removes the table holds the blobs
         compared += int64_t(reference.size());
     }
     // The same edits without the blobs: what they add to an edit.
-    SDFCascade bare;
+    GroundSDF bare;
     std::vector<uint32_t> bare_parts;
     small_forest(bare, false, bare_parts);
     int64_t bare_us = 0;
@@ -198,7 +198,7 @@ TEST_CASE("Moment fold: the far-field surface lifts the ground, draws the canopy
 // (192 columns; the next test). The moment handoff's own weakness, not the ground's: closed when both pass again.
 TEST_CASE("Moment fold: a dense forest seen from far keeps a canopy, listed at the blobs' LOD only" * doctest::may_fail()) {
     const Forest with(true), without(false);
-    const int64_t cx = std::llround(SDFTable::Zone().x_m / 0.05), cz = std::llround(SDFTable::Zone().z_m / 0.05);
+    const int64_t cx = std::llround(SDFTable::Region().x_m / 0.05), cz = std::llround(SDFTable::Region().z_m / 0.05);
     const std::shared_ptr<const InstanceSnapshot> snap = with.sdf.get_snapshot();
     int64_t blobs = 0;
     int64_t per_lod[32] = {};
@@ -247,7 +247,7 @@ TEST_CASE("Moment fold: a dense forest seen from far keeps a canopy, listed at t
 // TODO: may_fail, see the test above.
 TEST_CASE("Moment fold: the forest never thins out from its parts to its blobs" * doctest::may_fail()) {
     const Forest with(true), without(false);
-    const int64_t cx = std::llround(SDFTable::Zone().x_m / 0.05), cz = std::llround(SDFTable::Zone().z_m / 0.05);
+    const int64_t cx = std::llround(SDFTable::Region().x_m / 0.05), cz = std::llround(SDFTable::Region().z_m / 0.05);
     // The same 48 columns of the middle 60 m at every LOD: the share with a canopy (solid 5 m above the ground) and
     // its mean height. The blobs taking only the parts gone whole left a trough (26 of 48 at LOD 5, 34 at LOD 2): the
     // cover never falls under nine tenths of LOD 2's.

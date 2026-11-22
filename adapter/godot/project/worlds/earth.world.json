@@ -4,6 +4,7 @@
   "voxel_m": 0.5,
   "lods": 15
  },
+ "biomes": "res://worlds/ground.biomes.json",
  "planet": {
   "radius_m": 6371000
  }

@@ -2,9 +2,7 @@
  "comment": "Minimal world: two biomes on temperature. hills: six single-octave notes (26 km to 25 m) under one mix. warped: the same notes; those of 1.6 km and finer read the warp node w (a 13 km note, coarser than each, 600 m), and the 1.6 km note is billowed. 15 LODs at 5 cm.",
  "engine": "engine.json",
  "climate": "climate.json",
- "zone": {
-  "side_m": 5000
- },
+ "species": "res://worlds/species.json",
  "biomes": [
   {
    "name": "hills",

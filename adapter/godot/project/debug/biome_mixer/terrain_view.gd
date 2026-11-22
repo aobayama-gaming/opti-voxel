@@ -24,7 +24,7 @@ const RESTART_AFTER := 0.05
 ## A restart waits for the last one's chunks in view at most this long (seconds): a drag shows each load finished.
 const LOAD_WAIT := 1.0
 ## The game's look: its sky, fog and sun are this scene's.
-const GAME_SCENE := "res://main_scene_5cm.tscn"
+const GAME_SCENE := "res://main_scene.tscn"
 ## The game's fog over views of kilometres instead of metres.
 const FOG_DENSITY := 0.00004
 ## The player: a capsule of a person's height and its radius (metres).
@@ -88,6 +88,7 @@ var _yaw := 0.7
 var _pitch := 0.45
 var _dist := 8000.0
 var status := ""  # the last restart's line
+var error := ""  # why the terrain didn't start on the last world, or draws nothing (VoxelTerrain.get_world_error); "" if it did
 var loaded_ms := -1  # the last restart until its chunks in view were loaded, -1 while loading
 var profile := {}  # --drag: "restart_ms" and "loaded_ms" appended to, when set
 var noclip := false  # the player flies through the ground, else walks on it
@@ -167,7 +168,7 @@ func _add_game_look() -> void:
 		_viewport.add_child(node)
 
 
-# p_json: the world the 2D view draws (a world file's text, its paths from p_dir). The terrain restarts on it once the
+# p_json: the world the CPU map drew (a world file's text, its paths from p_dir). The terrain restarts on it once the
 # edits pause; p_frame: the camera fitted to p_extent_km round p_centre_m, its target at p_ground_m.
 func show_world(p_json: String, p_dir: String, p_frame: bool, p_extent_km: float, p_centre_m: Vector2, p_ground_m: float) -> void:
 	_json = p_json
@@ -206,7 +207,7 @@ func _restart_terrain() -> void:
 		if profile.has("hold_ms"):
 			profile.hold_ms.append((Time.get_ticks_usec() - _restart_usec) / 1000.0)
 		_unshift_camera()  # the world starts again at its first render origin
-		_terrain.restart_world(_view_world(_json), _dir)
+		error = "" if _terrain.restart_world(_view_world(_json), _dir) else String(_terrain.get_world_error())
 	else:
 		_terrain = ClassDB.instantiate("VoxelTerrain")
 		_terrain.lod_pixel_error = LOD_PIXEL_ERROR
@@ -226,6 +227,7 @@ func _restart_terrain() -> void:
 			_target -= p_shift
 			_shifted += p_shift)
 		_viewport.add_child(_terrain)  # starts the world: its pipelines, then the chunks
+		error = String(_terrain.get_world_error())
 	_aim_camera()
 	_to_ground()  # the edited ground under the player
 	_place_camera()  # the new terrain's LOD centre
@@ -233,7 +235,12 @@ func _restart_terrain() -> void:
 	loaded_ms = -1
 	if profile.has("restart_ms"):
 		profile.restart_ms.append((Time.get_ticks_usec() - _restart_usec) / 1000.0)
-	status = "terrain restarted in %d ms, loading" % ((Time.get_ticks_usec() - _restart_usec) / 1000)
+	if error != "":
+		_hold(false)
+		_restart_usec = 0
+		status = "the terrain refuses it: " + error
+	else:
+		status = "terrain restarted in %d ms, loading" % ((Time.get_ticks_usec() - _restart_usec) / 1000)
 	status_changed.emit()
 
 
@@ -279,7 +286,7 @@ func _notification(p_what: int) -> void:
 		_schedule_restart()
 	else:
 		_restart.stop()
-		_stop_terrain()  # nothing runs behind the 2D view
+		_stop_terrain()  # nothing runs while hidden
 
 
 func _process(p_delta: float) -> void:
@@ -297,7 +304,8 @@ func _process(p_delta: float) -> void:
 		loaded_ms = (Time.get_ticks_usec() - _restart_usec) / 1000
 		if profile.has("loaded_ms"):
 			profile.loaded_ms.append(loaded_ms)
-		status = "terrain loaded in %d ms (restart and chunks in view)" % loaded_ms
+		error = String(_terrain.get_world_error())  # a started world whose passes failed draws nothing
+		status = ("the terrain refuses it: " + error) if error != "" else "terrain loaded in %d ms (restart and chunks in view)" % loaded_ms
 		_restart_usec = 0
 		status_changed.emit()
 
@@ -376,7 +384,7 @@ func aim_distance() -> float:
 
 # The player's feet on the ground under them (along the terrain's up, by its SDF), unless noclip.
 func _to_ground() -> void:
-	if noclip or _terrain == null or not _terrain.is_inside_tree():
+	if noclip or _terrain == null or not _terrain.is_inside_tree() or error != "":
 		return
 	for i in 32:
 		var d: float = _terrain.get_sdf_at(_target)

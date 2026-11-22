@@ -51,8 +51,8 @@ namespace Climate {
 //              50, "stretch_y": 4 (optional; a power of two: its noise squeezed along the base's up, y on the flat
 //              world, its wavelength along it 4 times the tangent ones; octave k takes at most 2^(k - 3) of it,
 //              BaseSurface::stretched), "warp": a warp node (optional input: the note read displaced). Its seed and
-//              lattice are make_octave(seed, k): one note whatever biome mixes it. A note finer than k = 3 is refused; one
-//              the LOD count doesn't reach (k > LODs + 4) plays nothing: a world reads at any LOD count. The ground is a 3D noise whose
+//              lattice are make_octave(seed, k): one note whatever biome mixes it. A note finer than the voxel's k = 3 or
+//              past the LOD count's top (k > LODs + 4) plays nothing: a world reads at any voxel and LOD count. The ground is a 3D noise whose
 //              vertical slope is as large as its horizontal one: past dh/dy = 1 it folds into overhangs; stretched
 //              octaves keep it a height field where they dominate.
 //     "warp":  "in": any node strictly coarser than every note the warp moves (the gate, docs/cascade-v2.md), "amount_m":
@@ -279,9 +279,10 @@ private:
         }
         r_lo = ExactNoise::lattice_k(lo_m, ground.voxel_size);
         r_hi = ExactNoise::lattice_k(hi_m, ground.voxel_size);
-        // make_octave's shifts need k in [0, MAX_K]; validate() then holds bands to the ground's range.
-        if (r_lo < 0 || r_hi > ExactNoise::MAX_K) {
-            fail(p_where, ov::format("octaves %d .. %d: outside [0, %d].", r_lo, r_hi, ExactNoise::MAX_K));
+        // make_octave's shifts need k <= MAX_K. An octave outside the ground's range [BAND_SHIFT, k_max] plays nothing
+        // (too fine for this voxel or too coarse for this LOD count): the same world reads at any voxel and LOD count.
+        if (r_hi > ExactNoise::MAX_K) {
+            fail(p_where, ov::format("octave %d is past the noise's %d.", r_hi, ExactNoise::MAX_K));
         }
         return error.empty();
     }
@@ -359,10 +360,6 @@ private:
         if (!node_keys(p_d, p_where, "note") || !octave_range(p_d, p_where, r_n.k, hi)) {
             return;
         }
-        if (r_n.k < ExactNoise::BAND_SHIFT) {
-            fail(p_where, ov::format("octave k = %d is outside the cascade's range: a note's wavelength is at least %s m (%d voxels).", r_n.k, ov::num(std::ldexp(ground.voxel_size, ExactNoise::BAND_SHIFT), 2), 1 << ExactNoise::BAND_SHIFT));
-            return;
-        }
         r_n.seed = seed(p_d, p_where);
         r_n.amp_m = number(p_d, "amp_m", p_where);
         if (error.empty() && !(r_n.amp_m >= 0.0)) {
@@ -373,6 +370,8 @@ private:
         r_n.stretch = int(std::lround(std::log2(std::max(s, 1.0))));
         if (!(s >= 1.0 && s <= std::ldexp(1.0, MAX_STRETCH) && std::ldexp(1.0, r_n.stretch) == s)) {
             fail(p_where, ov::format("'stretch_y' is a power of two in [1, 2^%d].", MAX_STRETCH));
+        } else if (r_n.k >= ExactNoise::BAND_SHIFT && r_n.stretch > r_n.k - ExactNoise::BAND_SHIFT) { // a finer note plays nothing
+            fail(p_where, ov::format("'stretch_y' %s is over 2^%d, the most a note of octave k = %d stretches (2^(k - %d)).", ov::num(s), r_n.k - ExactNoise::BAND_SHIFT, r_n.k, ExactNoise::BAND_SHIFT));
         }
     }
 
@@ -383,11 +382,10 @@ private:
         }
         const double amp = number(p_d, "amp", p_where);
         const double persistence = number(p_d, "persistence", p_where, 1.0);
-        // A range keeps the octaves the LOD count has (another LOD count keeps another part of it, each octave at the
-        // same amplitude); a single wavelength outside them is refused by validate().
-        const bool range = lo != hi;
+        // The octaves the ground has: another voxel or LOD count keeps another part of a range, each octave at the same
+        // amplitude; a single wavelength outside them plays nothing, like a note's.
         for (int k = hi; k >= lo; k--) {
-            if (range && (k < ExactNoise::BAND_SHIFT || k > ground.k_max)) {
+            if (k < ExactNoise::BAND_SHIFT || k > ground.k_max) {
                 continue;
             }
             r_f.bands.push_back(ExactNoise::make_octave(r_f.seed, uint32_t(k), k, float(amp * std::pow(persistence, hi - k))));
@@ -395,10 +393,6 @@ private:
     }
 
     void term(const ov::Value &p_d, const ov::str &p_where, int p_field, Field &r_f) {
-        if (p_d["source"].as_str() == "ground") {
-            fail(p_where, "a 'ground' term is gone (the ground depends on the weights, which depend on the fields): a field's terms read earlier fields only.");
-            return;
-        }
         if (!keys(p_d, p_where, { "source", "x" })) {
             return;
         }
@@ -536,14 +530,6 @@ private:
     }
 
     void biome(const ov::Value &p_d, int64_t p_i) {
-        if (p_d.has("where")) {
-            fail(ov::format("biome %d", p_i), "'where' (edges) became 'at': a centre and span per field, e.g. \"at\": { \"temperature\": [0.3, 0.2] }.");
-            return;
-        }
-        if (p_d.has("amp") || p_d.has("curve")) {
-            fail(ov::format("biome %d", p_i), "'amp' and 'curve' became the biome's 'graph': its notes, a mix of them, a curve (climate_parse.cpp).");
-            return;
-        }
         if (!keys(p_d, ov::format("biome %d", p_i), { "name", "at", "graph", "surface", "clouds", "debug_color", "instances", "features" })) {
             return;
         }
@@ -669,21 +655,18 @@ bool name_taken_before(const std::vector<T> &p_list, size_t p_i) {
     return false;
 }
 
-// A field: an identifier used once, each band's octave in the cascade's range once, its amplitude in the exact range,
+// A field: an identifier used once, each band's octave once (bands() keeps the ground's range), its amplitude in the exact range,
 // each term on an earlier field with a moderate coefficient.
-ov::str validate_field(const Table &p_table, int p_i, const Ground &p_ground) {
+ov::str validate_field(const Table &p_table, int p_i) {
     const Field &f = p_table.fields[size_t(p_i)];
-    if (!ov::is_valid_ascii_identifier(f.name) || f.name == "ground") {
-        return ov::format("climate field %d: the name must be an identifier (letters, digits, _), and 'ground' is reserved.", p_i);
+    if (!ov::is_valid_ascii_identifier(f.name)) {
+        return ov::format("climate field %d: the name must be an identifier (letters, digits, _).", p_i);
     }
     const ov::str where = "climate field '" + f.name + ov::str("': ");
     if (name_taken_before(p_table.fields, size_t(p_i))) {
         return where + ov::str("the name is used twice.");
     }
     for (const Cascade::Band &b : f.bands) {
-        if (b.k < ExactNoise::BAND_SHIFT || b.k > p_ground.k_max) {
-            return where + ov::format("octave k = %d is outside the cascade's range [%d, %d].", b.k, ExactNoise::BAND_SHIFT, p_ground.k_max);
-        }
         if (std::count_if(f.bands.begin(), f.bands.end(), [&](const Cascade::Band &p_o) { return p_o.k == b.k; }) > 1) {
             return where + ov::format("octave k = %d is listed twice.", b.k);
         }
@@ -734,7 +717,7 @@ ov::str validate_biome(const Table &p_table, size_t p_i) {
 
 // The layout's rules (the graphs' are the compiler's: graph_compile.cpp, graph_bounds.cpp): the field and biome counts,
 // each field's and each biome's.
-ov::str validate(const Table &p_table, const Ground &p_ground) {
+ov::str validate(const Table &p_table) {
     if (p_table.fields.size() > size_t(MAX_FIELDS)) {
         return ov::format("climate: %d fields, at most %d.", int64_t(p_table.fields.size()), MAX_FIELDS);
     }
@@ -742,7 +725,7 @@ ov::str validate(const Table &p_table, const Ground &p_ground) {
         return ov::format("climate: %d biomes, 1 to %d.", int64_t(p_table.biomes.size()), MAX_BIOMES);
     }
     for (int i = 0; i < int(p_table.fields.size()); i++) {
-        const ov::str err = validate_field(p_table, i, p_ground);
+        const ov::str err = validate_field(p_table, i);
         if (!err.empty()) {
             return err;
         }
@@ -799,7 +782,7 @@ ov::str parse_layout(const ov::Value &p_data, const Ground &p_ground, Table &r_t
     r_graphs.clear();
     Parser parser(p_ground, r_table);
     parser.run(p_data, r_graphs);
-    const ov::str err = parser.error.empty() ? validate(r_table, p_ground) : parser.error;
+    const ov::str err = parser.error.empty() ? validate(r_table) : parser.error;
     if (!err.empty()) {
         r_table = Table();
         r_graphs.clear();

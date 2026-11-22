@@ -11,8 +11,8 @@ const EngineInfo := preload("res://debug/biome_mixer/engine_info.gd")
 # The world's keys that are the mixer's, not the file's.
 const MIXER_KEYS := ["fields", "path", "current", "mode", "view", "mixer_version", "name"]
 # The world file's keys that may name a file (WorldFile: relative to the world file).
-const SECTIONS := ["engine", "climate", "look", "zone", "instances", "features", "species"]
-# 3: single-octave notes, warp nodes; 4: multifractals with a parent (an older autosave is not read).
+const SECTIONS := ["engine", "climate", "look", "instances", "features", "species"]
+# The format the mixer writes (3: single-octave notes, warp nodes; 4: multifractals with a parent).
 const VERSION := 4
 # The World mode's view settings, beside the Biome mode's (the mixer's VIEW_DEFAULTS) in the world's "view".
 const WORLD_VIEW := {"extent_m": 100000.0, "chart_x": 0, "chart_y": 1}
@@ -27,16 +27,16 @@ const LINE := 120
 # came from (an autosave older than the key: world.json), else p_path.
 static func read(p_path: String, p_file: String = "") -> Dictionary:
 	var w = JSON.parse_string(FileAccess.get_file_as_string(p_path)) if FileAccess.file_exists(p_path) else null
+	# Biomes named by a file (WorldFile: the list it holds, ground.biomes.json): edited here, exported inline.
+	if w is Dictionary and w.get("biomes") is String:
+		var listed = JSON.parse_string(FileAccess.get_file_as_string(EngineInfo.section_path(w.biomes, p_path)))
+		w.biomes = listed if listed is Array else []
 	if not w is Dictionary or w.get("biomes", []).is_empty():
-		return {}
-	# The mixer's own world model before version 2 (its biomes' "model" graphs): not a world file.
-	if w.get("kind", "") == "world" or int(w.get("mixer_version", VERSION)) != VERSION:
 		return {}
 	# A saved world (the autosave, Save) keeps the file it came from.
 	w.path = String(w.get("path", p_file if p_file != "" else p_path))
 	if not w.has("fields"):
 		w.fields = EngineInfo.section(w, "climate", w.path).get("fields", [])
-	migrate(w, p_path)
 	var n: int = w.biomes.size()
 	for i in n:
 		var b: Dictionary = w.biomes[i]
@@ -47,24 +47,6 @@ static func read(p_path: String, p_file: String = "") -> Dictionary:
 	w.current = clampi(int(w.get("current", 0)), 0, n - 1)
 	w.mode = String(w.get("mode", "biome"))
 	return w
-
-
-# What cascade v2 refuses in an older world and has a mechanical conversion for, converted in place (a printed note
-# each): a field's "source": "ground" term goes (the ground depends on the weights, which depend on the fields:
-# docs/cascade-v2.md). The mixer's fields and an inline climate's; a climate file the world names is left as it is.
-static func migrate(p_world: Dictionary, p_path: String) -> void:
-	var lists := [p_world.fields]
-	if p_world.get("climate") is Dictionary:
-		lists.append(p_world.climate.get("fields", []))
-	for fields in lists:
-		for f in fields:
-			var terms: Array = f.get("terms", [])
-			for i in range(terms.size() - 1, -1, -1):
-				if String(terms[i].get("source", "")) == "ground":
-					print("biome mixer: %s: field '%s' loses its ground term (per_m %s): cascade v2 has none." % [p_path, f.get("name", "?"), terms[i].get("per_m", "?")])
-					terms.remove_at(i)
-			if f.has("terms") and terms.is_empty():
-				f.erase("terms")
 
 
 # A biome's "at" as {field: [centre, span]} ({min, max}: their middle and half their gap).
@@ -134,7 +116,7 @@ static func _absolute(p_file: Dictionary, p_path: String) -> Dictionary:
 
 
 # The engine's verdict on p_world (ClimateReportNode.check: the whole file, at its own engine and over its own planet,
-# whose relief cap refuses a ground the flat world takes): "" when it accepts.
+# which refuses a ground under its centre the flat world takes): "" when it accepts.
 static func check(p_world: Dictionary) -> String:
 	return ClassDB.class_call_static("ClimateReportNode", "check", JSON.stringify(preview_file(p_world)), String(p_world.path).get_base_dir())
 

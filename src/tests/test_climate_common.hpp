@@ -1,6 +1,7 @@
 #pragma once
 
 #include "test_common.hpp"
+#include "test_ground.hpp"
 
 #include "cascade.hpp"
 #include "climate.hpp"
@@ -22,51 +23,16 @@ inline ov::Value json(const ov::str &p_text) {
     return v;
 }
 
-// The template ground's graph at p_voxel metres (its world file, SDFCascade::template_path).
-inline ov::Value template_graph(double p_voxel) {
-    ov::Value table;
-    CHECK(SDFCascade::template_table(p_voxel, table) == ov::str());
-    const ov::Value &t = table;
-    return t["biomes"][size_t(0)]["graph"];
+// The template ground's graph (WorldFile::GROUND_BIOMES: its one biome's).
+inline ov::Value template_graph() {
+    const ov::Value table = ground_table();
+    return table["biomes"][size_t(0)]["graph"];
 }
 
-// A biome's "graph" member playing the template ground at p_voxel metres, to splice into a table's text: a biome
-// without a graph mixes no note (a flat ground).
-inline ov::str ground_graph(double p_voxel) {
-    return "\"graph\": " + ov::to_json(template_graph(p_voxel));
-}
-
-// The template ground's nodes but its output: its notes and their mix "ground", each note through a shape of p_shape's
-// members if any (a shape on every octave).
-inline ov::Value ground_nodes(double p_voxel, const ov::str &p_shape = ov::str()) {
-    const ov::Value graph = template_graph(p_voxel);
-    ov::Value nodes = ov::Value::array();
-    for (const ov::Value &n : graph["nodes"].elements()) {
-        if (n["kind"].as_str() == "output") {
-            continue;
-        }
-        ov::Value node = n;
-        for (size_t r = 0; !p_shape.empty() && node["kind"].as_str() == "mix" && r < node["rows"].size(); r++) {
-            ov::Value shape = json("{" + p_shape + "}");
-            shape["id"] = "s_" + node["rows"][r]["in"].as_str();
-            shape["kind"] = "shape";
-            shape["in"] = node["rows"][r]["in"];
-            node["rows"].at(r)["in"] = shape["id"];
-            nodes.push_back(shape);
-        }
-        nodes.push_back(node);
-    }
-    return nodes;
-}
-
-// A biome's "graph" member: the template ground with each note through a shape of p_shape's members, to splice into a
-// table's text.
-inline ov::str shaped_ground_graph(double p_voxel, const ov::str &p_shape) {
-    ov::Value nodes = ground_nodes(p_voxel, p_shape);
-    nodes.push_back(json(R"({"id": "o", "kind": "output", "height": "ground"})"));
-    ov::Value graph = ov::Value::object();
-    graph["nodes"] = nodes;
-    return "\"graph\": " + ov::to_json(graph);
+// A biome's "graph" member playing the template ground, to splice into a table's text: a biome without a graph mixes
+// no note (a flat ground).
+inline ov::str ground_graph() {
+    return "\"graph\": " + ov::to_json(template_graph());
 }
 
 // Biome p_biome's graph nodes.
@@ -132,13 +98,27 @@ inline ov::str note_graph(const ov::str &p_note, const ov::str &p_shape = ov::st
             ov::str(p_shape.empty() ? "n" : "s") + "\"}]}";
 }
 
-// An SDFCascade with a climate table (a file, res:// or absolute, or its data) at 5 cm and p_lods LODs; p_skirt_cells
-// caps the skirts (ChunkParam::skirt_depth), the default's when negative.
+// An SDFCascade with a climate table (a world file, res:// or absolute, with its feature region; or its data) at 5 cm and
+// p_lods LODs; p_skirt_cells caps the skirts (ChunkParam::skirt_depth), the default's when negative. p_ground_only
+// leaves the biomes' instances and features out (the ground alone: a lifted skirt finishes their records unbounded). A
+// file's world must configure: its world error is the failure's message.
 struct ClimateSDF {
-    SDFCascade sdf;
-    ClimateSDF(const char *p_path, int p_lods, float p_skirt_cells = -1.0f) {
-        CHECK(load_table(p_path, sdf.climate_data) == ov::str());
+    GroundSDF sdf; // today's species: the tables' instances name them
+    ClimateSDF(const char *p_path, int p_lods, float p_skirt_cells = -1.0f, bool p_specialize = true, bool p_ground_only = false) {
+        WorldFile world;
+        CHECK(WorldFile::load(p_path, world) == ov::str());
+        sdf.climate_data = world.climate_table;
+        if (p_ground_only && sdf.climate_data.has("biomes")) {
+            ov::Value &biomes = sdf.climate_data["biomes"];
+            for (size_t i = 0; biomes.is_array() && i < biomes.size(); i++) {
+                biomes.at(i).erase("instances");
+                biomes.at(i).erase("features");
+            }
+        }
+        sdf.set_feature_region(world.feature_region); // a table whose biomes list features names where they stand
+        sdf.specialize = p_specialize;
         configure(p_lods, p_skirt_cells);
+        CHECK_MESSAGE(sdf.get_world_error().empty(), sdf.get_world_error());
     }
     ClimateSDF(const ov::Value &p_data, int p_lods, bool p_specialize = true) {
         sdf.climate_data = p_data;

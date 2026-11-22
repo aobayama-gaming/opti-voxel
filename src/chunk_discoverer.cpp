@@ -68,7 +68,7 @@ void ChunkDiscoverer::_corner_verdicts(const std::vector<ChunkId> &p_wave, const
     }
 }
 
-void ChunkDiscoverer::_cull_wave(const std::vector<ChunkId> &p_wave, int p_lod, CullMode p_mode, std::vector<uint8_t> &r_outside,
+void ChunkDiscoverer::_cull_wave(const std::vector<ChunkId> &p_wave, int p_lod, bool p_cull, std::vector<uint8_t> &r_outside,
         ScanCounters &r_counters, CullCache *p_cache, LocalPointsGPU *p_gpu) const {
     Trace::Scope span("discoverer", "cull_wave");
     span.set_arg(p_wave.size());
@@ -96,7 +96,7 @@ void ChunkDiscoverer::_cull_wave(const std::vector<ChunkId> &p_wave, int p_lod, 
 
     const auto t0 = std::chrono::steady_clock::now();
     std::vector<uint8_t> verdict(fresh.size(), 0);
-    if (p_mode != CULL_NONE && !fresh.empty()) {
+    if (p_cull && !fresh.empty()) {
         _corner_verdicts(p_wave, fresh, p_lod, verdict, wave, p_gpu);
     }
     r_counters.cull_nsec += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count();
@@ -218,7 +218,7 @@ bool ChunkDiscoverer::step() {
     int64_t evicted = 0;
     {
         Trace::Scope span("discoverer", "scan");
-        scan(actual_view, cull_mode, *new_scanned_chunk, counters, use_cache ? &cache : nullptr, gpu);
+        scan(actual_view, true, *new_scanned_chunk, counters, &cache, gpu);
         evicted = _evict_cache(counters.nodes_visited);
         span.set_arg(new_scanned_chunk->size());
     }
@@ -261,7 +261,7 @@ void ChunkDiscoverer::exit() {
 int64_t ChunkDiscoverer::_evict_cache(int64_t p_nodes_visited) {
     // Forget the verdicts of nodes no scan has visited for a while, once the cache is well
     // past the size of one scan (flying keeps adding new nodes).
-    if (!use_cache || cache.entries.size() <= size_t(4 * p_nodes_visited)) {
+    if (cache.entries.size() <= size_t(4 * p_nodes_visited)) {
         return 0;
     }
     std::vector<ChunkId> stale;
@@ -320,7 +320,7 @@ void ChunkDiscoverer::_publish(std::unique_ptr<LODHashSet> p_scan, std::unique_p
     mutex.unlock();
 }
 
-void ChunkDiscoverer::scan(const ScanView &p_view, CullMode p_mode, LODHashSet &r_chunks, ScanCounters &r_counters,
+void ChunkDiscoverer::scan(const ScanView &p_view, bool p_cull, LODHashSet &r_chunks, ScanCounters &r_counters,
         CullCache *p_cache, LocalPointsGPU *p_gpu) const {
     const int max_lod = get_max_lod();
     int64_t max_lod_radius;
@@ -357,7 +357,7 @@ void ChunkDiscoverer::scan(const ScanView &p_view, CullMode p_mode, LODHashSet &
     std::vector<ChunkId> next;
     std::vector<uint8_t> outside;
     for (int lod = max_lod; !wave.empty(); lod--) {
-        _cull_wave(wave, lod, p_mode, outside, r_counters, p_cache, p_gpu);
+        _cull_wave(wave, lod, p_cull, outside, r_counters, p_cache, p_gpu);
         next.clear();
         for (size_t i = 0; i < wave.size(); i++) {
             const ChunkId &node = wave[i];
@@ -632,7 +632,7 @@ void ChunkDiscoverer::_compare_with_cpu(const ScanView &p_view, const LODHashSet
     const uint64_t t0 = now_usec();
     LODHashSet cpu_set;
     ScanCounters cpu_counters;
-    scan(p_view, cull_mode, cpu_set, cpu_counters);
+    scan(p_view, true, cpu_set, cpu_counters);
     int64_t only_here = 0;
     int64_t only_cpu = 0;
     for (const ChunkId &id : p_scanned) {
@@ -697,7 +697,6 @@ ov::Value ChunkDiscoverer::get_stats() {
     d["last_delta_entered"] = stats.last_delta_entered;
     d["last_delta_left"] = stats.last_delta_left;
     d["latency"] = stats.latency.to_value();
-    d["cull_mode"] = (int)cull_mode;
     d["scans_skipped_same_chunk"] = stats.scans_skipped_same_chunk;
     d["last_scan_size"] = stats.last_scan_size;
     d["last_out_of_view"] = stats.last_out_of_view;
@@ -716,8 +715,6 @@ ov::Value ChunkDiscoverer::get_stats() {
     d["last_culled"] = stats.last_culled;
     d["nodes_visited_total"] = stats.nodes_visited_total;
     d["sdf_calls_total"] = stats.sdf_calls_total;
-    d["cache"] = use_cache;
-    d["verify"] = cache.verify;
     d["last_cache_hits"] = stats.last_cache_hits;
     d["cache_hits_total"] = stats.cache_hits_total;
     d["cache_size"] = stats.cache_size;

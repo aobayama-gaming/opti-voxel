@@ -57,8 +57,9 @@ render contract (`BaseSurface::glsl_render`, `docs/terrain.md`), so another base
   the ground), at most `atmo_max_path_m` long (a ray along the flat world's plane never leaves it). **Scale**
   (`AtmosphereMedium::for_base`): under Earth's radius every height times R / R_earth and every coefficient over it (the
   same optical depths: a small planet keeps a blue sky and a limb), the top at least `RELIEF_TOPS` (4) times the
-  ground's relief (the world's `look.relief_m`, 3.3 km by default, at most a planet's: `SDFCascade::relief_m`) so the terrain stays inside the air: Earth and the flat world keep
-  Earth's 100 km, a 2 km planet gets 250 m. `look.atmosphere_scale` sets the factor.
+  ground's relief (`SDFCascade::ground_top_m`: the program's output bound over the base, its highest possible point,
+  0 for a ground that never rises above its base) so the terrain stays inside the air: Earth and the flat world keep
+  Earth's 100 km, a 2 km planet under `tiny.world.json`'s 819 m gets 3.3 km. `look.atmosphere_scale` sets the factor.
 - **Passes** (compute on the main device every frame, `device->post` like the mesher; a `atmosphere` GPU timestamp):
   the multiple-scattering table ψ_ms(sun height, altitude), 32 x 32 (Hillaire's: second order with an isotropic phase
   over 64 directions, 1 / (1 - f_ms)), built once on a sphere of the base's curvature radius (Earth's on the flat
@@ -143,8 +144,10 @@ that follow it (the climate's map below is 3D for the same reason).
 - **Layer** (`CloudLayer::for_base`): Earth's 1.5 to 4 km, extinction 0.04 /m at density 1 (Hillaire 2016's cumulus
   range is 0.05 to 0.12), albedo 0.99; under Earth's radius scaled like the atmosphere (lengths times s, extinction over
   s, s at least `RELIEF_BOTTOMS` reliefs over Earth's bottom), then lifted, its thickness kept, until its bottom is
-  `RELIEF_BOTTOMS` (1.25) reliefs up: the march knows nothing of the terrain, so no cloud may reach into it. Earth's
-  3.3 km relief puts it at 4.1 to 6.6 km; a 2 km planet's at 78 to 208 m.
+  `RELIEF_BOTTOMS` (1.25) reliefs up: the march knows nothing of the terrain, so no cloud may reach into it. The
+  relief is the program's top (`SDFCascade::ground_top_m`, a bound: the template ground's sum of amplitudes, ~6.6 km at
+  5 cm and 0.5 m alike, puts the layer at ~8.2 to ~10.7 km; the old fixed 3.3 km relief had it at 4.1 to 6.6 km); a 2 km planet under
+  `tiny.world.json`'s 819 m at ~1 to ~2.7 km.
 - **Light:** Hillaire's (Frostbite, "Physically Based Sky, Atmosphere and Cloud Rendering", SIGGRAPH 2016): the
   energy-conserving step, a dual-lobe Henyey-Greenstein phase (0.8 forward, -0.3 back, 0.7 / 0.3), the sun through the
   air (`atmo_transmittance` at the ray's two ends, linear between) and through the cloud (6 steps from 1% of the

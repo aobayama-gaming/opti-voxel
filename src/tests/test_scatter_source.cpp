@@ -2,6 +2,7 @@
 
 #include "instance_stream.hpp"
 #include "scatter_source.hpp"
+#include "test_trees.hpp"
 #include "tree_archetype.hpp"
 
 #include <algorithm>
@@ -47,11 +48,13 @@ private:
     std::map<SourceKey, SourceContent> cache;
 };
 
-// A 5 cm forest of about 2,000 trees on gentle hills far from the origin, its source built once.
+// A 5 cm forest of about 2,000 trees on gentle hills far from the origin, its source built once. The source has no end:
+// its accept keeps the sites of a square (area) for the tests to compare the tiles with whole builds of a finite set.
 struct SourceFixture {
     static constexpr double VOXEL = 0.05;
     std::shared_ptr<ScatterSource> source;
     VoxelPos origin = VoxelPos(int64_t(1) << 33, 1700, -(int64_t(1) << 20));
+    VoxelBox box = VoxelBox{ origin - VoxelPos(2250, 400, 2250), origin + VoxelPos(2249, 400, 2249), true };
 
     // p_species >= 0: every site of that species (one class, its own profile), the mixed forest otherwise.
     explicit SourceFixture(int64_t p_part_cell_sides = ScatterSource::PART_CELL_SIDES, int p_species = -1) {
@@ -79,7 +82,9 @@ struct SourceFixture {
             c.profile_key.clear();
         }
         c.side = 100;
-        c.zone = VoxelBox{ origin - VoxelPos(2250, 400, 2250), origin + VoxelPos(2249, 400, 2249), true };
+        c.start_level = site_walk_level(c.side, VOXEL);
+        const VoxelBox kept = box;
+        c.accept = [kept](const VoxelPos &p_base) { return kept.contains(p_base); };
         const VoxelPos o = origin;
         c.ground = [o](const VoxelPos &p_v, int) {
             const double tau = 6.283185307179586, amp = 60.0, wave = 2400.0;
@@ -108,22 +113,22 @@ struct SourceFixture {
         return fixtures[p_species];
     }
     const ScatterSource &f() const { return *source; }
-    VoxelBox zone() const { return f().setup().scatter.zone; }
+    VoxelBox area() const { return box; }
 
     const SourceContent &content(const SourceKey &p_key) const { return cache.content(p_key); }
 
-    // Every key of a kind the zone's box has at p_lod.
-    std::vector<SourceKey> zone_keys(int p_kind, int p_lod) const {
+    // Every key of a kind the area's box has at p_lod.
+    std::vector<SourceKey> area_keys(int p_kind, int p_lod) const {
         std::vector<SourceKey> keys, out;
-        f().keys(zone().lo, zone().hi, p_lod, keys);
+        f().keys(area().lo, area().hi, p_lod, keys);
         std::copy_if(keys.begin(), keys.end(), std::back_inserter(out), [p_kind](const SourceKey &p_k) { return p_k.kind == p_kind; });
         return out;
     }
 
-    // The items of every record of the zone's sites, in key order.
+    // The items of every record of the area's sites, in key order.
     std::vector<MomentItem> part_items() const {
         std::vector<MomentItem> items;
-        for (const SourceKey &k : zone_keys(SourceKey::PARTS, 0)) {
+        for (const SourceKey &k : area_keys(SourceKey::PARTS, 0)) {
             for (const TableRecord &r : content(k).records) {
                 items.push_back(record_item(*f().setup().library, r));
             }
@@ -142,10 +147,10 @@ struct SourceFixture {
         return out;
     }
 
-    // The kept blobs of every blob tile of layer p_layer over the zone.
+    // The kept blobs of every blob tile of layer p_layer over the area.
     std::vector<MomentBlob> layer_blobs(int p_layer) const {
         std::vector<MomentBlob> out, one;
-        for (const SourceKey &k : zone_keys(SourceKey::BLOBS, p_layer)) {
+        for (const SourceKey &k : area_keys(SourceKey::BLOBS, p_layer)) {
             f().blobs(k, cache.inputs(k), one);
             out.insert(out.end(), one.begin(), one.end());
         }
@@ -170,7 +175,7 @@ std::vector<VoxelPos> tiles_over(const VoxelBox &p_box, int64_t p_side) {
 }
 
 // The LOD-0 tiles inside part tile p_tile of LOD p_lod in the record pyramid's order: its 1 or 8 L - 1 tiles, z y x,
-// recursively (the zone left out).
+// recursively.
 void pyramid_tiles(const ScatterSource &p_f, int p_lod, const VoxelPos &p_tile, std::vector<VoxelPos> &r_out) {
     if (p_lod == 0) {
         r_out.push_back(p_tile);
@@ -205,11 +210,11 @@ bool same_sites(const std::vector<CellSite> &p_a, const std::vector<CellSite> &p
 
 // The LOD-0 part tiles partition the source: each site once, its records those a whole placement gives; a coarser LOD's
 // tiles (the pyramid) hold exactly the records listed there.
-TEST_CASE("Scatter source: the part tiles hold the zone's sites, each once, and the pyramid what each LOD lists") {
+TEST_CASE("Scatter source: the part tiles hold the area's sites, each once, and the pyramid what each LOD lists") {
     const SourceFixture &fx = SourceFixture::get();
     const ScatterSource &f = fx.f();
     std::vector<CellSite> sites;
-    f.setup().scatter.sites(fx.zone(), sites);
+    f.setup().scatter.sites(fx.area(), sites);
     std::vector<std::vector<TableRecord>> whole(sites.size());
     for (size_t i = 0; i < sites.size(); i++) {
         f.setup().scatter.grow(sites[i].site, -1, whole[i]);
@@ -218,7 +223,7 @@ TEST_CASE("Scatter source: the part tiles hold the zone's sites, each once, and 
         }
     }
     int64_t groups = 0, matched = 0, out_of_profile = 0, records = 0;
-    for (const SourceKey &k : fx.zone_keys(SourceKey::PARTS, 0)) {
+    for (const SourceKey &k : fx.area_keys(SourceKey::PARTS, 0)) {
         CHECK(k.source == 3);
         const SourceContent &c = fx.content(k);
         out_of_profile += c.out_of_profile;
@@ -257,23 +262,21 @@ TEST_CASE("Scatter source: the part tiles hold the zone's sites, each once, and 
         for (const std::vector<TableRecord> &w : whole) {
             listed += std::count_if(w.begin(), w.end(), [lod](const TableRecord &p_r) { return p_r.listed_at(lod); });
         }
-        for (const SourceKey &k : fx.zone_keys(SourceKey::PARTS, lod)) {
+        for (const SourceKey &k : fx.area_keys(SourceKey::PARTS, lod)) {
             CHECK(k.lod == key_lod);
             std::vector<SourceKey> in;
             f.inputs(k, in);
-            // The LOD-0 site tiles of its cube meeting the zone, in the pyramid's order: a LOD-0 part tile reads its own, a
-            // coarser one those the zone's walk keeps at their level: every one with a site among them, the others air.
+            // The LOD-0 site tiles of its cube, in the pyramid's order: a LOD-0 part tile reads its own, a coarser one those
+            // the source's walk keeps at their level: every one with a site among them, the others air.
             std::vector<VoxelPos> all;
             pyramid_tiles(f, k.lod, k.tile, all);
             std::vector<SourceKey> site_tiles;
             std::vector<CellSite> from_tiles;
             for (const VoxelPos &t : all) {
                 const SourceKey site{ 3, SourceKey::SITES, 0, t };
-                if (f.tile_box(site).intersects(fx.zone())) {
-                    site_tiles.push_back(site);
-                    const std::vector<CellSite> &w = fx.content(site).sites;
-                    from_tiles.insert(from_tiles.end(), w.begin(), w.end());
-                }
+                site_tiles.push_back(site);
+                const std::vector<CellSite> &w = fx.content(site).sites;
+                from_tiles.insert(from_tiles.end(), w.begin(), w.end());
             }
             if (k.lod == 0) {
                 CHECK(in == site_tiles);
@@ -301,7 +304,7 @@ TEST_CASE("Scatter source: the part tiles hold the zone's sites, each once, and 
     }
 }
 
-// A part layer's blob tile is what a whole build of the zone's records gives for its cells: the items within
+// A part layer's blob tile is what a whole build of the area's records gives for its cells: the items within
 // MARGIN_CELLS of it are enough.
 TEST_CASE("Scatter source: the part layers' blob tiles are a whole build's blobs") {
     const SourceFixture &fx = SourceFixture::get();
@@ -350,8 +353,8 @@ static void check_proxy_layers(const SourceFixture &fx, bool p_gate = true) {
     const std::vector<MomentItem> items = fx.part_items();
     int layers_checked = 0;
     for (int layer = 0; layer < f.setup().lod_count; layer++) {
-        // Layers with a few cells across the zone (a coarser one is all edge).
-        if (!f.has_layer(layer) || f.part_layer(layer) || 4 * f.layer_cell(layer) > fx.zone().hi.x - fx.zone().lo.x) {
+        // Layers with a few cells across the area (a coarser one is all edge).
+        if (!f.has_layer(layer) || f.part_layer(layer) || 4 * f.layer_cell(layer) > fx.area().hi.x - fx.area().lo.x) {
             continue;
         }
         layers_checked++;
@@ -408,7 +411,7 @@ TEST_CASE("Scatter source: the proxy layers of a one-species forest (reported)")
     }
 }
 
-// The forest's profile is per species and shared by its tree set: a source with the same key and another zone takes the
+// The forest's profile is per species and shared by its tree set: a source with the same key and another area takes the
 // same object, another voxel size another; per species, the lost mass weighted by the species' share of the sites is the
 // mean site's (a one-class profile of hashed variants, other samples: within sampling noise).
 TEST_CASE("Scatter source: one profile per tree set, per-species far moments") {
@@ -416,8 +419,10 @@ TEST_CASE("Scatter source: one profile per tree set, per-species far moments") {
     const ScatterSource &f = fx.f();
     CHECK(f.profile().lost.size() == tree_species().size());
     ScatterSource::Setup other = f.setup();
-    other.scatter.zone = VoxelBox{ fx.origin + VoxelPos(9000, -400, 0), fx.origin + VoxelPos(12000, 400, 3000), true };
+    const VoxelBox elsewhere{ fx.origin + VoxelPos(9000, -400, 0), fx.origin + VoxelPos(12000, 400, 3000), true };
+    other.scatter.accept = [elsewhere](const VoxelPos &p_base) { return elsewhere.contains(p_base); };
     other.scatter.side = 140; // another density
+    other.scatter.start_level = site_walk_level(other.scatter.side, SourceFixture::VOXEL);
     const ScatterSource b(other);
     CHECK(b.profile_shared());
     CHECK(&b.profile() == &f.profile());
@@ -476,10 +481,10 @@ TEST_CASE("Scatter source: a box's keys hold every record that can reach it") {
     const ScatterSource &f = fx.f();
     for (int lod = 0; lod < f.profile().lod_end + 2; lod++) {
         CAPTURE(lod);
-        // Every tile of both kinds over the zone grown by the records' reach and two blob cells, enumerated here and not by
+        // Every tile of both kinds over the area grown by the records' reach and two blob cells, enumerated here and not by
         // keys(): a tile keys() wrongly leaves out is still a candidate.
         std::vector<SourceKey> all;
-        const VoxelBox around = fx.zone().grown(int64_t(f.profile().reach) + 2 * f.layer_cell(lod));
+        const VoxelBox around = fx.area().grown(int64_t(f.profile().reach) + 2 * f.layer_cell(lod));
         for (int kind = SourceKey::PARTS; kind <= SourceKey::BLOBS; kind++) {
             const int64_t side = kind == SourceKey::PARTS ? f.part_tile_side(lod) : f.blob_tile_cells(lod) * f.layer_cell(lod);
             for (const VoxelPos &t : tiles_over(around, side)) {
@@ -490,7 +495,7 @@ TEST_CASE("Scatter source: a box's keys hold every record that can reach it") {
         for (int i = 0; i < 24; i++) {
             const ExactNoise::UVec3 h = ExactNoise::hash3(uint32_t(i), uint32_t(lod), 0xB0Bu);
             const int64_t span = f.setup().chunk_voxels << lod;
-            const VoxelPos lo = fx.zone().lo + VoxelPos(int64_t(h.x % 4700u) - 200, int64_t(h.y % 1000u) - 200, int64_t(h.z % 4700u) - 200);
+            const VoxelPos lo = fx.area().lo + VoxelPos(int64_t(h.x % 4700u) - 200, int64_t(h.y % 1000u) - 200, int64_t(h.z % 4700u) - 200);
             const VoxelPos hi = lo + VoxelPos(span, span, span);
             std::vector<SourceKey> keys;
             f.keys(lo, hi, lod, keys);
@@ -512,13 +517,14 @@ TEST_CASE("Scatter source: a box's keys hold every record that can reach it") {
 
 namespace {
 
-// Two sources on the forest's hills, in a smaller zone: rocks (id 0, spheres of 6-14 voxels, no blobs) and the 5 cm forest
+// Two sources on the forest's hills, accepted in a smaller area: rocks (id 0, spheres of 6-14 voxels, no blobs) and the 5 cm forest
 // (id 1, with its moment layers), as the stream holds them.
 struct SceneFixture {
     std::vector<std::shared_ptr<const ScatterSource>> sources;
     std::vector<std::unique_ptr<KeyCache>> caches; // per source
     ChunkParam param;
     VoxelPos origin = SourceFixture::get().origin;
+    VoxelBox area = VoxelBox{ origin - VoxelPos(1200, 400, 1200), origin + VoxelPos(1199, 400, 1199), true };
 
     SceneFixture() {
         auto lib = std::make_shared<DefLibrary>();
@@ -528,13 +534,15 @@ struct SceneFixture {
         const SourceFixture &forest = SourceFixture::get();
         ScatterSource::Setup s = forest.f().setup();
         s.library = lib;
-        s.scatter.zone = VoxelBox{ origin - VoxelPos(1200, 400, 1200), origin + VoxelPos(1199, 400, 1199), true };
+        const VoxelBox kept = area;
+        s.scatter.accept = [kept](const VoxelPos &p_base) { return kept.contains(p_base); };
         s.part_cell_sides = ScatterSource::STREAM_PART_CELL_SIDES;
         ScatterSource::Setup rocks = s;
         rocks.id = 0;
         rocks.blob_type = -1;
         rocks.scatter.salt = 0x40C5u;
         rocks.scatter.side = 40;
+        rocks.scatter.start_level = site_walk_level(rocks.scatter.side, SourceFixture::VOXEL);
         rocks.scatter.generate = [sphere](const Site &p_site, const UpAxis &, int, std::vector<TableRecord> &r_out) {
             TableRecord r;
             r.def = uint8_t(sphere);
@@ -681,7 +689,7 @@ TEST_CASE("Scatter source: the part tiles grown from the site tiles are the reco
             CAPTURE(s->setup().id);
             CAPTURE(lod);
             int64_t tiles = 0, same = 0, records = 0;
-            for (const VoxelPos &t : tiles_over(s->setup().scatter.zone, s->part_tile_side(lod))) {
+            for (const VoxelPos &t : tiles_over(fx.area, s->part_tile_side(lod))) {
                 const SourceKey key{ s->setup().id, SourceKey::PARTS, lod, t };
                 const SourceContent &got = cache.content(key);
                 tiles++;
@@ -732,7 +740,7 @@ TEST_CASE("Scatter source: the chunks' lists through the stream are the record p
             mirror.update(stream);
             std::vector<uint32_t> ids;
             stream.chunk_list(chunk, ids);
-            // The reference: per source, the pyramid's tiles over the zone at the chunk's LOD, then its blob tiles.
+            // The reference: per source, the pyramid's tiles over the area at the chunk's LOD, then its blob tiles.
             VoxelPos lo, hi;
             chunk_sample_box(chunk, fx.param, lo, hi);
             std::vector<TableRecord> want;
@@ -740,7 +748,7 @@ TEST_CASE("Scatter source: the chunks' lists through the stream are the record p
             for (const std::shared_ptr<const ScatterSource> &s : fx.sources) {
                 std::vector<const SourceContent *> contents;
                 if (lod < s->profile().lod_end) {
-                    for (const VoxelPos &t : tiles_over(s->setup().scatter.zone, s->part_tile_side(lod))) {
+                    for (const VoxelPos &t : tiles_over(fx.area, s->part_tile_side(lod))) {
                         contents.push_back(&pyramids[s->setup().id].tile(lod, t));
                     }
                 }
@@ -790,13 +798,12 @@ TEST_CASE("Scatter source: the site tiles are the walks their tiles would do") {
     const ScatterSource &f = fx.f();
     const CellScatter &sc = f.setup().scatter;
     int64_t sites = 0, tiles = 0, same = 0;
-    for (const VoxelPos &t : tiles_over(fx.zone(), f.part_tile_side(0))) {
+    for (const VoxelPos &t : tiles_over(fx.area(), f.part_tile_side(0))) {
         const SourceKey key{ 3, SourceKey::SITES, 0, t };
         std::vector<CellSite> walk;
-        const VoxelBox box = f.tile_box(key).clipped(sc.zone);
-        if (box.valid) {
-            surface_sites(box.lo, box.hi, sc.side, sc.salt, sc.ground, walk, true, walk_level(sc.zone, sc.side)); // from the zone's level
-        }
+        const VoxelBox box = f.tile_box(key);
+        surface_sites(box.lo, box.hi, sc.side, sc.salt, sc.ground, walk, true, sc.start_level); // every source walk's start
+        sc.accept_sites(walk, 0);
         const SourceContent &c = fx.content(key);
         tiles++;
         same += c.records.empty() && c.groups.empty() && same_sites(c.sites, walk);
@@ -815,7 +822,7 @@ TEST_CASE("Scatter source: the site tiles are the walks their tiles would do") {
         layers++;
         const int64_t g = streamed.proxy_side(layer);
         std::vector<SourceKey> keys, in;
-        streamed.keys(fx.zone().lo, fx.zone().hi, layer, keys);
+        streamed.keys(fx.area().lo, fx.area().hi, layer, keys);
         std::map<SourceKey, SourceContent> walks;
         int64_t blobs = 0, alike = 0, checked = 0, reads = 0, regions_same = 0, proxies = 0;
         for (const SourceKey &k : keys) {
@@ -839,11 +846,9 @@ TEST_CASE("Scatter source: the site tiles are the walks their tiles would do") {
                         [&region](const CellSite &p_s) { return region.contains(p_s.site.base); });
             }
             reads += int64_t(in.size());
-            // The one-region walk from the same level (an unclipped region's: the old walk, where the zone doesn't clip it).
+            // The one-region walk from the same level (the walk a blob tile did before the proxy tiles).
             std::vector<CellSite> walk;
-            if (region.valid) {
-                surface_sites(region.lo, region.hi, g, sc.salt ^ ScatterSource::PROXY_SALT, sc.ground, walk, false, streamed.proxy_level(layer));
-            }
+            surface_sites(region.lo, region.hi, g, sc.salt ^ ScatterSource::PROXY_SALT, sc.ground, walk, false, streamed.proxy_level(layer));
             std::sort(gathered.begin(), gathered.end(), [](const CellSite &p_a, const CellSite &p_b) { return cell_order(p_a.cell, p_b.cell); });
             regions_same += same_sites(gathered, walk);
             // Alone or with a tile missing (the CPU's point path): one walk of the region, from the same level.

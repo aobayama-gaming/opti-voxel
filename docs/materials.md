@@ -7,7 +7,7 @@ Per-chunk palettes and per-biome ground materials.
   id 0 `GROUND` is the page shader's procedural slope / height colours; ids < 2^24). By default it is its type's
   (`DefLibrary::add(def, material)`, `Material::FROM_TYPE` resolved by `SDFTable::finish_record`: branch bark, crown
   and cone leaves, basin scorched rock, island island rock; the generic shapes (sphere, capsule, rock, cylinder, the
-  shapes gallery) are `Material::INHERIT`, the lava slab sets lava), so runtime `add_instance` edits get theirs too.
+  gallery's composites) are `Material::INHERIT`, the lava slab sets lava), so runtime `add_instance` edits get theirs too.
   An `INHERIT` cutter colours nothing: the fold skips its win, so the sample keeps what it had (the dig tool's
   capsule carves a tree and the hole shows bark). On a union it resolves to ground (`Archetype::record_material`, in
   `SDFTable::finish_record`): an inheriting union would take whatever record won the sample before it in list order. It takes the list word's reserved
@@ -57,7 +57,7 @@ Per-chunk palettes and per-biome ground materials.
   +15% saturation on greens and browns); `--grade=0` (bench, player) turns it off. The scenes' old brightness /
   contrast / saturation values never applied (adjustments were off) and are gone. The ground's material per biome:
   **Biome materials** below. Next: materials inside one record (an IR change), image textures (triplanar).
-- **Biome materials** (with any climate that has fields, `SDFCascade::has_ground_materials`): each biome is a ground material `biome:<name>` (`Climate::biome_material`:
+- **Biome materials** (with a climate of its own look, a fieldless one too: several biomes or one with a `surface`; not one biome on the default surface, the template ground, which already draws as the procedural ground: `SDFCascade::has_ground_materials`): each biome is a ground material `biome:<name>` (`Climate::biome_material`:
   `PATTERN_GROUND`, the page shader's slope blend and contours in the biome's `"surface"` colours, sRGB `#rrggbb`
   `flat` / `steep` + `roughness` in the table, the procedural ground's without; its `debug_color` as the material's
   debug colour). Every chunk palette starts with the **base palette** (`SDFGpuTable::base_palette`: GROUND, then biome

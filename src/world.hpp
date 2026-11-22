@@ -28,26 +28,20 @@ class World {
 public:
     // How the engine runs, set before start(); what the terrain is lives in the world file.
     struct Settings {
-        // The world file (WorldFile, a host path), empty for WorldFile's defaults.
+        // The world file (WorldFile, a host path), empty for WorldFile::DEFAULT_PATH.
         str world_path;
         // Or the world itself, a world file's text whose relative paths start from world_dir (an editor's world, never
         // written to a file). The host sets one of the two (VoxelTerrain's setters clear the other).
         str world_json;
         str world_dir;
-        // 1 the world's Hermite cascade terrain, 4 the flat preset under the shapes gallery.
-        int terrain_mode = 1;
         ChunkParam chunk_param; // skirt_depth set by the host, voxel_size by load_world; the render origin by start() and recenter()
         VoxelPos world_origin_request; // LOD0 voxels, snapped down to the root chunk span by start()
         // recenter() moves the render origin to the camera once it is farther than this from it (metres, on any axis):
         // render positions stay small, so float precision holds anywhere in the world. 0: never (a fixed origin).
         float rebase_distance_m = 1024.0f;
-        bool archetype_band = true;
+        // false: every source placed whole at configure (the stream's oracle), which needs a box only the checks give
+        // (SDFTable::set_whole_region): a world with instances is refused.
         bool archetype_stream = true;
-        int archetype_stream_part_sides = int(Archetype::ScatterSource::STREAM_PART_CELL_SIDES);
-        bool archetype_moments = true;
-        float archetype_erode = Archetype::ERODE_CELLS;
-        float archetype_resolve = Archetype::ErodeRule().resolve;
-        bool dual_contouring = false;
         float lod_pixel_error = 2.0f;
         float lod_pixel_error_back = 0.0f; // 0: lod_pixel_error everywhere
         std::vector<float> lod_pixel_errors; // per LOD, replaces lod_pixel_error (0 or past the end: lod_pixel_error)
@@ -57,16 +51,15 @@ public:
         int lod_view_min = 0; // the finest LOD the view loads (ScanView::min_lod), read every frame
         GPUDirectMesher::Settings direct;
         int debug_view = 0;
-        int discovery_cull_mode = ChunkDiscoverer::CULL_LEGACY;
-        bool discovery_cache = true;
         bool specialize_shaders = true; // SDFCascade::specialize
-        bool discovery_verify = false;
         bool destroy_verify = false;
-        int discoverer_mode = -1; // -1 auto: GPU (CPU when no local device can be made), 0 CPU, 1 GPU
+        int discoverer_mode = 1; // 0 CPU, 1 GPU (CPU when no local device can be made)
         bool discovery_compare = false;
         bool walk_gpu = true;
         bool walk_verify = false;
-        int walk_batch = int(SDFTable::WALK_BATCH_GPU);
+
+        // Why these settings can't start a world (a value out of its range), empty if they can. start() refuses with it.
+        str validate() const;
     };
 
     // The camera's projection, which the LOD distances are measured against.
@@ -123,6 +116,9 @@ public:
         points_gpu = std::move(p_kept.points_gpu);
     }
     bool is_started() const { return started; }
+    // Why the last start() failed (its file, planet, climate or species refused, no device, bad settings), or why the
+    // started world draws nothing (the mesher's passes failed to compile: seen by frame()); empty otherwise. Hosts show it.
+    const str &get_error() const { return error; }
     // The LOD the view's rule gives at p_distance_m from the camera (ChunkDiscoverer::lod_at_distance); 0 before start.
     int lod_at_distance(double p_distance_m) const;
     // The direction towards the sun (render space, unit): the atmosphere's light from the next frame on.
@@ -147,7 +143,8 @@ public:
     int64_t pending_chunk_count() const { return int64_t(state.dirty_chunk.size()); }
     // Distance from the camera (metres) that bounds every chunk the discoverer can load (0 before start).
     double load_radius() const;
-    // SDF (metres, LOD 0) at a render-space position: the camera's distance to the terrain.
+    // SDF (metres, LOD 0) at a render-space position: the camera's distance to the terrain; 0 without a configured
+    // world (a refused one: get_error).
     double sdf_at(const double p_render_pos[3]) const;
     // The LOD0 voxel holding a render-space position (an edit's anchor).
     VoxelPos voxel_at(const double p_render_pos[3]) const;
@@ -180,11 +177,23 @@ public:
 
     void set_debug_view(int p_view);
 
-    // Instance edits (archetype table): the anchor in LOD0 voxels, a 9-float row-major rotation and 8 params (null:
-    // identity / zero), op a Combine. The chunks the edit can change are re-meshed, the discoverer rescans.
+    // Instance edits (archetype table): p_type a library index (type_index), the anchor in LOD0 voxels, a 9-float
+    // row-major rotation and 8 params (null: identity / zero), op a Combine. The chunks the edit can change are re-meshed,
+    // the discoverer rescans.
     int add_instance(int p_type, const VoxelPos &p_anchor, const float *p_rotation, const float *p_params, int p_op, float p_k);
     bool remove_instance(int p_id);
     bool move_instance(int p_id, const VoxelPos &p_anchor, const float *p_rotation);
+    // The library index of the type named p_name (DefLibrary::find), -1 if none is (or before start).
+    int type_index(const str &p_name) const;
+    // The live edits (SDFTable::live_edits): what a restart keeps and an edits file saves.
+    std::vector<SDFTable::Edit> live_edits() const { return sdf->live_edits(); }
+    // The live edits written as an edits file at p_path (a host path; WorldFile::save_edits): empty, or why not.
+    str save_edits(const str &p_path) const;
+    // The edits the next start() replays in place of the world file's "edits" (a restart keeps the live ones).
+    void set_start_edits(const std::vector<SDFTable::Edit> &p_edits) {
+        start_edits = p_edits;
+        has_start_edits = true;
+    }
 
     ov::Value debug_stats();
     // { section: total ms since start } of frame(), cheap enough to read every frame.
@@ -204,6 +213,9 @@ private:
     str content_path; // the world it read: world_path, or world_json from world_dir
     str content_json;
     str content_dir;
+    bool content_read = false; // content is what load_world read (not WorldFile defaults)
+    std::vector<SDFTable::Edit> start_edits; // set_start_edits
+    bool has_start_edits = false;
     Hosts hosts;
     std::unique_ptr<SDFCascade> sdf;
     ChunkDiscoverer *chunk_discoverer = nullptr;
@@ -220,6 +232,9 @@ private:
     VoxelState state;
 
     bool started = false;
+    str error; // get_error
+    // p_error kept for get_error and printed; false (start's and load_world's refusal).
+    bool fail(const str &p_error);
     // update_destroy is needed (a scan or mesher results arrived since it last ran).
     bool destroy_dirty = false;
     // View of the scan currently in state.scanned_chunk.

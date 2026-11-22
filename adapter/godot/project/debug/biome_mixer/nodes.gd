@@ -232,7 +232,7 @@ static func _surface_row(p_key: String, p_ctx: Object) -> Control:
 
 
 # A note's wavelength: one of the octaves the cascade inserts (2^k voxels, its lattice Λ_k), from 8 voxels (the finest
-# the engine takes) to the top note of the LOD count (k = lods + 4: 26 km at 5 cm and 15 LODs). A value between octaves
+# that plays: a finer one plays nothing) to the top note of the LOD count (k = lods + 4: 26 km at 5 cm and 15 LODs). A value between octaves
 # (an older file) shows as its nearest, which is what the engine reads.
 static func _octaves(p_m: float, p_set: Callable) -> OptionButton:
 	var ob := OptionButton.new()

@@ -1,0 +1,21 @@
+{
+ "comment": "The shapes gallery (res://shapes_scene.tscn, --terrain=shapes): hard unions, subtractions and intersections with sharp creases on a flat ground at the datum (300 m, altitude 0: off the page shader's contour lines at 50 m + k 100 m). The edits file places a ladder of eight cubes holed through every face, each twice the size and twice the distance of the last (about one LOD coarser each on screen), turned to show the spawn the same two faces; a die, a staircase and a cube tunnelled along its three axes behind the spawn (-52, -95). instance_band false keeps them whole at every LOD: the band rule's erosion would tear the cubes' thin frames.",
+ "engine": {
+  "voxel_m": 0.5,
+  "lods": 15
+ },
+ "instance_band": false,
+ "biomes": [
+  {
+   "name": "flat",
+   "comment": "A constant ground: the datum itself.",
+   "graph": {
+    "nodes": [
+     {"id": "c", "kind": "constant", "value_m": 0},
+     {"id": "out", "kind": "output", "height": "c"}
+    ]
+   }
+  }
+ ],
+ "edits": "shapes.edits.json"
+}

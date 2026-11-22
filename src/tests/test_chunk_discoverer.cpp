@@ -1,4 +1,4 @@
-#include "test_common.hpp"
+#include "test_ground.hpp"
 
 #include "chunk_discoverer.hpp"
 #include "sdf_cascade.hpp"
@@ -102,7 +102,7 @@ void compare_walks(SDFBase &p_sdf, int p_lods) {
         ChunkDiscoverer::ScanCounters counters;
         ScanView view;
         view.camera_chunk = camera;
-        discoverer->scan(view, ChunkDiscoverer::CULL_LEGACY, got, counters);
+        discoverer->scan(view, true, got, counters);
         CHECK(want.size() > 0);
         CHECK(got.size() == want.size());
         CHECK(set_difference(got, want) == 0);
@@ -123,7 +123,7 @@ void compare_walks(SDFBase &p_sdf, int p_lods) {
             cache.scan_index++;
             LODHashSet cached;
             ChunkDiscoverer::ScanCounters c;
-            discoverer->scan(view, ChunkDiscoverer::CULL_LEGACY, cached, c, &cache);
+            discoverer->scan(view, true, cached, c, &cache);
             CHECK(set_difference(cached, want) == 0);
             CHECK(cached.size() == want.size());
             CHECK(c.verify_mismatches == 0);
@@ -138,9 +138,8 @@ void compare_walks(SDFBase &p_sdf, int p_lods) {
 TEST_CASE("ChunkDiscoverer: the wave walk gives the recursive walk's set (SDFCascade with instances: cull_exempt, 15 and 25 LODs)") {
     for (const int lods : { 15, 25 }) {
         CAPTURE(lods);
-        SDFCascade sdf;
-        sdf.set_zone(SDFTable::Zone{ 200.0 });
-        sdf.set_instances(SDFTable::counted(Archetype::Species::ROCK, 400, 200.0));
+        GroundSDF sdf;
+        sdf.set_instances(SDFTable::counted(default_species(), Archetype::Species::ROCK, 400, 200.0));
         compare_walks(sdf, lods);
     }
 }
@@ -148,7 +147,7 @@ TEST_CASE("ChunkDiscoverer: the wave walk gives the recursive walk's set (SDFCas
 TEST_CASE("ChunkDiscoverer: the wave walk gives the recursive walk's set (SDFCascade, 15 and 25 LODs)") {
     for (const int lods : { 15, 25 }) {
         CAPTURE(lods);
-        SDFCascade sdf;
+        GroundSDF sdf;
         compare_walks(sdf, lods);
     }
 }
@@ -157,7 +156,7 @@ TEST_CASE("ChunkDiscoverer: the wave walk gives the recursive walk's set (SDFCas
 // the uniform one. An error 2x the LOD below's leaves that LOD no band: its distance is the one below plus 1.
 TEST_CASE("ChunkDiscoverer: lod_pixel_errors set each LOD's distance") {
     ChunkParam param;
-    SDFCascade sdf;
+    GroundSDF sdf;
     const int lods = 8;
     sdf.configure(param, lods);
     ChunkDiscoverer *discoverer = memnew(ChunkDiscoverer);
@@ -186,7 +185,7 @@ TEST_CASE("ChunkDiscoverer: lod_pixel_errors set each LOD's distance") {
 // 1 + back_scale per unit, ChunkMath::lod_distance).
 TEST_CASE("ChunkDiscoverer: view-dependent LOD keeps the cone's chunks and one LOD across faces") {
     ChunkParam param;
-    SDFCascade sdf;
+    GroundSDF sdf;
     const int lods = 15;
     sdf.configure(param, lods);
     ChunkDiscoverer *discoverer = memnew(ChunkDiscoverer);
@@ -207,8 +206,8 @@ TEST_CASE("ChunkDiscoverer: view-dependent LOD keeps the cone's chunks and one L
         LODHashSet want;
         ChunkDiscoverer::ScanCounters split_counters;
         ChunkDiscoverer::ScanCounters front_counters;
-        discoverer->scan(split, ChunkDiscoverer::CULL_LEGACY, got, split_counters);
-        discoverer->scan(front, ChunkDiscoverer::CULL_LEGACY, want, front_counters);
+        discoverer->scan(split, true, got, split_counters);
+        discoverer->scan(front, true, want, front_counters);
 
         auto in_cone = [&split](const LODHashSet &p_set) {
             LODHashSet r;
@@ -259,7 +258,7 @@ TEST_CASE("ChunkDiscoverer: view-dependent LOD keeps the cone's chunks and one L
         CHECK(looked.memories[9].fade == doctest::Approx(64.0 - 30.0));
         LODHashSet got;
         ChunkDiscoverer::ScanCounters c;
-        discoverer->scan(looked, ChunkDiscoverer::CULL_LEGACY, got, c);
+        discoverer->scan(looked, true, got, c);
         CHECK(split_x_size < got.size());
         CHECK(got.size() < front_x_size);
         std::vector<int64_t> faces;
@@ -421,7 +420,7 @@ TEST_CASE("ChunkDiscoverer: a full memory replaces the least recently used view"
 // asks for a rescan.
 TEST_CASE("ChunkDiscoverer: a far plane drops exactly the chunks past it") {
     ChunkParam param;
-    SDFCascade sdf;
+    GroundSDF sdf;
     const int lods = 25;
     sdf.configure(param, lods);
     ChunkDiscoverer *discoverer = memnew(ChunkDiscoverer);
@@ -448,8 +447,8 @@ TEST_CASE("ChunkDiscoverer: a far plane drops exactly the chunks past it") {
     LODHashSet near;
     ChunkDiscoverer::ScanCounters all_counters;
     ChunkDiscoverer::ScanCounters near_counters;
-    discoverer->scan(open, ChunkDiscoverer::CULL_LEGACY, all, all_counters);
-    discoverer->scan(limited, ChunkDiscoverer::CULL_LEGACY, near, near_counters);
+    discoverer->scan(open, true, all, all_counters);
+    discoverer->scan(limited, true, near, near_counters);
     CHECK(all_counters.beyond_far == 0);
     CHECK(near_counters.beyond_far > 0);
     CHECK(near.size() > 0);
@@ -473,7 +472,7 @@ TEST_CASE("ChunkDiscoverer: a far plane drops exactly the chunks past it") {
 // finer chunk is replaced by its ancestor at the floor, the faces stay within one LOD, and a new floor asks for a rescan.
 TEST_CASE("ChunkDiscoverer: a LOD floor replaces the finer chunks by their ancestors") {
     ChunkParam param;
-    SDFCascade sdf;
+    GroundSDF sdf;
     const int lods = 15;
     sdf.configure(param, lods);
     ChunkDiscoverer *discoverer = memnew(ChunkDiscoverer);
@@ -493,8 +492,8 @@ TEST_CASE("ChunkDiscoverer: a LOD floor replaces the finer chunks by their ances
     LODHashSet coarse;
     ChunkDiscoverer::ScanCounters all_counters;
     ChunkDiscoverer::ScanCounters coarse_counters;
-    discoverer->scan(open, ChunkDiscoverer::CULL_LEGACY, all, all_counters);
-    discoverer->scan(floored, ChunkDiscoverer::CULL_LEGACY, coarse, coarse_counters);
+    discoverer->scan(open, true, all, all_counters);
+    discoverer->scan(floored, true, coarse, coarse_counters);
     int64_t finer = 0;
     for (const ChunkId &id : all) {
         const int lod = ChunkMath::get_lod(id);

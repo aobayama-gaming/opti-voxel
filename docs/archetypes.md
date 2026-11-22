@@ -11,20 +11,23 @@ The SDF program IR, the GPU table, the locality and band rules, the index and ru
   a zero's sign reach a non-zero value, and results are compared through `zero_canonical` (-0 read as +0).
   A point is in the exact domain when every register component is 0 or within [2^-63, 2^63], so that a
   product of two is normal (`exact_domain`). Blends keep their end values exact at any magnitude
-  (`smooth_min` = min - k/4 h^2): a far instance reads 2^30 voxels (saturated INPUT), and the lerp
+  (`smooth_min` = min - k/4 h^2): a far instance reads 2^30 voxels (saturated T_INPUT), and the lerp
   b + (a - b) h rounded the ground to its ulp, terraces of 64 voxels at far origins. Adding an op: `Op`,
   `op_arity`, `op_cost`, `is_flat`, `validate`, the interpreter's `eval` and the generator's `statement` (same
   formula, same order), a case in the float32 reference test (`test_archetype_ir.cpp`), a branch in
-  `random_program`, then `tools/frame_test.sh` and a new text pin (the FNV test). FrameSpike's `arch_*` probes
-  (`archetype_probes.cpp`): every shape builder, `arch_frames` (every shape at the same offset from every origin,
-  compared across origins) and 200 fuzzed programs, output plus a hash of every register; evaluations outside the
-  exact domain are counted apart (`inexact_*`, gated like the rest). The table probe covers the operators and
-  rotations.
+  `random_program`, then `tools/frame_test.sh` and a new text pin (the FNV test). The IR has no absolute frame: a
+  program reads the position through its record only (`T_INPUT`: R (p - anchor); `T_PERLIN3`: the lattice offset
+  minus the anchor, the seed salted), so the same program is the same shape wherever an instance stands. FrameSpike's
+  `arch_*` probes (`archetype_probes.cpp`, through `generate_def_glsl` with literal records: identity rotation, salt
+  0, one record per anchor, their union): every shape builder, `arch_frames` (every shape at the same offset from
+  every origin, compared across origins) and 200 fuzzed programs, output plus a hash of every register of every
+  record; evaluations outside the exact domain are counted apart (`inexact_*`, gated like the rest). The table probe
+  covers the operators and rotations.
 - Archetype table (`src/archetype_table.*`, `instance_table.*`, `archetype_gpu_table.*`): the instances live
   in a GPU table and each chunk folds only the instances near it. A library type (`TableDef`) is a Program written
   once in the instance's frame:
   its sizes are `T_PARAM` (one sphere type serves every radius), its anchor, rotation and noise lattice
-  come from the instance's record through `T_INPUT` / `T_PERLIN3|2` (`i64_sub` of the Def offset minus the
+  come from the instance's record through `T_INPUT` / `T_PERLIN3` (`i64_sub` of the Def offset minus the
   record anchor, seed salted by the record). `generate_library_glsl` emits `vec4 arch_<k>(WorldPos p, int
   lod, DefRecord rec)`, the CPU interpreter runs the same program with a `DefRecord` (unit test: the same bits for
   the same local point at any anchor, per type / rotation / LOD). `generate_fold_glsl` emits the library, `arch_fold(r,
@@ -47,12 +50,12 @@ The SDF program IR, the GPU table, the locality and band rules, the index and ru
   skirt_depth`; outside it the value is >= M, so folding it in or out only changes F where `|F| > 2 L
   2^lod` (the mesh and normals are unchanged). The test is integer (`sat_diff` vs an int32 box), so the
   CPU and the GPU, and two chunks of the same LOD, take the same branch: seams stay exact.
-  **Band rule (step 4):** a noise op of octave k (PERLIN*, T_PERLIN*) is +0 at LODs above k - 3
+  **Band rule (step 4):** a noise op of octave k (T_PERLIN3) is +0 at LODs above k - 3
   (`ExactNoise::band_kept`, `BAND_SHIFT` = the cascade's insertion lattice: 8 samples per wavelength), on
   both back-ends. Each record has a `max_lod` (`set_band`): at LOD L its distance is
   raised by `erode * max(2^L - erode_from, 0)` voxels (`band_erosion`: `erode` cells per LOD past its onset, it
-  shrinks uniformly, GPU and CPU alike; `erode_from` = 2^onset rides in `anchor_hi.w`; the timing is below, with
-  `--instance_resolve`), and
+  shrinks uniformly, GPU and CPU alike; `erode_from` = 2^onset rides in `anchor_hi.w`; the timing is in
+  `docs/trees.md`), and
   it is listed only below the first LOD whose erosion reaches its depth (`band_depth`: half its box's smallest
   side times L, plus k; the smaller of the local box grown by `rotation_margin` and the world box, so a turned
   record drops at the same LOD), where the eroded shape no longer reaches zero, so the drop changes no sign. The band steps
@@ -61,8 +64,8 @@ The SDF program IR, the GPU table, the locality and band rules, the index and ru
   cascade adds it to its own octave step. Unit test: at the samples a LOD L and a LOD L+1 chunk share near the surface,
   LODs 0-6, a 4,000-rock scatter and a 5 cm forest, the field step is within the outer chunk's skirt, except over a
   record dropped at L+1: no skirt bounds that step, but what is left of the record at L is at most `erode` cells thick
-  and the fine rim's skirt lifts it to air (checked). `archetype_band` / `--instance_band=0` keep every instance whole
-  (the reference). A rock scatter at a fixed density gives the same list lengths whatever N, empty from LOD 6 on.
+  and the fine rim's skirt lifts it to air (checked). `SDFTable::set_instance_band(false)` keeps every instance whole
+  (a world's `"instance_band": false`: the shapes gallery; and the tests' reference). A rock scatter at a fixed density gives the same list lengths whatever N, empty from LOD 6 on.
   **The index** (`instance_table`): an instance is stored once, at the finest LOD whose chunk span holds its
   grown box, in the node holding its centre (every touched node only when wider than a top-LOD node);
   subtree lists stop above each instance's `max_lod`. A chunk's list gathers the subtrees of the 125 chunks
@@ -88,12 +91,13 @@ The SDF program IR, the GPU table, the locality and band rules, the index and ru
   list build ms. `SDFBase::cull_exempt` (`near_instance`, from the index: per-LOD occupancy + coarser
   nodes' boxes) feeds the discoverer's no-cull rule, band or not: a node near an instance's box is never
   culled (asked only when the corners would cull; a streamed source's node also while its nearest corner is within
-  `ground_reach(lod)` past the cull band, in its zone). FrameSpike's table probe checks the library + fold (with
+  `ground_reach(lod)` past the cull band, anywhere: the sources have no end). FrameSpike's table probe checks the library + fold (with
   erosion) GPU == CPU. **To add a
   library type:** a `Builder` in `archetype_table.cpp` using `t_local` / `t_param` / `t_perlin*` and a
   bounds lambda of the params, then `DefLibrary::add` (a new *op* also needs the "Adding an op" list).
   **Runtime edits:** `VoxelTerrain.add_instance(type, x, y, z, rotation, params, op, k)` /
-  `remove_instance(id)` / `move_instance(id, x, y, z, rotation)` (anchors are int64 LOD0 voxels, never
+  `remove_instance(id)` / `move_instance(id, x, y, z, rotation)` (type a library index, `get_type_index("capsule")`: the
+  library's type names are unique and the scripts and `DigTool` name their types; anchors are int64 LOD0 voxels, never
   through `Vector3i`); the op must be 0-3, k >= 0, params finite and normal, the rotation orthonormal,
   the anchor within +-2^60 voxels and the box (any rotation) plus 2 k at most
   `SDFTable::max_instance_extent()` (4 top-LOD chunk spans, at most 2^29: `Archetype::record_fit_error`),
@@ -112,10 +116,13 @@ The SDF program IR, the GPU table, the locality and band rules, the index and ru
   page, are killed (else the old surface stays drawn); an edit also requires the new version from the
   chunks in flight for their first mesh (not loaded yet, so not listed). `remesh_queue` holds a chunk once. `add_new_loaded` drops a
   pending `to_destroy_chunk` entry so a re-meshed chunk is not freed twice. The GPU buffers are sized for
-  `instance_capacity()` records up front: the table's `table_capacity()` (default 16384 or the scene + 4096, removed ones
-  count; an add past it is refused), then the streamed slots. The bench's
+  `instance_capacity()` records up front: the table's `table_capacity()` (default 16384 or the scene and the replayed
+  edits + 4096, removed ones count; an add past it is refused), then the streamed slots. The live edits
+  (`SDFTable::live_edits`: an added record until removed, as moved since) are what an edits file saves and a world file's
+  `"edits"` replays at configure, after the scene (`docs/terrain.md`, "The edits file"), and what
+  `VoxelTerrain.restart_world` keeps. The bench's
   `--scenario=edit --edits=N` scripts add / move / remove edits, then settles; audit /
   discovery_audit should stay `ok`. The world file's rock entries (`instances`, a biome's or the world's: a
-  `boulder` or a `pillar` species, its `cell_m`) scatter rocks and pillars over its `zone` (a square of `side_m` metres
-  around `centre_m`, default (-50, -150) m: `SDFTable::Zone`), one per cell site (`SCATTER_SITE_SALT` for a kind's finest
+  rock or pillar of its `species`, `boulder` or `pillar` in `worlds/species.json`, and its `cell_m`) scatter rocks and pillars over the whole ground (streamed;
+  `SDFTable::set_whole_region`'s square for a whole build), one per cell site (`SCATTER_SITE_SALT` for a kind's finest
   cell), the species its biome's (BiomePick), turned to `up_at`.

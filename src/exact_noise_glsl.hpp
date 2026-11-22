@@ -172,10 +172,6 @@ vec4 perlin3(WorldPos p, int k, uint seed, uvec3 olo, ivec3 ohi) {
 #define OV_GLSL_NOISE_TAIL R"glsl(    return vec4(d, value);
 }
 
-uint hash_cell_2d(uint lx, int hx, uint lz, int hz, uint seed) {
-    return hash_cell(uvec3(lx, lz, 0x6A09E667u), ivec3(hx, hz, 0), seed);
-}
-
 vec4 perlin2(WorldPos p, int k, uint seed, uvec3 olo, ivec3 ohi) {
     uint cxl, czl, qx, qz;
     int cxh, czh;

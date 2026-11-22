@@ -50,10 +50,8 @@ struct TreeSpecies {
     int budget = 96; // records per tree: the thinnest stems are cut first
 };
 
-// The species the forest draws from.
-const std::vector<TreeSpecies> &tree_species();
-
-// The crown type: make_rock_type(crown_k(voxel), CROWN_SEED). Its bump amplitude is set so that the bumps add
+// The crown type: make_rock_type(crown_k(voxel), CROWN_SEED), named "crown" (an edits file names the library's types).
+// Its bump amplitude is set so that the bumps add
 // CROWN_BUMP to its Lipschitz bound (the band depth, the locality margin and the list lengths grow with it).
 inline constexpr uint32_t CROWN_SEED = 0xC40Du;
 inline constexpr double CROWN_WAVELENGTH_M = 0.8;

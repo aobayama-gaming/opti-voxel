@@ -9,7 +9,8 @@ Library-built instances placed by the stream: trees, the far-field moment blobs,
   amplitude adds `CROWN_BUMP` = 1.5 to L: lumpy foliage up close, smooth once the band rule drops the octaves) and
   5 `cone` (`make_cone_type`, the same bumps on a cone {radius, height, cos, sin, amp}, its rim a smooth max: a
   conifer's tier). The species are data (`src/species.{hpp,cpp}`: a world file's `"species"`, each tree a
-  `TreeSpecies` by its keys, a rock or a pillar by its radius range; `default_species` without the key): today's three
+  `TreeSpecies` by its keys, a rock or a pillar by its radius range, inline or a file holding the list; none without
+  the key): today's, `worlds/species.json` (`WorldFile::SPECIES`, named by the forests' and the biome worlds' files), three
   trees, a broadleaf, a slender one and a conifer (`cone_tiers` = 4 stacked cones, no limbs, ~12 records), a boulder and
   a pillar. A site grows its biome's species (`BiomePick`, `src/biome_pick.*`: the climate's weights read once on the
   CPU at the site, on the coarsest lattice its placement fields resolve, ~20 us, and a hash of the site against them;
@@ -41,12 +42,13 @@ Library-built instances placed by the stream: trees, the far-field moment blobs,
   its plane crosses the node (`SITE_SLACK` cells + `SITE_BEND` nodes): ~9 evaluations per site, 1 per empty box;
   unit-tested equal to the brute force on hills, a 60 degree slope and the 5 cm cascade. A tree grows along
   `SDFBase::up_at(base)` (+y on the flat world, the one source of "up" for placement; `UP_Y` keeps the records from
-  before, pinned by a hash). The zone's centre is the ground under its `centre_m` of the base's tangent plane
-  (`ground_at`), the lake keep-out the distance to a lake's axis (`LavaPool::near`, the sources' `accept`); the zone is
-  the world file's `zone` square (`side_m`) over 4 half sides of height up and down. Hashing 3D cells moved every tree,
+  before, pinned by a hash). The sources have no end: the trees and rocks grow wherever the ground is (the world file's
+  `zone` square is gone; every walk of a source starts at its `start_level`, nodes of at most `SITE_WALK_NODE_M`, so a site is its cell's alone, `docs/instance-stream.md`),
+  the lake keep-out the distance to a lake's axis (`LavaPool::near`, the sources' `accept`). A whole build (the stream's
+  oracle) walks a box the caller gives (`SDFTable::set_whole_region`: a square of `side_m` round the ground under
+  `centre_m` of the base's tangent plane, `ground_at`, over 4 half sides of height up and down). Hashing 3D cells moved every tree,
   the coarse-plane projection (feature/cell-sites) again: forest5cm is another forest than before. **What grows where
-  is data:** the world file's `instances` (a biome's, or the world's for a biome that lists none and a world without
-  biomes) are entries `{species, cell_m, share}`; every entry of a kind (trees, rocks) and a cell, over all the lists,
+  is data:** the world file's `instances` (a biome's, or the world's for a biome that lists none) are entries `{species, cell_m, share}`; every entry of a kind (trees, rocks) and a cell, over all the lists,
   is one source (`SDFTable::groups`: the rocks' then the trees', each kind's finest cell keeping its salt, a coarser one
   `trees_<cell>`), and a site of it grows its biome's entries of that source by their shares (`site_class`: BiomePick,
   `pick_share`; -1, nothing, where its biome names none of them; no pick at all when every biome grows the same). A
@@ -59,13 +61,12 @@ Library-built instances placed by the stream: trees, the far-field moment blobs,
   moment; analytic per library type via `TableDef::moments`, else its program on a 24^3 grid), an instance their sum
   per material (`span_moments`: a tree's bark and leaves). Its half thickness is the equal-covariance ellipsoid's
   smallest semi-axis. `set_band` drops it at the later of the first LOD whose cells no longer fit `resolve` times in
-  that half thickness (`VoxelTerrain.archetype_resolve` / `--instance_resolve=F`, default 1) and the first LOD erosion
+  that half thickness (`ErodeRule::resolve`, 1) and the first LOD erosion
   at `rate` from LOD 0 can make it vanish by; its onset is the latest LOD from which that erosion still reaches its
   depth at the drop: whole while resolved, shrinking only in the LODs before its drop, `erode` cells per LOD at most
   (unit-tested). At 5 cm (30 trees, by volume): drawn whole 98 / 93 / 61% at LODs 1 / 3 / 5 (0% when every part
-  eroded from LOD 1), drawn at all 97% at LOD 5 and 48% at LOD 6 (65% and 0%). The rate is
-  `VoxelTerrain.archetype_erode` / `--instance_erode=F` (cells per LOD, default `ERODE_CELLS` = 1, bench and player;
-  the record carries it as `erode`, the skirt follows it): a higher one moves onsets later.
+  eroded from LOD 1), drawn at all 97% at LOD 5 and 48% at LOD 6 (65% and 0%). The rate is `ERODE_CELLS` = 1 cell
+  per LOD (`ErodeRule::rate`; the record carries it as `erode`, the skirt follows it): a higher one moves onsets later.
   **Moment blobs (the far field, `src/moment_layers.*`):** what the parts a LOD no longer draws still weigh. For each
   LOD L, every part hands the share of its mass the LOD lost (its equal-covariance ellipsoid shrunk by its erosion,
   `MomentItem::lost_share`; all of it from its drop on: parts drawn + blobs = its mass at every LOD) to cells of
@@ -93,13 +94,13 @@ Library-built instances placed by the stream: trees, the far-field moment blobs,
   under a coarse canopy uncullable (+18% loaded chunks).
   A dense 5 cm forest keeps a canopy over most columns at LODs 6-8 (unit test); from 1,100 m the forest5cm square
   is a canopy instead of nothing (`bench.sh --preset=forest5cm --cam_pos=-50,320,750 --above_ground=1100 --pitch=-55
-  --yaw=0 [--moments=0]`). The hand-off over every altitude: `tools/forest_lod_sheet.sh` (bench `--scenario=rise
+  --yaw=0`). The hand-off over every altitude: `tools/forest_lod_sheet.sh` (bench `--scenario=rise
   --altitudes=... --rise_shots=DIR`, 20 m to 13 km over the forest, shaded | LOD view, `sheet.png` + lists per step)
-  and the unit test of the canopy columns at LODs 2-9. `VoxelTerrain.archetype_moments` / `--moments=0` (bench, player) leaves them out;
+  and the unit test of the canopy columns at LODs 2-9 (`SDFTable::set_moment_blobs(false)`, the tests', leaves them out);
   `get_debug_stats()["table"]["moments"]`: items, blobs per LOD, build ms (`["trees"]["build_ms"]`: the forest). The
   build runs on the worker pool (`parallel_for.hpp`: each layer's members side by side, then each cell's sums and pruning;
-  the forest's ground traces and trees per site, admitted in site order), the same bits: forest5cm_x10 (40,000 trees,
-  2.2 M blobs) configures in 15 s, 93 s serial (blobs 89 -> 11 s, the pruning's map lookups were 2/3 of it; forest
+  the forest's ground traces and trees per site, admitted in site order), the same bits: the old forest5cm_x10 (40,000 trees on
+  a 1 km square placed whole, 2.2 M blobs) configured in 15 s, 93 s serial (blobs 89 -> 11 s, the pruning's map lookups were 2/3 of it; forest
   18 -> 2 s); the main thread still waits for it (async configure: next). **Edits** keep the blobs exact:
   `Archetype::MomentLayers` holds each cell's members (by record id), their partial sums per block of 256 ids and the
   pruning verdict; an edit moves its record between the cells its old and new tents touch, re-sums one block per cell
@@ -133,8 +134,12 @@ Library-built instances placed by the stream: trees, the far-field moment blobs,
   record (a spherical cap on a hanging cone, smooth-unioned, plus bumps), its box bottom 25-70 m above the highest
   ground under it. Both follow the band rule like any record; the slab erodes away a few LODs before the basin (it
   can't be thicker without poking out of the shore), so a far lake is a shallow pit (0.15 r) whose scorched basin
-  material shows. The sites stand in the world file's `zone` (the instances' square),
-  placed once, at configure, on the worker pool, before the scatter and the forest, which keep 1.5 radii
-  out of the lakes (`SDFTable::in_lake`); streaming cells needs the index rebuilt off the main thread.
+  material shows. The sites stand in the world file's `feature_region` (a square, `SDFTable::set_feature_region`; a
+  world whose lists name features without one is refused), placed once, at configure, on the worker pool, before the
+  scatter and the forest, which keep 1.5 radii out of the lakes (`SDFTable::in_lake`, a scan of every lake). TODO: the
+  features stream like the trees (a source keyed by feature-cell tiles folding before them, `Biome::place` memoised per
+  cell, the trees' keep-out read from the memo of the cells around a site), which closes the region, `Biome::sites`'
+  loop over every cell of it and `in_lake`'s scan; deferred from the engine cleanup (a second kind of streamed source
+  and the features' far field: a few hundred lines more than the cleanup could carry, see its PR).
   `get_debug_stats()["table"]["biomes"]`: counts, `build_ms`, and up to `SITES_LISTED_MAX` sites (`kind`, x / y / z
   in metres of the lava's centre or the island's rim plane's, radius). `--preset=biomes` looks at a lava lake with two islands behind it.

@@ -16,12 +16,11 @@ using ExactNoise::float_bits;
 
 namespace {
 
-// 5 cm voxels, 15 LODs (octaves up to 19), the flat world's cap.
+// 5 cm voxels, 15 LODs (octaves up to 19), the flat base.
 Climate::Ground ground() {
     Climate::Ground g;
     g.voxel_size = 0.05;
     g.k_max = 19;
-    g.amp_cap = ExactNoise::exact_pow2(40);
     return g;
 }
 
@@ -166,13 +165,6 @@ TEST_CASE("Terrain: a warp's x, y, z ports: one node per axis, each gated") {
     // 'in' or all three ports, not both, not some.
     CHECK(compile_table(warped(three, R"(, "in": "a", "x": "a", "y": "b", "z": "c")"), prog).find("the three ports") != ov::str::npos);
     CHECK(compile_table(warped(three, R"(, "x": "a", "y": "b")"), prog).find("the three ports") != ov::str::npos);
-}
-
-TEST_CASE("Terrain: a field's ground term is refused") {
-    const ov::Value data = json(R"({"fields": [{"name": "t", "bands": [{"wavelength_m": 26214.4, "amp": 1}], "terms": [{"source": "ground", "x": -0.00003}]}],
-        "biomes": [{"name": "a", "at": {"t": [0, 1]}}, {"name": "d"}]})");
-    LevelProgram prog;
-    CHECK(compile_table(data, prog).find("a 'ground' term is gone") != ov::str::npos);
 }
 
 TEST_CASE("Terrain: a plain fBm is one channel from top to bottom, in both modes") {

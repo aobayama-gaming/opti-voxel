@@ -3,13 +3,13 @@
 # culling and counts the quads of each culled chunk on the GPU (bench --discovery_audit=1). A culled
 # chunk with quads is a miss, i.e. a hole. Also checks that each run settles (loaded == scanned).
 #
-#   tools/discovery_audit.sh [--only=a,b] [-- extra bench args, e.g. --discovery_cull=2]
+#   tools/discovery_audit.sh [--only=a,b] [-- extra bench args, e.g. --discoverer=cpu]
 #
 # Cases: default pose, the main scene's lod_error 4, underground, another area, high above, deep
 # below, a far world origin, 5 cm voxels, a fly run (audited once it settles back at the start), and
 # 25 LODs (lods25.world.json) from 10 km up looking down and from 100 km up looking at the horizon. Planets
 # (worlds/earth, earth25, tiny): Earth at its +y pole, at its +x equator (world y level there: the y-up detector)
-# and from 100 km up; a 2 km planet at 5 cm (the radius form from LOD 1, relief capped at 1/32 of its radius) at
+# and from 100 km up; a 2 km planet at 5 cm (the radius form from LOD 1, up to 819 m of relief) at
 # its pole, its equator and 5 km out, the whole planet in view. Heights are above the ground under the
 # camera (--above_ground, along the local up): the cascade's ground height varies by kilometres.
 # Report: bench/results/<timestamp>-discovery.md. Exit code: 0 no miss anywhere, 1 a run failed or missed.

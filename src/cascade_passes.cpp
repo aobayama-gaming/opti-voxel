@@ -60,9 +60,9 @@ bool CascadePasses::_create(ov::gpu::Device *p_device, const SDFBase *p_sdf, int
         const ov::str name =
                 ov::str(points ? "cascade_points" : (p_debug.is_valid() ? "cascade_levels_debug" : "cascade_levels")) + (fold ? "_fold" : "") + (fine ? "_fine" : "");
         pipeline[v] = code.empty() ? ov::gpu::Pipeline() : ov::gpu::compile(*device, name, code);
-        if (!pipeline[v].is_valid() && v == 0) {
-            return false; // another variant that fails leaves the bare one working (record_level falls back, ERRs once for a fold)
-        }
+        // The bare text and the fold (the instances' only GPU path) must compile: no fold falls back to the bare cascade.
+        // A fine text that fails leaves its coarse one serving the same bits (record_level).
+        OV_ERR_FAIL_COND_V_MSG(!pipeline[v].is_valid() && !fine, false, "CascadePasses: the " + name + " text failed to compile.");
         values.values.resize(size_t(values.vec4s()) * 4);
         OV_ERR_FAIL_COND_V_MSG(values.values.size() * sizeof(float) > MAX_PARAM_BYTES, false, "CascadePasses: more shader params than a uniform block holds.");
         params[v] = device->create_buffer(BufferKind::UNIFORM, values.values.size() * sizeof(float), values.values.data());
@@ -204,11 +204,8 @@ void CascadePasses::record_level(int p_j, uint32_t p_base, uint32_t p_count, con
     ov::put_s32(push + 12, top);
     ov::put_u32(push + 16, n);
     ov::put_u32(push + 20, uint32_t(level_bound(item_size, p_j + 1)));
-    bool fold = p_j == 0 && p_fold;
-    if (fold && !uniform_set[1].is_valid()) {
-        OV_ERR_PRINT_ONCE("CascadePasses: a fold without its variant (no table buffers at create, or it failed to compile): the bare cascade instead.");
-        fold = false;
-    }
+    const bool fold = p_j == 0 && p_fold;
+    OV_ERR_FAIL_COND_MSG(fold && !uniform_set[1].is_valid(), "CascadePasses: a fold on passes created without the table's buffers.");
     // A chunk's level is its LOD + j: the fine text serves the dispatch when the batch's coarsest one sits at fine_cut or below.
     const int fine = p_lods.y + p_j <= fine_cut && uniform_set[2 + (fold ? 1 : 0)].is_valid() ? 1 : 0;
     const int v = 2 * fine + (fold ? 1 : 0);

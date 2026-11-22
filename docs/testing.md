@@ -9,7 +9,7 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
 - `tools/biome_mixer.sh [--open=PATH] [--biome=NAME] [--world] [--set=ID.KEY=V] [--shot=PATH]` opens the biome mixer (a window;
   `docs/climate.md`); `--check` is its headless self-test (world.json read and written back the same, every biome and a
   graph of every engine kind drawn by the engine, `ClimateReportNode.preview`, and every node's UI built, edits, the
-  export and its refusal, the blank planet world drawn, its fields edited and its relief cap checked: `MIXER: {json}`, exit 0 ok, 4 not ok or a script error). `--shot` draws the sharp
+  export and its refusal, the blank planet world drawn, its fields edited and a ground under its centre refused: `MIXER: {json}`, exit 0 ok, 4 not ok or a script error). `--shot` draws the sharp
   map once, waits for the 3D view's terrain, restarts it twice on the same world (an edit's path), saves the window and
   the view, prints the map's time and the three loads (`MIXER_SHOT: terrain_loads_ms`) and quits. `--drag=ID.KEY=A:B:S` drags a
   node's value A to B and back each second for S seconds, one edit a frame (a slider held), and prints `MIXER_DRAG:`
@@ -18,7 +18,8 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
   trace (`PATH_trace.json`, `src/trace.hpp`: `restart_world`, `restart_stop` / `_load` / `_start`, `start_mesher` ...).
 - `tools/climate_report.sh [--no-build] [--world=PATH] [--extent_km=KM] [--size=N] [--surface=0|1] [--lattice=M]`
   (`ClimateReport`, headless, CPU only, seconds): a climate table sampled on one lattice over the base's tangent plane, each point traced down to its ground
-  surface along the base's up (`--surface=0`: the plane itself, kilometres off the ground at 25 LODs): per-biome share and mean
+  surface along the base's up (`--surface=0`: the plane itself, kilometres off the ground at 25 LODs; on a planet the slice
+  spans at most its diameter, whatever `--extent_km` says): per-biome share and mean
   weight, the pick drift (the share of points whose pick at the coarsest modulated level differs: what the ground's
   coarsest modulated octave reads vs the material), where each pair of biomes meets nearest the centre with the player's `--spawn=U,V` (metres along the base's tangent plane: x, z on the flat world), per-field range,
   the ground under each biome (mean altitude above the base, height std, mean slope), CPU us per point, `biomes_blend.png` /
@@ -59,6 +60,9 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
   audit that failed (or a load that did not settle, a `--destroy_verify` mismatch). `bench/results/LAST` holds the latest run dir.
   A load is complete once the received scan is the camera's current one and the mesher is idle
   (`VoxelTerrain::is_load_complete`).
+  The flags that set a VoxelTerrain property (`--world=`, `--terrain=`, `--lod_error=`, `--mesher_budget=`,
+  `--origin=`, ..., and `--grade=0`) go through one parser, `presets.gd`'s `apply_args`, which the player shares; the
+  world checks their ranges when it starts (`World::Settings::validate`: the terrain's error, nothing loads).
   `--origin=X,Y,Z` sets the world origin (voxels). `--rebase_m=M` the render origin's rebase distance (default
   1024, 0 off); `--still=1` stops the clouds' drift and the leaves' sway, so shots of one pose taken at different times
   match. Render-origin check: `bench.sh --scenario=fly --fly_dist=20000 --still=1 --audit=1
@@ -100,20 +104,11 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
 - `bench.gd --scenario=approach`: loads 1,500 m above and 2 km behind the start (`--approach_from`, `--approach_out`,
   along -X), flies straight to it in `--approach_seconds=20` without waiting, then settle / steady;
   `--approach_shots=DIR` saves a shot per second in the run's `--view` (run it twice for shaded | LOD).
-- The legacy mesher and its `--validate=N` triangle-by-triangle comparison are gone; `--mode=`, `--validate=` and
-  `--trim=` are errors (`presets.gd`'s `MESHER_FLAGS`).
 - `--audit=1`: reads every page back and classifies all drawn slots
   (live / dead_zero / stale / partial / broken). Anything but live/dead_zero is a bug. Also writes a
   per-chunk mesh digest (quad count + order-independent hash of the chunk-local corners) to
   `<run>/chunks.json`.
-- `--depth_grab=1`: after steady, reads one frame's scene depth and the camera that drew it back to
-  `<run>/depth.f32` + `depth.json` (`debug/depth_grab.gd`, a `CompositorEffect` after the opaque pass). With
-  `--audit=1`, `tools/occlusion_census.py <run>` sorts every non-empty loaded chunk into near / off-screen /
-  hidden (every depth pixel of its screen rect nearer than its box: the test a Hi-Z cull of that frame makes) /
-  visible, per LOD, and estimates the cut a "hidden nodes stop splitting" rule would load
-  (`docs/discovery-lod.md`, Occlusion). Its first line checks the depth convention: the share of depth pixels
-  that land inside a chunk box (100% expected).
-- `--discovery_audit=1`: rebuilds the current scan without culling (`--discovery_cull=0`) and
+- `--discovery_audit=1`: rebuilds the current scan without culling (`ChunkDiscoverer::scan` with `p_cull` false) and
   counts the quads of every chunk the cull dropped on the GPU (passes sdf/edges/vertices, count only).
   A dropped chunk with quads is a miss, i.e. a hole; `ok` needs 0 misses and a max LOD jump of 1
   between face neighbours. `bench.sh` also fails a load-complete run whose loaded set != scanned set
@@ -126,7 +121,8 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
   `bench/results/<date>-discovery.md`. Run it after touching the discoverer or the SDF.
 - Hole hunting: run the main scene with `godot --path adapter/godot/project -- --marks=DIR`; H saves the camera
   pose, a screenshot, the chunk counts and a discovery audit to `DIR/marks.jsonl` (closing the window
-  saves a last pose). Replay a mark with `bench.sh --cam_pos=... --pitch=... --yaw=... --lod_error=4`.
+  saves a last pose); F5 saves the live instance edits (the digs) to `user://<world>.edits.json`, which a world file's
+  `"edits"` loads. Replay a mark with `bench.sh --cam_pos=... --pitch=... --yaw=... --lod_error=4`.
 - `--view=N` debug views: 1 normals, 2 LOD, 3 page, 4 wireframe, 5 chunk, 6 group, 7 quad index,
   8 faceted (clay, per-triangle normals: crisp creases; the shapes scene starts in it), 9 material (palette ids),
   10 / 11 the bark seam probe (raw bytes, `bench.gd --probe`), 12 biome (each material's debug colour: a climate's

@@ -2,6 +2,7 @@
 
 #include "archetype_table.hpp"
 #include "instance_moments.hpp"
+#include "test_trees.hpp"
 #include "tree_archetype.hpp"
 
 #include <string>

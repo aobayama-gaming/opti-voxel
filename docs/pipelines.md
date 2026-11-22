@@ -1,6 +1,6 @@
 # Meshing pipeline (GPU Direct)
 
-The mesher, the GPU budget and dual contouring.
+The mesher and the GPU budget.
 
 The mesher is core code on `ov::gpu::Device` (`gpu_device.hpp`); what draws its output is the adapter's (`PageHost`:
 Godot's in `adapter/godot/src/godot_page_host.*`). The legacy mesher (CPU triangulation of a full readback, one mesh
@@ -16,8 +16,7 @@ origin parity and the GPU checks (`docs/testing.md`).
   Layout, decoders and the GLSL of both (constants substituted, no literal elsewhere): `src/page_format.hpp`. Only a ~2 KB per-batch directory comes back to the CPU (asynchronously) for bookkeeping.
   Shared GLSL: `src/gpu_glsl.hpp`, direct passes: `src/gpu_direct_glsl.hpp`.
   Chunks start on a 64-quad group and a texture row is one group, so a chunk is whole rows.
-  GPU budget (`VoxelTerrain.direct_gpu_budget_ms`, `--mesher_budget=MS` in bench and player; 0 = off, 4 in
-  `main_scene_5cm`): a frame dispatches mesh chunks until their estimated GPU time reaches the budget, cutting
+  GPU budget (`VoxelTerrain.direct_gpu_budget_ms`, `--mesher_budget=MS` in bench and player; 0 = off): a frame dispatches mesh chunks until their estimated GPU time reaches the budget, cutting
   a batch short. The estimate is `GPUCostModel` (`src/gpu_cost_model.hpp`): µs per chunk per LOD plus µs per list
   word (seeded 1.0, the 1M fit), corrected from each batch's timestamps (measured / estimated ~1.05 on the forest; a
   LOD-3 forest chunk costs 200-300 µs, a treeless one ~15). Before its list a chunk's words are its keys' records
@@ -34,11 +33,3 @@ origin parity and the GPU checks (`docs/testing.md`).
   `ChunkOutput`s in `loaded_chunk`; spare free pages are freed (`QuadPagePool::trim`). A world restarted on the same
   device and host hands its pool to the next (`World::stop(&kept)`, `World::reuse`: every page released, the
   in-flight batches' copies landing first): the next mesher draws on the same pages, none freed or made.
-- Dual contouring (`VoxelTerrain.dual_contouring`, `--dual_contouring=1` in `bench.gd` and the main scene;
-  off by default): the vertex pass places its vertex at a regularised QEF of the cell's Hermite
-  data instead of the mass point (`qef_vertex` in `gpu_glsl.hpp`, rewritten into the pass by
-  `dual_contouring_pass`). The Hermite normal at a crossing is the lerp of the edge's two corner gradients
-  (no SDF evaluation, the same code on every terrain); tau = 0.15 * trace(A) / 3; the move is capped at
-  0.5 cells from the mass point, then clamped to the cell; where the gradient at the placed vertex
-  vanishes, its normal is the mean of the Hermite normals (`vertex_normal`, `docs/gotchas.md`). The Hermite data must agree with the
-  crossings: on an SDF with detail finer than the cell vertices jitter (the archetype IR's band rule drops such noise).

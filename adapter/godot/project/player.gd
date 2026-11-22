@@ -20,14 +20,12 @@ var pending_audit := {}  # the mark waiting for its discovery audit report
 var clip_terrain: Node = null  # the clip planes follow the altitude (Presets.clip_planes)
 var base_near := 0.05
 
-# `-- --world=PATH` sets the sibling VoxelTerrain's world file, `-- --terrain=cascade|shapes`
-# its terrain_mode (the Hermite cascade terrain, the default, or its flat preset under the
-# hard-CSG shapes gallery) and
-# `-- --discoverer=cpu|gpu` its discoverer_mode, `-- --walk_gpu=0|1` its walk_gpu: they must be set before the terrain's _ready, and every
-# node enters the tree before any is ready.
-var spawn_altitude := 200.0  # --altitude=M: start M metres above the ground (not in the shapes gallery)
+# The sibling VoxelTerrain's flags (`-- --world=PATH`, `--terrain=shapes`, `--lod_error=F`, ...: bench.gd's list)
+# go through Presets.apply_args in _enter_tree: they must be set before the terrain's _ready, and every node enters the
+# tree before any is ready.
+@export var spawn_altitude := 200.0  # start this many metres above the ground (--altitude=M; the shapes scene: 8)
 var spawn_tangent = null  # --spawn=U,V: metres along the base's tangent plane (Vector2), null: the scene's spawn
-var altitude_terrain: Node = null  # flight speed follows the altitude over it; not in the shapes gallery
+var altitude_terrain: Node = null  # flight speed follows the altitude over it
 var smoothed_altitude := 0.0  # 0: not read yet
 const ALTITUDE_TAU := 0.2  # seconds: the altitude reading's time constant, in log space
 const FLY_RATE := 1.0  # altitudes per second
@@ -50,23 +48,9 @@ var pixelate := 1           # --pixelate=N: the 3D drawn in N x N blocks, under 
 func _enter_tree() -> void:
 	_setup_upscaling()  # before the terrain's _ready: its LOD reads the render scale
 	var terrain := get_parent().get_node_or_null("VoxelTerrain")
-	Presets.removed_args()
+	if terrain:
+		Presets.apply_args(terrain, get_parent(), Presets.user_args())
 	for a in Presets.user_args():
-		if a.begins_with("--world=") and terrain:
-			terrain.world_path = a.trim_prefix("--world=")
-		if a == "--terrain=cascade" and terrain:
-			terrain.terrain_mode = 1
-		if a.begins_with("--discoverer=") and terrain:
-			var modes := {"cpu": 0, "gpu": 1}
-			var mode := a.trim_prefix("--discoverer=")
-			if modes.has(mode):
-				terrain.discoverer_mode = modes[mode]
-			else:
-				push_error("player: unknown --discoverer=%s (expected cpu or gpu)" % mode)
-		if a.begins_with("--walk_gpu=") and terrain:
-			terrain.walk_gpu = a.trim_prefix("--walk_gpu=") == "1"
-		if a == "--terrain=shapes" and terrain:
-			terrain.terrain_mode = 4
 		if a.begins_with("--altitude="):
 			spawn_altitude = a.trim_prefix("--altitude=").to_float()
 		# --spawn=U,V: metres along the base's tangent plane (VoxelTerrain.get_tangent_position; the flat world's x, z
@@ -77,24 +61,6 @@ func _enter_tree() -> void:
 				spawn_tangent = Vector2(uv[0].to_float(), uv[1].to_float())
 			else:
 				push_error("player: --spawn=%s (expected U,V in metres)" % a.trim_prefix("--spawn="))
-		if a.begins_with("--lod_error=") and terrain:
-			terrain.lod_pixel_error = a.trim_prefix("--lod_error=").to_float()
-		if a.begins_with("--lod_errors=") and terrain:
-			terrain.lod_pixel_errors = PackedFloat32Array(Array(a.trim_prefix("--lod_errors=").split(",")).map(func(e): return e.to_float()))
-		if a.begins_with("--lod_error_back=") and terrain:
-			terrain.lod_pixel_error_back = a.trim_prefix("--lod_error_back=").to_float()
-		if a.begins_with("--lod_view_margin=") and terrain:
-			terrain.lod_view_margin_deg = a.trim_prefix("--lod_view_margin=").to_float()
-		if a.begins_with("--lod_view_memory=") and terrain:
-			terrain.lod_view_memory_m = a.trim_prefix("--lod_view_memory=").to_float()
-		if a.begins_with("--lod_far_limit=") and terrain:
-			terrain.lod_far_limit = a != "--lod_far_limit=0"
-		if a.begins_with("--mesher_budget=") and terrain:
-			terrain.direct_gpu_budget_ms = a.trim_prefix("--mesher_budget=").to_float()
-		if a.begins_with("--view=") and terrain:
-			terrain.debug_view = a.trim_prefix("--view=").to_int()
-		if a == "--grade=0":
-			Presets.ungrade(get_parent())
 		if a == "--ssao=0" and Presets.environment(get_parent()):
 			Presets.environment(get_parent()).ssao_enabled = false
 		if a.begins_with("--ambient=") and Presets.environment(get_parent()):
@@ -106,23 +72,9 @@ func _enter_tree() -> void:
 			dig_settings["drag_union"] = a == "--drag_op=union"
 		if a == "--left_click=tube":
 			left_tube = true
-		if a == "--moments=0" and terrain:
-			terrain.archetype_moments = false
-		if a == "--instance_band=0" and terrain:
-			terrain.archetype_band = false
-		if a == "--stream=0" and terrain:
-			terrain.archetype_stream = false
-		if a.begins_with("--stream_part_sides=") and terrain:
-			terrain.archetype_stream_part_sides = a.trim_prefix("--stream_part_sides=").to_int()
-		if a.begins_with("--instance_erode=") and terrain:
-			terrain.archetype_erode = a.trim_prefix("--instance_erode=").to_float()
-		if a.begins_with("--instance_resolve=") and terrain:
-			terrain.archetype_resolve = a.trim_prefix("--instance_resolve=").to_float()
-		if a == "--dual_contouring=1" and terrain:
-			terrain.dual_contouring = true
 	if terrain:
 		terrain.set_dig_settings(dig_settings)
-		if terrain.terrain_mode != 4 and spawn_tangent == null:
+		if spawn_tangent == null:
 			position += terrain.get_scene_shift()  # on a planet: over its +y pole, before the terrain's first scan
 
 func _ready():
@@ -130,7 +82,7 @@ func _ready():
 	if terrain:
 		clip_terrain = terrain
 		base_near = camera.near
-	if terrain and terrain.terrain_mode != 4:  # the shapes gallery keeps the scene's spawn
+	if terrain:
 		altitude_terrain = terrain
 		if spawn_tangent != null:
 			global_position = terrain.get_tangent_position(spawn_tangent)
@@ -300,6 +252,19 @@ func _stand(p_turn: float = 0.0) -> void:
 	yaw = rotation.y  # the marks' heading
 
 
+func _save_edits() -> void:
+	var terrain := _terrain()
+	if not terrain:
+		return
+	var world: String = terrain.world_path.get_file().trim_suffix(".json").trim_suffix(".world")
+	var path := "user://%s.edits.json" % (world if world != "" else "default")
+	var error: String = terrain.save_edits(path)
+	if error != "":
+		push_error("player: " + error)
+	else:
+		print("EDITS saved to ", ProjectSettings.globalize_path(path))
+
+
 func _write_mark(m: Dictionary) -> void:
 	var path := marks_dir + "/marks.jsonl"
 	var f := FileAccess.open(path, FileAccess.READ_WRITE if FileAccess.file_exists(path) else FileAccess.WRITE)
@@ -348,6 +313,10 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_H:
 		_mark("hole", true)
 
+	# F5 saves the live instance edits (the digs) as user://<world>.edits.json: a world file's "edits" key loads them.
+	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_F5:
+		_save_edits()
+
 	# V cycles the debug views (VoxelTerrain.debug_view): shaded, normals, LOD, page, wireframe, chunk, group, quad, faceted,
 	# material, biome (12; 10 / 11 are the bench's bark probe). B toggles the biome view.
 	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_V:
@@ -388,6 +357,11 @@ func _update_hud(delta: float) -> void:
 	hud_age = 0.0
 	var terrain := _terrain()
 	if terrain == null:
+		return
+	var error := String(terrain.get_world_error())
+	if error != "":  # the world was refused (or draws nothing): say why, in red
+		hud.text = "The world didn't start: " + error
+		hud.add_theme_color_override("font_color", Color(1.0, 0.5, 0.45))
 		return
 	var s: Dictionary = terrain.get_debug_stats()
 	var edits: Dictionary = s.get("edits", {})

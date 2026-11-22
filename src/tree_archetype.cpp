@@ -434,37 +434,6 @@ private:
 
 } // namespace
 
-const std::vector<TreeSpecies> &tree_species() {
-    static const std::vector<TreeSpecies> species = []() {
-        std::vector<TreeSpecies> list;
-        list.push_back(TreeSpecies()); // a broadleaf: a round crown on a short trunk
-        TreeSpecies slender; // taller, a narrow crown from low down
-        slender.height = 18.0;
-        slender.trunk_radius = 0.25;
-        slender.crown_base = 0.3;
-        slender.crown_radius = 2.4;
-        slender.hull_ratio = 0.6;
-        slender.hull_spheres = 3;
-        slender.limbs = 8;
-        slender.twigs = 1;
-        slender.limb_angle = 1.15;
-        list.push_back(slender);
-        TreeSpecies conifer; // stacked cones from low down, the trunk bare below them
-        conifer.height = 20.0;
-        conifer.trunk_radius = 0.28;
-        conifer.lean = 0.04;
-        conifer.crown_base = 0.2;
-        conifer.crown_radius = 3.0;
-        conifer.cone_tiers = 4;
-        conifer.hull_taper = 0.45;
-        conifer.limbs = 0;
-        conifer.crown_smooth = 0.15;
-        list.push_back(conifer);
-        return list;
-    }();
-    return species;
-}
-
 int crown_k(double p_voxel) { return ExactNoise::lattice_k(CROWN_WAVELENGTH_M, p_voxel); }
 
 TreeTypes crown_types(int p_branch, int p_crown, const TableDef &p_crown_def, int p_cone) {
@@ -485,7 +454,9 @@ TreeTypes crown_types(int p_branch, int p_crown, const TableDef &p_crown_def, in
 
 TreeTypes add_tree_types(DefLibrary &r_library, double p_voxel) {
     const int branch = r_library.add(make_branch_type(), Material::BARK);
-    const int crown = r_library.add(make_rock_type(crown_k(p_voxel), CROWN_SEED), Material::LEAVES);
+    std::shared_ptr<TableDef> crown_def = std::make_shared<TableDef>(*make_rock_type(crown_k(p_voxel), CROWN_SEED));
+    crown_def->name = "crown";
+    const int crown = r_library.add(crown_def, Material::LEAVES);
     const int cone = r_library.add(make_cone_type(crown_k(p_voxel), CROWN_SEED), Material::LEAVES);
     return crown_types(branch, crown, r_library[crown], cone);
 }

@@ -76,9 +76,8 @@ Consequences that the parser stops refusing:
     turbulence, as today);
   - optional `x`, `y`, `z` ports instead give each axis its own node.
 - **multifractal:** `parent` is any node.
-- **field terms:** the `"source": "ground"` term goes. Only the test tables `plain.json` and `shaped_test.json` use it,
-  `world.json` doesn't. The ground depends on the weights, which depend on the fields, so the term was a cycle broken
-  by a level-above read. A field's terms read earlier fields only.
+- **field terms:** read earlier fields only, never the ground: the ground depends on the weights, which depend on the
+  fields, so a ground term was a cycle broken by a level-above read.
   The graph is acyclic and the parser says where it isn't.
 - **unchanged:** everything else (notes, mixes and rows, shapes, curves, programs' kinds, `at`, biome keys, engine.json,
   climate.json fields).
@@ -162,7 +161,7 @@ bounds. That includes a weight's change times its biome's output bound, which `C
 `skirt_depth_table[L]` is that step plus the instances' erosion (`min_skirt_depth`), as today.
 
 Validation keeps the limits that protect the skirts and the exact range:
-- the output bound under `amp_cap`;
+- the output bound within the base's limits (`Ground::reach_cap`, `Ground::floor`: a planet's centre);
 - a curve's slope under `MAX_CURVE_SLOPE`;
 - the noise's exact range.
 
@@ -210,20 +209,23 @@ It drops the ones that only protected the record layouts.
   ground term of fields.
 - **Refusal rules** that only protected the layouts (listed in *The rule*).
 - **Engine settings that are data:** the template biome built in C++ (`template_graph`) became world files
-  (`worlds/template_5cm.world.json`, `template_50cm.world.json`: a file per voxel size, since its octaves are counted in
-  voxels; `SDFCascade::template_path` picks it, a missing or refused one falls back to the flat table with an ERR). Its
-  cap on a small planet is data too: the template's 3.3 km octaves are over a 2 km planet's relief and refused there,
-  so `tiny.world.json` carries its own ground, the template's octaves stopped under the relief. `SDFCascade::Preset::
-  FLAT` and `terrain_mode` stay: the flat ground is already a constant table (`flat_table`), and the preset also picks
-  the shapes gallery's ground height, skirts and spawn in World and `player.gd`; folding those into world files is
-  left for later.
+  (`template_5cm` / `template_50cm`, a file per voxel size), then one list a world names (`worlds/ground.biomes.json`,
+  `"biomes": "res://worlds/ground.biomes.json"`: a note finer than 8 voxels plays nothing like one past the top, so one
+  file serves every voxel size; a world without biomes is refused, no template stands in). The species likewise
+  (`worlds/species.json`, the forests' `"species"`; `default_species` gone from the engine). A small
+  planet's ground is data too: the template's 3.3 km octaves would cross a 2 km planet's centre and are refused there,
+  so `tiny.world.json` carries its own ground, the template's octaves stopped at 3.3 km wavelengths. The flat
+  preset and `terrain_mode` went last (engine cleanup 4/5): the shapes gallery is a world file
+  (`worlds/shapes.world.json`: a constant node, `"instance_band": false`, the gallery in its edits file), its skirts the
+  hard-CSG edits' `skirt_depth` cells (band off), its spawn the player's `spawn_altitude`.
 - **Pins of the old terrain:**
   - `plain.json`'s hashes;
   - the generic == specialised pins on the old tables;
   - "neutral modulation leaves the ground bit for bit";
   - the FrameCheck probes of deleted functions.
   (The default-terrain hash of `test_sdf_cascade.cpp` kept its v1 value: the template is a plain fBm, one linear
-  channel, so v2 gives it v1's bits, and its world files are the old C++ graph node for node.)
+  channel, so v2 gives it v1's bits, and its world files were the old C++ graph node for node; at 0.5 m the one file now
+  gives other bits: amplitudes 1/8 of 0.4 m x 2^n wavelengths, not of 4 m x 2^n.)
 - **The legacy mesher and its oracle** (this PR, below).
 
 ## Checks after v2
@@ -272,7 +274,7 @@ Measured, not assumed: PR G carries a `tools/bench_ab.sh` table against dev (the
 | **A + B** (done) | the legacy mesher and `--validate` deleted (GPU Direct is the only pipeline); this note |
 | **C** (done) | `LevelProgram`, the op table's CPU form, the compiler; doctests above |
 | **D** (done) | the GLSL forms (specialised, generic); `SDFCascade` on v2; CascadeCheck on v2 |
-| **E** (done) | deletion of *What goes*; tests ported, test tables re-checked and pinned, the template biome as world files (the flat preset kept, above) |
+| **E** (done) | deletion of *What goes*; tests ported, test tables re-checked and pinned, the template biome as world files (the flat preset kept then; gone in engine cleanup 4/5, above) |
 | **F** (done) | biome mixer: node kinds from the engine's catalogue (it already built its nodes from `graph_kinds`; its own loop refusal deleted, the engine's error names the node; the tooltips' v1 rules rewritten), the warp's `x` / `y` / `z` ports in `graph_kinds` (all three or `in`, each gated), any multifractal parent, worlds migrated on read (a field's ground term dropped) |
 | G | the constant relaxation per LOD (`fold_lods`, `docs/cascade.md`: a node of absent notes is a constant, the last level skips what nothing reads, #165); the biome pruning (`guard_biomes`: a biome's own nodes skipped where its weight is 0 over the chunk); the bench table; `docs/perf.md` |
 

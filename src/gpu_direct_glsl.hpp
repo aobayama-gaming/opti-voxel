@@ -65,7 +65,6 @@ uvec4 encode_cell_vertex(uvec4 v, float pos_scale) {
 #define STATUS_OVERFLOW_CHUNKS 1
 #define STATUS_MISSING_NEIGHBOR 2
 #define STATUS_NAN_VERTICES 3
-#define STATUS_OUT_OF_BOUNDS 4
 #define STATUS_PAGE_FILL 8
 layout(set = 0, binding = 7, std430) restrict buffer Status {
     uint status[];
@@ -173,7 +172,7 @@ if (all(lessThan(cell_chunk_coordinate, ivec3(chunk_param.chunk_size - 1)))) {
     if (active_edge_count > 0) {
         local_vertex /= float(active_edge_count);
         vec3 chunk_vertex = local_vertex + vec3(cell_chunk_coordinate);
-        vec3 surface_normal = vertex_normal(vec3(0.0), cascade_vertex_gradient(gl_GlobalInvocationID, local_vertex));
+        vec3 surface_normal = vertex_normal(cascade_vertex_gradient(gl_GlobalInvocationID, local_vertex));
         // NaN or infinity: every exponent bit set (not isnan / isinf: WGSL has no NaN, Tint refuses them).
         uvec3 vertex_exponent = floatBitsToUint(chunk_vertex) & 0x7F800000u;
         uvec3 normal_exponent = floatBitsToUint(surface_normal) & 0x7F800000u;

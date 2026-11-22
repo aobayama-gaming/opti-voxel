@@ -76,6 +76,8 @@ public:
     int add(const TableDefPtr &p_def, uint32_t p_material = Material::INHERIT);
     int size() const { return int(list.size()); }
     const TableDef &operator[](int p_index) const { return *list[p_index]; }
+    // The index of the first type named p_name (TableDef::name: an edits file names its types), -1 if none is.
+    int find(const ov::str &p_name) const;
     const std::vector<TableDefPtr> &all() const { return list; }
     uint32_t material(int p_index) const { return materials[p_index]; }
 
@@ -174,7 +176,7 @@ Float4 finish_table(const Float4 &p_out, int p_lod, float p_out_scale, bool p_no
 // amp} (a cone on y = 0, its apex at y = height, cos / sin of its half angle from the CPU, displaced like the
 // rock: a conifer's tier); swiss_cube {hx, hy, hz, ring_radius, hole_radius} (a box with p_holes spherical holes on
 // a ring, a composite through the table; ring 0 and one hole: a cube holed through every face). The shapes
-// gallery's hard-CSG composites (SDFTable::Scene::SHAPES): die {h} (a cube of half size h rounded by a sphere, its
+// gallery's hard-CSG composites (worlds/shapes.edits.json): die {h} (a cube of half size h rounded by a sphere, its
 // pips subtracted: 1 on +y, 2 on +z, 3 on +x, 4 on -x, 5 on -z); stairs {half_width, rise, half_depth} (8 steps
 // rising along +z, step i a box of half height (i + 1) rise centred on y = 0); tunnel_cube {h, t} (a cube of half
 // size h tunnelled through along its three axes, tunnels of half width t). Biome features (biome_features.hpp): basin

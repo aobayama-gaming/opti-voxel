@@ -68,10 +68,13 @@ class InstanceStream {
 public:
     static constexpr uint64_t GRACE_FRAMES = 16;
     static constexpr uint32_t SLOTS_MIN = uint32_t(1) << 16;
+    // The streamed slots a world's table gets (SDFTable::add_stream): fixed, the sources having no end (the view bounds
+    // what is resident, the LRU frees the rest). 2^21 records (320 MB on the GPU) is what the forests' old square estimate
+    // already reached (forest5cm's 316 m: ~1.3M, the 1M forest's clamped here).
     static constexpr uint32_t SLOTS_MAX = uint32_t(1) << 21;
     static constexpr int64_t INPUT_RECORDS = int64_t(1) << 21; // the records of ready keys not in slots (inputs), kept at most
     static constexpr size_t ENTRIES_MAX = size_t(1) << 18; // landed keys with records kept at most (the empty ones count, the walks don't)
-    // Landed walks (site and proxy tiles) kept at most: enough for the view's whole zone to stay resident (a walk evicted is
+    // Landed walks (site and proxy tiles) kept at most: enough for the view's ground to stay resident (a walk evicted is
     // walked again). An entry is ~450 B (Entry 272, its map node and key ~70, the content 80 + its control block 16) plus 56
     // per site (CellSite). The 1M forest (5 x 5 km at 5 cm, 40 m site tiles): 125^2 columns, a few site tiles tall each
     // (the LOD-0 part tiles' only: a coarser part tile walks its own box), its 1M sites 56 MB; the cap bounds them to ~500 MB.
@@ -117,9 +120,6 @@ public:
     // No job starts or lands from now on: the queued ones are dropped, a running one lands nothing (its expansion would
     // queue its subtree for nobody). The destructor's first step.
     void stop();
-
-    // Σ over the sources of the sites their zone holds times the records per site, twice, within [SLOTS_MIN, SLOTS_MAX].
-    static uint32_t slot_budget(const std::vector<std::shared_ptr<const ScatterSource>> &p_sources);
 
     uint32_t slot_base() const { return settings.slot_base; }
     uint32_t slot_capacity() const { return settings.slot_capacity; }

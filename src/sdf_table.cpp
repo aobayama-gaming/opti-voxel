@@ -42,14 +42,29 @@ std::vector<std::pair<ov::str, const std::vector<T> *>> lists_of(const Climate::
 
 } // namespace
 
-int SDFTable::add_instance(int p_type, const VoxelPos &p_anchor, const float *p_rotation, const float *p_params, int p_op, float p_k) {
+bool SDFTable::Edit::operator==(const Edit &p_o) const {
+    return type == p_o.type && op == p_o.op && anchor == p_o.anchor && std::memcmp(rotation, p_o.rotation, sizeof(rotation)) == 0 &&
+            std::memcmp(params, p_o.params, sizeof(params)) == 0 && std::memcmp(&k, &p_o.k, sizeof(k)) == 0;
+}
+
+std::vector<SDFTable::Edit> SDFTable::live_edits() const {
+    std::vector<Edit> out;
+    out.reserve(edits.size());
+    for (const std::pair<const uint32_t, Edit> &e : edits) {
+        out.push_back(e.second);
+    }
+    return out;
+}
+
+ov::str SDFTable::edit_record(int p_type, const VoxelPos &p_anchor, const float *p_rotation, const float *p_params, int p_op, float p_k,
+        TableRecord &r_rec) const {
     if (!library || p_type < 0 || p_type >= library->size()) {
-        return -1;
+        return ov::format("type %d is not one of the library's %d.", p_type, library ? library->size() : 0);
     }
     const ov::str error = edit_error(p_rotation, p_params, p_op, p_k);
-    OV_ERR_FAIL_COND_V_MSG(!error.empty(), -1, "add_instance: " + error);
-    OV_ERR_FAIL_COND_V_MSG(records.size() >= gpu.table_capacity(), -1,
-            ov::format("add_instance: the table is full (%d instances, removed ones included).", gpu.table_capacity()));
+    if (!error.empty()) {
+        return error;
+    }
     TableRecord rec;
     rec.def = uint8_t(p_type);
     rec.op = Combine(p_op);
@@ -62,11 +77,31 @@ int SDFTable::add_instance(int p_type, const VoxelPos &p_anchor, const float *p_
         std::copy(p_params, p_params + 8, rec.params);
     }
     const ov::str fit = record_fit_error((*library)[rec.def], rec, max_instance_extent());
-    OV_ERR_FAIL_COND_V_MSG(!fit.empty(), -1, "add_instance: " + fit);
+    if (!fit.empty()) {
+        return fit;
+    }
     finish_record(rec);
+    r_rec = rec;
+    return ov::str();
+}
+
+int SDFTable::add_instance(int p_type, const VoxelPos &p_anchor, const float *p_rotation, const float *p_params, int p_op, float p_k) {
+    TableRecord rec;
+    const ov::str error = edit_record(p_type, p_anchor, p_rotation, p_params, p_op, p_k, rec);
+    OV_ERR_FAIL_COND_V_MSG(!error.empty(), -1, "add_instance: " + error);
+    OV_ERR_FAIL_COND_V_MSG(records.size() >= gpu.table_capacity(), -1,
+            ov::format("add_instance: the table is full (%d instances, removed ones included).", gpu.table_capacity()));
+    const uint32_t id = records.size();
     records.push_back(rec, version + 1);
-    finish_edit(rec, rec, record_box(rec), records.size() - 1);
-    return int(records.size() - 1);
+    Edit &e = edits[id];
+    e.type = (*library)[p_type].name;
+    e.op = rec.op;
+    e.anchor = rec.anchor;
+    std::copy(rec.rotation, rec.rotation + 9, e.rotation);
+    std::copy(rec.params, rec.params + 8, e.params);
+    e.k = p_k;
+    finish_edit(rec, rec, record_box(rec), id);
+    return int(id);
 }
 
 bool SDFTable::remove_instance(int p_id) {
@@ -78,6 +113,7 @@ bool SDFTable::remove_instance(int p_id) {
     const VoxelBox region = record_box(rec);
     rec.removed = true;
     records.set(p_id, rec, version + 1);
+    edits.erase(uint32_t(p_id));
     finish_edit(rec, rec, region, uint32_t(p_id));
     return true;
 }
@@ -100,6 +136,10 @@ bool SDFTable::move_instance(int p_id, const VoxelPos &p_anchor, const float *p_
     OV_ERR_FAIL_COND_V_MSG(!fit.empty(), false, "move_instance: " + fit);
     finish_record(rec);
     records.set(p_id, rec, version + 1);
+    if (const auto e = edits.find(uint32_t(p_id)); e != edits.end()) {
+        e->second.anchor = rec.anchor;
+        std::copy(rec.rotation, rec.rotation + 9, e->second.rotation);
+    }
     finish_edit(before, rec, old_box.merged(record_box(rec)), uint32_t(p_id));
     return true;
 }
@@ -199,13 +239,10 @@ bool SDFTable::cull_exempt(const ChunkId &p_node, int p_lod, float p_past_band_m
         return true;
     }
     // The corners are the bare ground's distance: the node holds a point within its band of the ground, so within the
-    // band plus the reach of a source's records when it can hold one (the corner test's own slope bound).
-    const int64_t span = int64_t(param.chunk_voxel_dimension()) << p_lod;
-    const VoxelPos lo = ChunkMath::chunk_min_voxel(p_node, param);
-    const VoxelBox node{ lo, lo + VoxelPos(span, span, span), true };
+    // band plus the reach of a source's records, which stand on the ground anywhere (the corner test's own slope bound).
     for (const std::shared_ptr<const ScatterSource> &s : streamed) {
         const int64_t reach = s->ground_reach(p_lod);
-        if (reach > 0 && double(p_past_band_m) <= double(reach) * param.voxel_size && node.clipped(s->setup().scatter.zone.grown(reach)).valid) {
+        if (reach > 0 && double(p_past_band_m) <= double(reach) * param.voxel_size) {
             return true;
         }
     }
@@ -296,7 +333,7 @@ void SDFTable::stop_field_gpu() {
 void SDFTable::attach_field_gpu(std::shared_ptr<FieldGPU> p_gpu) {
     std::atomic_store(&field_gpu, p_gpu);
     if (stream) {
-        stream->set_walk_batch(p_gpu ? walk_batch_gpu : 1);
+        stream->set_walk_batch(p_gpu ? WALK_BATCH_GPU : 1);
     }
 }
 
@@ -410,7 +447,6 @@ bool SDFTable::blob_fits(const TableRecord &p_rec) const {
 void SDFTable::add_blob_record(const BlobKey &p_key, const TableRecord &p_rec) {
     blob_ids[p_key] = records.size();
     records.push_back(p_rec, version + 1);
-    has_moment_blobs = true;
 }
 
 void SDFTable::blob_changed(uint32_t p_id, const TableRecord &p_old, const TableRecord &p_new, int p_lod, std::vector<uint32_t> &r_ids) {
@@ -426,17 +462,28 @@ RecordFinish SDFTable::record_finish() const {
     return RecordFinish{ param.skirt_depth, instance_band, erode_rule };
 }
 
-std::vector<Climate::InstanceShare> SDFTable::counted(Species::Kind p_kind, int p_count, double p_side_m) {
+std::vector<Climate::InstanceShare> SDFTable::counted(const std::vector<Species> &p_species, Species::Kind p_kind, int p_count, double p_side_m) {
     std::vector<Climate::InstanceShare> out;
     if (p_count <= 0 || !(p_side_m > 0.0)) {
         return out;
     }
-    for (const Species &s : default_species()) {
+    for (const Species &s : p_species) {
         if (s.kind == p_kind) { // cell_side rounds the cell as forest_cell_side
             out.push_back(Climate::InstanceShare{ s.name, p_side_m / std::sqrt(double(p_count)), 1u });
         }
     }
     return out;
+}
+
+ov::str SDFTable::species_error() const {
+    for (const auto &[who, list] : lists_of(placing_climate(), instances, &Climate::Biome::instances, &Climate::Biome::instances_listed)) {
+        for (const Climate::InstanceShare &e : *list) {
+            if (std::none_of(species.begin(), species.end(), [&](const Species &p_s) { return p_s.name == e.species; })) {
+                return who + " grows '" + e.species + "', which the world's species don't have.";
+            }
+        }
+    }
+    return ov::str();
 }
 
 int64_t SDFTable::cell_side(double p_cell_m) const {
@@ -448,10 +495,7 @@ std::vector<SDFTable::Group> SDFTable::groups() const {
     for (const auto &[who, list] : lists_of(placing_climate(), instances, &Climate::Biome::instances, &Climate::Biome::instances_listed)) {
         for (const Climate::InstanceShare &e : *list) {
             const auto named = std::find_if(species.begin(), species.end(), [&](const Species &p_s) { return p_s.name == e.species; });
-            if (named == species.end()) {
-                OV_ERR_PRINT("SDFTable: " + who + " grows '" + e.species + "', which the world's species don't have.");
-                continue;
-            }
+            OV_ERR_CONTINUE_MSG(named == species.end(), "SDFTable: " + who + " grows '" + e.species + "': configure refuses it first (species_error).");
             const int64_t side = cell_side(e.cell_m);
             auto g = std::find_if(out.begin(), out.end(), [&](const Group &p_g) { return p_g.kind == named->kind && p_g.side == side; });
             if (g == out.end()) {
@@ -472,11 +516,14 @@ std::vector<SDFTable::Group> SDFTable::groups() const {
     return out;
 }
 
-VoxelBox SDFTable::zone_box(bool p_on_base) const {
+VoxelBox SDFTable::region_box(const Region &p_region, bool p_on_base) const {
+    if (!(p_region.side_m > 0.0)) {
+        return VoxelBox();
+    }
     const double vs = param.voxel_size;
-    const VoxelPos ground = ground_at(std::llround(zone.x_m / vs), std::llround(zone.z_m / vs));
+    const VoxelPos ground = ground_at(std::llround(p_region.x_m / vs), std::llround(p_region.z_m / vs));
     const VoxelPos centre = p_on_base ? get_base().on_base(ground) : ground;
-    const int64_t half = std::llround(0.5 * zone.side_m / vs);
+    const int64_t half = std::llround(0.5 * p_region.side_m / vs);
     const VoxelPos reach(half, 4 * half, half);
     return VoxelBox{ centre - reach, centre + reach, true };
 }
@@ -484,10 +531,8 @@ VoxelBox SDFTable::zone_box(bool p_on_base) const {
 CellScatter SDFTable::scene_source(uint32_t p_salt, int64_t p_side) const {
     CellScatter s;
     s.salt = p_salt;
-    s.side = zone.side_m > 0.0 ? p_side : 0;
-    if (s.side > 0) {
-        s.zone = zone_box();
-    }
+    s.side = p_side;
+    s.start_level = site_walk_level(p_side, param.voxel_size);
     s.ground = [this](const VoxelPos &p_v, int p_lod) { return ground_field(p_v, p_lod); };
     s.ground_batch = [this](const VoxelPos *p_voxels, const int *p_lods, int p_count, ExactNoise::Float4 *r_out) {
         ground_field_batch(p_voxels, p_lods, p_count, r_out);
@@ -585,8 +630,9 @@ CellScatter SDFTable::scatter_source(const Types &p_types, const Group &p_group,
 void SDFTable::add_source(const CellScatter &p_source, const ov::str &p_name, ov::Value &r_stats, std::vector<TreeSpan> *r_spans) {
     const uint64_t start_us = ov::now_usec();
     std::vector<CellSite> sites;
-    if (p_source.valid()) {
-        p_source.sites(p_source.zone, sites);
+    const VoxelBox box = region_box(whole_region);
+    if (p_source.valid() && box.valid) {
+        p_source.sites(box, sites);
     }
     // Each site's records are independent (up_at and the library are const): on the worker pool, a batch at a time (the
     // records wait for their turn), then admitted in site order (the record ids don't change).
@@ -676,10 +722,10 @@ void SDFTable::add_stream(uint32_t p_slot_base, ov::Value &r_stats) {
     }
     InstanceStream::Settings settings;
     settings.slot_base = p_slot_base;
-    settings.slot_capacity = ov::min<uint32_t>(InstanceStream::slot_budget(streamed), SDFGpuTable::LIST_ID_MASK + 1 - p_slot_base);
+    settings.slot_capacity = ov::min<uint32_t>(InstanceStream::SLOTS_MAX, SDFGpuTable::LIST_ID_MASK + 1 - p_slot_base);
     stream = std::make_shared<InstanceStream>(streamed, param, settings, StreamExecutor::pool());
     if (std::atomic_load(&field_gpu)) {
-        stream->set_walk_batch(walk_batch_gpu); // a reconfigure keeps the attached field
+        stream->set_walk_batch(WALK_BATCH_GPU); // a reconfigure keeps the attached field
     }
     ov::Value d = ov::Value::object();
     d["slots"] = int64_t(settings.slot_capacity);
@@ -711,8 +757,8 @@ std::vector<Biome::Site> SDFTable::feature_sites() const {
             cells[entry.cell] = ov::max(cells[entry.cell], e.chance);
         }
     }
-    // Each kind and cell's candidates in the zone (on the base: the sites are its points).
-    const VoxelBox box = zone_box(true);
+    // Each kind and cell's candidates in the region (on the base: the sites are its points).
+    const VoxelBox box = region_box(feature_region, true);
     const BaseSurface &base = get_base();
     std::vector<Biome::Site> all, sites;
     for (const auto &[cell, chance] : cells) {
@@ -875,7 +921,7 @@ ScatterSource::Setup SDFTable::source_setup(const Source &p_source, uint32_t p_i
     s.max_extent = max_instance_extent();
     s.chunk_voxels = param.chunk_voxel_dimension();
     s.lod_count = lod_count;
-    s.part_cell_sides = stream_part_sides;
+    s.part_cell_sides = Archetype::ScatterSource::STREAM_PART_CELL_SIDES;
     return s;
 }
 
@@ -897,68 +943,23 @@ bool SDFTable::admit_records(std::vector<TableRecord> &r_records, const char *p_
     return true;
 }
 
-float SDFTable::voxels(double p_metres) const {
-    return float(p_metres / param.voxel_size);
-}
-
-void SDFTable::place(Combine p_op, double p_k_m, int p_type, const float *p_params, double p_x, double p_z, double p_dy_m, double p_yaw) {
+ov::str SDFTable::build_table(int p_lod_count) {
     const double vs = param.voxel_size;
-    TableRecord rec;
-    rec.def = uint8_t(p_type);
-    rec.op = p_op;
-    rec.set_k(voxels(p_k_m));
-    std::copy(p_params, p_params + 8, rec.params);
-    const VoxelPos ground = ground_at(std::llround(p_x / vs), std::llround(p_z / vs));
-    const UpAxis up = up_at(ground);
-    rec.anchor = along_up(ground, up, p_dy_m / vs);
-    Archetype::up_yaw_rotation(up, p_yaw, rec.rotation); // the flat base: the yaw's rows, the same floats
-    rec.salt = ExactNoise::pcg3d(ExactNoise::UVec3{ records.size() + 1, 0x5EEDu, 0u }).x;
-    // The same limits as a runtime edit (a gallery cube past 4 top-LOD chunk spans with few LODs).
-    std::vector<TableRecord> one{ rec };
-    admit_records(one, "scene record");
-}
-
-void SDFTable::add_shapes(const Types &p_types) {
-    auto v = [this](double p_metres) { return voxels(p_metres); };
-    // The cube ladder: centres at 0.9 of the half size, a little sunk, so the voxel rounding never lifts one off the
-    // ground.
-    for (int i = 0; i < 8; i++) {
-        const double d = 80.0 * double(1 << i);
-        const double h = 0.1 * d;
-        const double theta = (-45.5 + 13.0 * i) * ov::PI / 180.0;
-        const float params[8] = { v(h), v(h), v(h), 0, v(1.2 * h), 0, 0, 0 };
-        place(Combine::UNION, 0.0, p_types.holed_cube, params, SHAPES_X + d * std::sin(theta), SHAPES_Z - d * std::cos(theta), 0.9 * h, 0.5 - theta);
-    }
-    const double h = 6.0;
-    const float die[8] = { v(h), 0, 0, 0, 0, 0, 0, 0 };
-    place(Combine::UNION, 0.0, p_types.die, die, SHAPES_X - 25.0, SHAPES_Z + 40.0, 0.95 * h, 0.4);
-    // Eight 1 m steps, 2 m deep, 8 m wide, rising away from the spawn.
-    const float stairs[8] = { v(4.0), v(1.0), v(1.0), 0, 0, 0, 0, 0 };
-    place(Combine::UNION, 0.0, p_types.stairs, stairs, SHAPES_X, SHAPES_Z + 33.0, 0.0, 0.3);
-    // 5 m square tunnels along x, y and z.
-    const float tunnels[8] = { v(h), v(2.5), 0, 0, 0, 0, 0, 0 };
-    place(Combine::UNION, 0.0, p_types.tunnel_cube, tunnels, SHAPES_X + 25.0, SHAPES_Z + 40.0, 0.9 * h, 0.6);
-}
-
-void SDFTable::build_table(int p_lod_count) {
-    const double vs = param.voxel_size;
-    // Appended in this order: the GDScript side names the indices (CAPSULE_TYPE). The gallery's types only with it.
+    // Appended in this order (the GLSL names each type by its index, an edits file by its name: unique).
     DefLibrary lib;
     Types types;
-    const int sphere = lib.add(make_sphere_type());
+    lib.add(make_sphere_type());
     types.capsule = lib.add(make_capsule_type());
-    OV_ERR_FAIL_COND(sphere != SPHERE_TYPE || types.capsule != CAPSULE_TYPE);
     types.rock = lib.add(make_rock_type(ExactNoise::lattice_k(8.0, vs), ROCK_SEED));
     const TreeTypes tree_types = add_tree_types(lib, vs);
-    if (scene == Scene::SHAPES) {
-        types.holed_cube = lib.add(make_swiss_cube_type(1));
-        types.die = lib.add(make_die_type());
-        types.stairs = lib.add(make_stairs_type());
-        types.tunnel_cube = lib.add(make_tunnel_cube_type());
-    }
-    // The feature types only where the zone has some (the library's indices, the blob's, stay as without them).
+    // The shapes gallery's hard-CSG composites (worlds/shapes.edits.json places them).
+    lib.add(make_swiss_cube_type(1));
+    lib.add(make_die_type());
+    lib.add(make_stairs_type());
+    lib.add(make_tunnel_cube_type());
+    // The feature types only where the lists name some (the library's indices, the blob's, stay as without them).
     const auto feature_lists = lists_of(placing_climate(), features, &Climate::Biome::features, &Climate::Biome::features_listed);
-    has_features = zone.side_m > 0.0 && std::any_of(feature_lists.begin(), feature_lists.end(), [](const auto &p_l) { return !p_l.second->empty(); });
+    has_features = std::any_of(feature_lists.begin(), feature_lists.end(), [](const auto &p_l) { return !p_l.second->empty(); });
     if (has_features) {
         types.biome = Biome::add_types(lib, vs);
     }
@@ -970,21 +971,36 @@ void SDFTable::build_table(int p_lod_count) {
         if (!error.empty()) {
             OV_ERR_PRINT(ov::format("Archetype library type %d: ", i) + error);
         }
+        if (library->find((*library)[i].name) != i) {
+            return "the library names two types '" + (*library)[i].name + "' (an edits file names its types).";
+        }
     }
     lod_count = p_lod_count;
 
     stop_streaming(); // its tasks read the old sources
     rebuild.cancel(); // a base of the old records
     records.clear();
-    has_moment_blobs = false;
+    edits.clear();
     moment_blob_type = -1;
     blob_ids.clear();
     moment_layers = MomentLayers();
     trees.clear();
     sources.clear();
     lava_pools.clear();
-    if (scene == Scene::SHAPES) {
-        add_shapes(types);
+    // The edits to replay, checked before anything is placed: a refused one refuses the world.
+    std::vector<TableRecord> replay(start_edits.size());
+    for (size_t i = 0; i < start_edits.size(); i++) {
+        const Edit &e = start_edits[i];
+        const int type = library->find(e.type);
+        const ov::str error = type < 0 ? "no library type is named '" + e.type + "'."
+                                       : edit_record(type, e.anchor, e.rotation, e.params, int(e.op), e.k, replay[i]);
+        if (!error.empty()) {
+            return ov::format("edits: entry %d: ", int64_t(i)) + error;
+        }
+    }
+    if (has_features && !(feature_region.side_m > 0.0)) {
+        return "features: the lists name features but the world gives no feature_region (they are placed over a bounded box until "
+               "they stream: SDFTable::set_feature_region).";
     }
     // The biome features first: the scatter and the forest keep out of the lakes (their basins cut the ground away).
     ov::Value scene_stats = ov::Value::object();
@@ -999,6 +1015,11 @@ void SDFTable::build_table(int p_lod_count) {
         const ov::str name = ov::str(tree ? "trees" : "scatter") + (first ? ov::str() : ov::format("_%d", g.side));
         sources.push_back(Source{ name, g.kind, tree ? forest_source(tree_types, g, salt) : scatter_source(types, g, salt) });
     }
+    const bool any_source = std::any_of(sources.begin(), sources.end(), [](const Source &p_s) { return p_s.scatter.valid(); });
+    if (!stream_sources && any_source && !(whole_region.side_m > 0.0)) {
+        return "instances: placed whole (the stream off) only over a box the caller gives (SDFTable::set_whole_region: the checks' "
+               "oracle); a world streams them.";
+    }
     if (!stream_sources) {
         const std::vector<const Species *> world_trees = species_of(species, Species::TREE);
         for (size_t i = 0; i < sources.size(); i++) {
@@ -1010,14 +1031,28 @@ void SDFTable::build_table(int p_lod_count) {
         }
     }
     add_moment_blobs(blob, scene_stats);
-    edit_regions.clear();
-    // The GPU buffers hold the scene plus room for runtime edits, then the streamed slots (the mesher reads this at init).
-    const uint32_t capacity = ov::min<uint32_t>(ov::max<uint32_t>(16384u, uint32_t(records.size()) + 4096u), SDFGpuTable::LIST_ID_MASK + 1);
+    // The GPU buffers hold the scene and the replayed edits plus room for runtime edits, then the streamed slots (the
+    // mesher reads this at init).
+    const uint64_t placed = uint64_t(records.size()) + replay.size();
+    const uint32_t capacity = uint32_t(ov::min<uint64_t>(ov::max<uint64_t>(16384u, placed + 4096u), uint64_t(SDFGpuTable::LIST_ID_MASK) + 1));
+    if (placed > capacity) {
+        return ov::format("edits: %d edits past the scene's %d records: the table holds at most %d.", int64_t(replay.size()), records.size(), capacity);
+    }
     if (stream_sources) {
         add_stream(capacity, scene_stats);
     }
     gpu.set_capacity(capacity, stream);
     gpu.set_scene(scene_stats, records.size());
+    // The edits after the scene (ids >= scene_end): folded after the streamed slots, as add_instance's.
+    for (size_t i = 0; i < replay.size(); i++) {
+        const uint32_t id = records.size();
+        records.push_back(replay[i], version + 1);
+        edits[id] = start_edits[i];
+        std::vector<uint32_t> blobs; // the snapshot below is built whole
+        update_moment_blobs(id, blobs);
+    }
+    edit_regions.clear();
     version++;
     publish(build_snapshot(library, float(vs), true, records, param, lod_count - 1, version), VoxelBox());
+    return ov::str();
 }

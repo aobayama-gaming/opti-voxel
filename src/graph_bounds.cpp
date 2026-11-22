@@ -96,7 +96,7 @@ struct Blend {
 // LIN node p_n's value: its plain terms summed, its blend terms (the whole chain's, Blend::terms) a convex combination.
 // The weights are >= 0 and sum to s in [1 - e, 1 + e] over every biome (e = biomes x WEIGHT_SUM_MARGIN), so sum_b w_b
 // x_b lies within the hull of the blended outputs (and 0, for a biome without a term here), scaled by the s that widens
-// each side: one biome's reach, not their sum (which refused a planet of five biomes each well under its relief cap).
+// each side: one biome's reach, not their sum (which refused a planet of five biomes each well under its reach limit).
 // That holds while each weight is used by at most as many terms as it has biomes (blend: one term a biome); past that,
 // the plain sum of the terms.
 void lin_bound(const LevelProgram &p_prog, const Blend &p_blend, const Node &p_n, double &r_lo, double &r_hi) {
@@ -284,9 +284,13 @@ ov::str bound_program(const Climate::Ground &p_ground, LevelProgram &r_program) 
         r_program.step[size_t(lod)] = d[size_t(r_program.output)];
     }
     const size_t o = size_t(r_program.output);
+    // A carve (the output reads up) has an open low side: only its top counts.
     const double reach = up[o] ? r_program.hi[o] : ov::max(std::fabs(r_program.lo[o]), std::fabs(r_program.hi[o]));
-    if (!(reach <= double(p_ground.amp_cap))) {
-        return ov::format("climate: the ground reaches %s voxels from its base, over the cap of %s.", reach, p_ground.amp_cap);
+    if (!(reach <= p_ground.reach_cap)) {
+        return ov::format("climate: the ground reaches %s voxels from its base, past the %s the base keeps exact.", reach, p_ground.reach_cap);
+    }
+    if (!up[o] && !(r_program.lo[o] > p_ground.floor)) {
+        return ov::format("climate: the ground goes %s voxels under its base, past the planet's centre (%s voxels down).", -r_program.lo[o], -p_ground.floor);
     }
     return validate_nodes(r_program);
 }

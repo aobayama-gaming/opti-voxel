@@ -10,16 +10,19 @@
 #include <string>
 #include <vector>
 
-// A procedural instance source: what a zone of the ground holds, one site per 3D cell (cell_sites.hpp), each site
+// A procedural instance source: what the ground holds wherever it is, one site per 3D cell (cell_sites.hpp), each site
 // growing its own records (a tree's parts, a rock). Everything is a pure function of the cell: any box gives the same
-// sites and records for the cells it shares with another, so the source can be placed whole (the table at configure)
-// or in pieces. The forest and the rock scatter are two of them.
+// sites and records for the cells it shares with another, so the source can be placed in pieces (the stream's tiles,
+// wherever the view asks) or whole over a box (the table at configure: the oracle). The forest and the rock scatter are
+// two of them.
 namespace Archetype {
 
 struct CellScatter {
     uint32_t salt = 0; // its sites' (cell_site)
-    VoxelBox zone; // the sites' bases lie in it
     int64_t side = 0; // the cells (LOD0 voxels); 0: no site
+    // Where every walk of its sites starts (site_walk_level of its side and voxel size: SDFTable::scene_source; 0 reads
+    // every cell of a box).
+    int start_level = 0;
     FieldFn ground; // thread-safe
     // ground at many points in one call for the lockstep walks (ScatterSource::walk_tiles: a round of many tiles at once,
     // a GPU's batch); empty: batch_of(ground). A lone walk (sites, site_tiles) reads ground: a round trip per round of a
@@ -52,25 +55,25 @@ struct CellScatter {
         return s < 0 || classes <= 1 ? (s < 0 ? -1 : 0) : s;
     }
     // Sources with the same key share one SourceProfile (ScatterSource's registry): their generate gives the same records
-    // for the same site whatever their zone, ground or density (the profile samples sites at the origin, upright). Empty: a
+    // for the same site whatever their ground or density (the profile samples sites at the origin, upright). Empty: a
     // profile of its own.
     std::string profile_key;
 
-    bool valid() const { return zone.valid && side > 0 && ground && up && generate; }
+    bool valid() const { return side > 0 && ground && up && generate; }
     uint32_t class_index(uint32_t p_variant) const { return classes > 1 ? p_variant % classes : 0u; }
-    // The accepted sites whose base lies in p_query and the zone, in cell order (surface_sites; p_snap false: on the
-    // coarse plane). The walk starts at the zone's level (walk_level(zone, side)): any box keeps exactly the sites the
-    // zone's own walk keeps in it, so the site tiles, the coarse part tiles and a whole build agree by construction (a
-    // box's own level depends on its extent, and a coarser start may prune a cell a finer one keeps). On the worker pool
-    // (not from inside a pool task, unless it holds an InlineParallelFor).
+    // The accepted sites whose base lies in p_query, in cell order (surface_sites; p_snap false: on the coarse plane).
+    // Every walk starts at start_level: any box keeps exactly the sites any other keeps where they meet, so the site
+    // tiles, the coarse part tiles and a whole build agree by construction (a box's own level depends on its extent, and
+    // a coarser start may prune a cell a finer one keeps). p_query is a tile or a whole build's box: a box spanning many
+    // start nodes walks them all. On the worker pool (not from inside a pool task, unless it holds an InlineParallelFor).
     void sites(const VoxelBox &p_query, std::vector<CellSite> &r_out, bool p_snap = true) const;
     // sites() in its steps, for many queries walked at once (surface_sites_many with walk_field()): the walk of p_query
-    // into r_out (side 0, nothing walked, when the query misses the zone), then accept_sites on what it appended.
+    // into r_out (side 0, nothing walked, for an invalid query or source), then accept_sites on what it appended.
     SiteWalk site_walk(const VoxelBox &p_query, std::vector<CellSite> *r_out, bool p_snap = true) const;
     void accept_sites(std::vector<CellSite> &r_sites, size_t p_first) const;
     FieldBatchFn walk_field() const { return ground_batch ? ground_batch : batch_of(ground); }
-    // The tiles of side << p_level voxels (tile units, cell order) meeting p_query and the zone that can hold a site: the
-    // nodes the zone-level walk keeps at that level (surface_nodes; a few readings per tile, no snap). Pool rule of sites().
+    // The tiles of side << p_level voxels (tile units, cell order) meeting p_query that can hold a site: the nodes the
+    // walk from start_level keeps at that level (surface_nodes; a few readings per tile, no snap). Pool rule of sites().
     void site_tiles(const VoxelBox &p_query, int p_level, std::vector<VoxelPos> &r_out) const;
     // A site's records along the up at its base, for LOD p_lod (generate; -1: all).
     void grow(const Site &p_site, int p_lod, std::vector<TableRecord> &r_out) const { generate(p_site, up(p_site.base), p_lod, r_out); }

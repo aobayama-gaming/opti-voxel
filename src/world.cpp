@@ -30,11 +30,6 @@ private:
     const uint64_t t0;
 };
 
-// The world's planet radius, none under the shapes gallery (its flat preset).
-double planet_radius_m(const World::Settings &p_config, const WorldFile &p_world) {
-    return p_config.terrain_mode == 4 ? 0.0 : p_world.planet_radius_m;
-}
-
 // A planet's +y pole less the flat datum (LOD0 voxels): where the flat world's voxel 0 goes, so the poses made for its
 // datum stand the same over the pole (start's default origin, scene_shift).
 VoxelPos pole_lift(const BaseSurface &p_planet, double p_voxel_size) {
@@ -57,23 +52,60 @@ World::~World() {
     stop();
 }
 
+str World::Settings::validate() const {
+    if (discoverer_mode < 0 || discoverer_mode > 1) {
+        return format("discoverer_mode %d: expected 0 (CPU) or 1 (GPU).", discoverer_mode);
+    }
+    if (!(chunk_param.skirt_depth >= 0.0f)) {
+        return "skirt_depth must not be negative.";
+    }
+    for (const int64_t v : { world_origin_request.x, world_origin_request.y, world_origin_request.z }) {
+        if (v > WorldCoord::MAX_ABS_ORIGIN_VOXEL || v < -WorldCoord::MAX_ABS_ORIGIN_VOXEL) {
+            return "world_origin must be within +-2^60 voxels.";
+        }
+    }
+    if (!(rebase_distance_m >= 0.0f)) {
+        return "rebase_distance_m must be >= 0.";
+    }
+    // The remembered view axis lags the camera's by up to RESCAN_TURN_DEG: a smaller margin would leave the frustum's
+    // edge outside the cone.
+    if (!(lod_view_margin_deg >= ChunkDiscoverer::RESCAN_TURN_DEG && lod_view_margin_deg <= 180.0f)) {
+        return format("lod_view_margin_deg must be in [%d, 180].", int(ChunkDiscoverer::RESCAN_TURN_DEG));
+    }
+    if (std::isnan(lod_view_memory_m)) {
+        return "lod_view_memory_m must be a number.";
+    }
+    if (direct.max_batches_per_frame < 1 || direct.max_batches_per_frame > GPUDirectMesher::MAX_BATCHES_PER_FRAME) {
+        return format("direct batches_per_frame must be in [1, %d].", int(GPUDirectMesher::MAX_BATCHES_PER_FRAME));
+    }
+    if (!(direct.gpu_budget_ms >= 0.0f)) {
+        return "direct gpu_budget_ms must be >= 0 (0: no budget).";
+    }
+    return str();
+}
+
+bool World::fail(const str &p_error) {
+    error = p_error;
+    OV_ERR_PRINT("World: " + p_error);
+    return false;
+}
+
 bool World::load_world() {
     OV_ERR_FAIL_COND_V_MSG(started, false, "World: the world is set before start.");
-    if (config.world_path == content_path && config.world_json == content_json && config.world_dir == content_dir) {
+    if (content_read && config.world_path == content_path && config.world_json == content_json && config.world_dir == content_dir) {
         return true;
     }
     WorldFile loaded;
-    str err;
-    if (!config.world_json.empty()) {
-        err = WorldFile::parse_text(config.world_json, config.world_dir, loaded);
-    } else if (!config.world_path.empty()) {
-        err = WorldFile::load(config.world_path, loaded);
+    const str err = config.world_json.empty() ? WorldFile::load(config.world_path.empty() ? str(WorldFile::DEFAULT_PATH) : config.world_path, loaded)
+                                              : WorldFile::parse_text(config.world_json, config.world_dir, loaded);
+    if (!err.empty()) {
+        return fail(err);
     }
-    OV_ERR_FAIL_COND_V_MSG(!err.empty(), false, "World: " + err);
     content = loaded;
     content_path = config.world_path;
     content_json = config.world_json;
     content_dir = config.world_dir;
+    content_read = true;
     config.chunk_param.voxel_size = float(content.voxel_m);
     return true;
 }
@@ -82,17 +114,29 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
         double p_camera_far_m) {
     ChunkParam &chunk_param = config.chunk_param;
     OV_ERR_FAIL_COND_V_MSG(started, false, "World: already started.");
+    error = str();
+    if (const str err = config.validate(); !err.empty()) {
+        return fail(err);
+    }
     if (!load_world()) {
         return false;
     }
     const int lod_numbers = content.lods;
     // One chunk-id unit is half a LOD0 chunk, a whole number of voxels.
-    OV_ERR_FAIL_COND_V_MSG(chunk_param.chunk_voxel_dimension() % 2 != 0, false, "World: chunk_size - 2 * skirt_size must be even.");
-    OV_ERR_FAIL_COND_V_MSG(lod_numbers < 1 || lod_numbers > ChunkMath::MAX_LOD_NUMBERS, false, "World: lod_numbers out of range.");
+    if (chunk_param.chunk_voxel_dimension() % 2 != 0) {
+        return fail("chunk_size - 2 * skirt_size must be even.");
+    }
+    if (lod_numbers < 1 || lod_numbers > ChunkMath::MAX_LOD_NUMBERS) {
+        return fail("lod_numbers out of range.");
+    }
     // The mesher needs the main device. Without one (headless, the Compatibility renderer) the page pool would
     // dereference null on the device's thread: the terrain stays empty instead.
-    OV_ERR_FAIL_COND_V_MSG(p_hosts.device == nullptr, false, "World: no GPU device (headless or the Compatibility renderer): the terrain is disabled.");
-    OV_ERR_FAIL_COND_V_MSG(p_hosts.pages == nullptr, false, "World: no host to draw the mesher's output.");
+    if (p_hosts.device == nullptr) {
+        return fail("no GPU device (headless or the Compatibility renderer): the terrain is disabled.");
+    }
+    if (p_hosts.pages == nullptr) {
+        return fail("no host to draw the mesher's output.");
+    }
     hosts = p_hosts;
 
     started = true;
@@ -104,26 +148,17 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
     }
     world_origin_chunk = chunk_param.origin_chunk;
 
-    // One terrain, the cascade: mode 4 is its flat preset under the shapes gallery.
-    if (config.terrain_mode == 4) {
-        sdf->preset = SDFCascade::Preset::FLAT;
-        sdf->set_scene(SDFTable::Scene::SHAPES);
-    }
-    sdf->set_zone(content.zone);
+    sdf->set_feature_region(content.feature_region);
     sdf->set_instances(content.instances);
     sdf->set_species(content.species);
     sdf->set_stream_sources(config.archetype_stream);
-    sdf->set_stream_part_sides(config.archetype_stream_part_sides);
     sdf->set_features(content.features);
-    sdf->planet_radius_m = planet_radius_m(config, content);
+    sdf->planet_radius_m = content.planet_radius_m;
     sdf->planet_ring_m = content.planet_ring_m;
     sdf->climate_data = content.climate_table; // parsed and checked by configure() (get_world_error)
     sdf->specialize = config.specialize_shaders;
-    sdf->set_instance_band(config.archetype_band && config.terrain_mode != 4); // the gallery: a crease test at every LOD, never eroded
-    sdf->set_moment_blobs(config.archetype_moments);
-    sdf->set_instance_erode(config.archetype_erode);
-    sdf->set_instance_resolve(config.archetype_resolve);
-    sdf->set_walk_batch_gpu(size_t(config.walk_batch));
+    sdf->set_instance_band(content.instance_band);
+    sdf->set_edits(has_start_edits ? start_edits : content.edits); // replayed by configure() (an edit refused: get_world_error)
     const float min_skirt = sdf->min_skirt_depth(chunk_param, lod_numbers);
     if (chunk_param.skirt_depth < min_skirt) {
         VLOG(1, "World: skirt_depth raised from ", chunk_param.skirt_depth, " to ", min_skirt, " voxels (the terrain's band steps)");
@@ -133,11 +168,10 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
         OV_TRACE("world", "start_configure");
         sdf->configure(chunk_param, lod_numbers);
     }
-    // A refused planet or climate configures another world (the flat datum, the template ground): not the one asked for.
+    // A refused planet, climate or species: no world was configured.
     if (const str err = sdf->get_world_error(); !err.empty()) {
-        OV_ERR_PRINT("World: " + err + ": the world isn't started.");
         started = false;
-        return false;
+        return fail(err);
     }
     sdf->set_walk_verify(config.walk_verify);
     if (config.walk_gpu) {
@@ -150,8 +184,6 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
     OV_TRACE("world", "start_discoverer");
     chunk_discoverer = new ChunkDiscoverer();
     chunk_discoverer->set_config(chunk_param, sdf.get());
-    chunk_discoverer->set_cull_mode(ChunkDiscoverer::CullMode(config.discovery_cull_mode));
-    chunk_discoverer->set_cache(config.discovery_cache, config.discovery_verify);
     if (config.discoverer_mode != 0 && points_gpu == nullptr) {
         points_gpu = LocalGpuThread::create();
     }
@@ -173,7 +205,6 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
     {
         OV_TRACE("world", "start_mesher");
         direct_mesher = new GPUDirectMesher();
-        direct_mesher->set_dual_contouring(config.dual_contouring);
         direct_mesher->initialize(sdf.get(), chunk_param, lod_numbers, hosts.device, hosts.pages, config.direct, std::exchange(reused_pages, nullptr));
         direct_mesher->set_debug_view(config.debug_view);
     }
@@ -181,7 +212,7 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
     // Only for a host that draws them (binds their textures).
     if (content.atmosphere && hosts.atmosphere_textures) {
         atmosphere = new Atmosphere();
-        atmosphere->start(hosts.device, sdf->get_base(), double(chunk_param.voxel_size), sdf->relief_m(content.relief_m), content.atmosphere_scale,
+        atmosphere->start(hosts.device, sdf->get_base(), double(chunk_param.voxel_size), sdf->ground_top_m(), content.atmosphere_scale,
                 hosts.atmosphere_textures);
         if (content.clouds && hosts.cloud_textures) {
             clouds = new Clouds();
@@ -193,7 +224,7 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
                     return CloudClimate::at(*climate, cascade->program(), p_voxel, p_m);
                 });
             }
-            clouds->start(hosts.device, atmosphere, sdf->get_base(), double(chunk_param.voxel_size), sdf->relief_m(content.relief_m), content.atmosphere_scale,
+            clouds->start(hosts.device, atmosphere, sdf->get_base(), double(chunk_param.voxel_size), sdf->ground_top_m(), content.atmosphere_scale,
                     hosts.cloud_textures);
             clouds->set_weather(cloud_cover, cloud_wind);
         }
@@ -214,6 +245,14 @@ int World::add_instance(int p_type, const VoxelPos &p_anchor, const float *p_rot
         _apply_instance_edit();
     }
     return id;
+}
+
+int World::type_index(const str &p_name) const {
+    return started ? sdf->get_library().find(p_name) : -1;
+}
+
+str World::save_edits(const str &p_path) const {
+    return WorldFile::save_edits(p_path, live_edits());
 }
 
 bool World::remove_instance(int p_id) {
@@ -269,6 +308,9 @@ void World::_record_dispatch_times(const DispatchTimes &p_now) {
 void World::frame(const Float3 *p_camera_pos, const Float3 *p_camera_forward, double p_camera_far_m, const Float3 *p_load_centre) {
     if (!started) {
         return;
+    }
+    if (error.empty() && direct_mesher != nullptr && direct_mesher->has_failed()) {
+        fail("the mesher's passes failed to compile: nothing is drawn.");
     }
 
     Section total(process_stats.process_total, "process");
@@ -412,7 +454,7 @@ bool World::debug_audit_discovery() {
     const LODHashSet &scanned = *state.scanned_chunk;
     LODHashSet reference;
     ChunkDiscoverer::ScanCounters counters;
-    chunk_discoverer->scan(scan_view, ChunkDiscoverer::CULL_NONE, reference, counters);
+    chunk_discoverer->scan(scan_view, false, reference, counters);
 
     int64_t scanned_not_in_ref = 0;
     for (const ChunkId &id : scanned) {
@@ -445,7 +487,6 @@ bool World::debug_audit_discovery() {
     discovery_audit.expected = int64_t(culled.size());
     ov::Value &base = discovery_audit.base;
     base["camera_chunk"] = WorldCoord::to_string(scan_view.camera_chunk);
-    base["cull_mode"] = config.discovery_cull_mode;
     base["reference"] = int64_t(reference.size());
     base["reference_nodes_visited"] = counters.nodes_visited;
     base["scanned"] = int64_t(scanned.size());
@@ -539,6 +580,9 @@ double World::load_radius() const {
 }
 
 double World::sdf_at(const double p_render_pos[3]) const {
+    if (sdf->program().nodes.empty()) {
+        return 0.0; // no world configured (before start, or refused: get_error): nothing to sample
+    }
     WorldPos p;
     p.voxel = voxel_at(p_render_pos); // the cascade only exists on lattice points: the LOD0 voxel corner (within one voxel)
     return sdf->evaluate_view(p, 0); // called every frame: streamed instances come once resident
@@ -568,7 +612,7 @@ ChunkId World::start_origin() const {
 }
 
 BaseSurface World::settings_planet() const {
-    const double radius = planet_radius_m(config, content);
+    const double radius = content.planet_radius_m;
     ov::str refusal; // the configure's world error: start() says it once
     return radius > 0.0 ? BaseSurface::planet(radius, double(config.chunk_param.voxel_size), content.planet_ring_m, &refusal)
                         : BaseSurface();
@@ -658,7 +702,6 @@ ov::Value World::debug_stats() {
         return d;
     }
     const ChunkParam &chunk_param = config.chunk_param;
-    d["terrain_mode"] = config.terrain_mode;
     d["lods"] = content.lods;
     ov::Value origin = ov::Value::object();
     origin["requested_voxel"] = WorldCoord::to_string(config.world_origin_request);
@@ -743,12 +786,12 @@ ov::Value World::debug_stats() {
     destroy["handoff_frames"] = to_value(vs.handoff_frames);
     d["destroy"] = destroy;
 
-    d["chunk_rids_alive"] = DebugLog::chunk_rids_created.load() - DebugLog::chunk_rids_freed.load();
     d["discoverer"] = chunk_discoverer->get_stats();
     d["mesher"] = direct_mesher->get_stats();
 
     ov::Value edits = ov::Value::object();
     edits["edits"] = edit_stats.edits;
+    edits["live"] = int64_t(sdf->live_edits().size());
     edits["remesh_total"] = edit_stats.remesh_total;
     edits["remesh_last"] = edit_stats.remesh_last;
     edits["apply"] = edit_stats.apply.to_value();
@@ -814,8 +857,6 @@ void World::stop(Kept *r_kept) {
         r_kept->pages = kept;
     }
     direct_mesher = nullptr;
-
-    VLOG(1, "World: teardown, chunk instances created=", DebugLog::chunk_rids_created.load(), " freed=", DebugLog::chunk_rids_freed.load());
     state.clear();
 }
 

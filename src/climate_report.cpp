@@ -279,22 +279,6 @@ double relief_light(const Sampled &p_s, size_t p_i, int p_m, bool p_gradient) {
     return 0.3 + 0.9 * ov::max(0.0, (nx * -0.577 + ny * 0.577 + nz * -0.577) / ln);
 }
 
-// The biomes' blend (blend_rgb) in the relief's light (RGB): the mixer's World view.
-ov::bytes biomes_rgb(const Table &p_table, const Sampled &p_s, int p_n, int p_m) {
-    const int64_t points = int64_t(p_n) * p_n;
-    ov::bytes img;
-    img.resize(points * 3);
-    for (int64_t i = 0; i < points; i++) {
-        double rgb[3];
-        blend_colour(p_table, p_s, size_t(i), rgb);
-        const double light = relief_light(p_s, size_t(i), p_m, false);
-        for (int c = 0; c < 3; c++) {
-            img[i * 3 + c] = rgb_byte(rgb[c] * light);
-        }
-    }
-    return img;
-}
-
 // The relief (RGB): height colours in the relief's light (relief_light).
 ov::bytes shaded_rgb(const Sampled &p_s, int p_n, int p_m, bool p_gradient) {
     const int64_t points = int64_t(p_n) * p_n;
@@ -428,7 +412,7 @@ static int slice_lattice(double p_extent_km, int p_n, double p_voxel_size) {
     return ov::max(0, int(std::floor(std::log2(p_extent_km * 1000.0 / p_n / p_voxel_size))));
 }
 
-// A world's cascade, configured on its climate over its base (a planet's: its curvature, its relief caps): empty, or why
+// A world's cascade, configured on its climate over its base (a planet's: its curvature, its centre under the ground): empty, or why
 // it has none to sample.
 static ov::str load_climate(const WorldFile &p_world, SDFCascade &r_sdf) {
     ChunkParam param;
@@ -487,7 +471,10 @@ ov::Value ClimateReport::run(const ov::str &p_out_dir, const ov::str &p_world_pa
         report["error"] = ov::format("--lattice=%d: above the cascade's top lattice %d.", p_lattice, sdf.program().top);
         OV_ERR_FAIL_V_MSG(report, "ClimateReport: " + report["error"].as_str());
     }
-    const int m = p_lattice >= 0 ? p_lattice : slice_lattice(p_extent_km, n, ground.voxel_size);
+    // On a planet the slice spans at most its diameter: past it the base's tangent plane leaves the ball, and each point's
+    // ground trace runs all its steps through empty space (a 52 km slice of a 2 km planet took minutes for nothing).
+    const double extent_km = sdf.get_base().curved() ? ov::min(p_extent_km, 2.0 * sdf.get_base().get_radius() * ground.voxel_size / 1000.0) : p_extent_km;
+    const int m = p_lattice >= 0 ? p_lattice : slice_lattice(extent_km, n, ground.voxel_size);
     const Slice slice = sample_slice(sdf, p_surface, 0, m, n, p_center_x, p_center_z, true, ov::Priority::HIGH);
     const Sampled &s = slice.s;
     const Vector2i64 &c = slice.c;
@@ -546,8 +533,6 @@ ClimateReport::Preview ClimateReport::preview(const ov::Value &p_world, const ov
     out.size = n;
     out.lattice = m;
     out.spacing_m = slice.spacing_m;
-    out.biomes = biomes_rgb(table, s, n, m);
-    out.shaded = shaded_rgb(s, n, m, false);
     out.altitude_m.resize(s.altitude.size());
     for (size_t i = 0; i < s.altitude.size(); i++) {
         out.altitude_m[i] = float(s.altitude[i] * voxel);

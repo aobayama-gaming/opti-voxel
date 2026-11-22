@@ -63,7 +63,8 @@ private:
     Vector3 _camera_forward() const;
     // What the world gets as the camera's far plane: Camera3D.far, 0 (none) without a camera or the far limit.
     double _camera_far() const;
-    bool _can_set_world_origin(int64_t p_voxel) const;
+    // False (an error) once the world started: p_name is set before the terrain enters the tree.
+    bool _settable(const char *p_name) const;
     // The render origin moved by p_shift metres (World::recenter): the Node3D siblings follow, then origin_shifted.
     void _move_render_origin(const Float3 &p_shift);
     // What follows the render origin outside the meshers: the sea level colours, the VoxelSky siblings' frame.
@@ -86,9 +87,6 @@ public:
     void _process(double delta) override;
     void _exit_tree() override;
 
-    // Terrain: 1 the Hermite cascade terrain (SDFCascade, default), 4 its flat preset under
-    // the shapes gallery (SDFTable::Scene::SHAPES, --terrain=shapes, res://shapes_scene.tscn). 0 was SDFDummy and 3
-    // the archetype demo on an fBm ground (SDFArchetype), both removed: saved scenes keep their numbers.
     // The world file (WorldFile: res:// or absolute): the voxel size, the LODs and every content setting. Set before
     // the node enters the tree; the scene's camera may read voxel_size from then on.
     void set_world_path(const String &p_path);
@@ -98,10 +96,13 @@ public:
     void set_world_json(const String &p_json, const String &p_dir);
     // The running terrain stopped and started again on the world p_json (paths from p_dir), on its device and hosts: the
     // pipelines whose text didn't change are kept (an editor's edit of a world's numbers builds none), its chunks loaded
-    // again. The settings are kept (chunk_param as it entered the tree); the instance edits are dropped.
-    void restart_world(const String &p_json, const String &p_dir);
-    void set_terrain_mode(int p_mode);
-    int get_terrain_mode() const;
+    // again. The settings are kept (chunk_param as it entered the tree), and the live instance edits (in place of the
+    // world's "edits"; a refused world had none: the next one replays its file's). False if the world was refused:
+    // get_world_error says why.
+    bool restart_world(const String &p_json, const String &p_dir);
+    // Why the world didn't start (its file, planet, climate, species or edits refused, no device), or why it draws
+    // nothing (the mesher's passes failed to compile); empty otherwise (ov::World::get_error).
+    String get_world_error() const;
 
     // Edge length of a LOD 0 voxel in metres (each LOD level doubles it).
     float get_voxel_size() const;
@@ -121,38 +122,14 @@ public:
 
     // The world's planet radius in metres; 0 the flat world.
     double get_planet_radius() const;
-    // The side of the world's instance zone in metres (SDFTable::Zone; 0: no instance).
-    double get_world_zone_m() const;
     // Their weather (VoxelSky, every frame): the cover in [0, 1] and the wind (render metres per second).
     void set_cloud_weather(float p_cover, const Vector3 &p_wind_mps);
     // The direction towards the sun (render space; VoxelSky, from its light): the atmosphere's camera volume.
     void set_sun_direction(const Vector3 &p_towards_sun);
-    // The band rule for archetype instances (Archetype::set_band); false keeps every instance at every LOD
-    // (the reference of the band report, --instance_band=0). Must be set before the node enters the tree.
-    void set_archetype_band(bool p_enabled);
-    bool get_archetype_band() const;
     // The scatter and the forest stream (default on: their keys computed as the chunks ask for them,
     // instance_stream.hpp); false places them whole at configure (--stream=0). Must be set before the node enters the tree.
     void set_archetype_stream(bool p_enabled);
     bool get_archetype_stream() const;
-    // The streamed sources' moment layers read the records while their cell is under this many source cells, above it
-    // proxies (default 1; 3 = the whole build's blobs, ScatterSource::PART_CELL_SIDES; --stream_part_sides). Must be set
-    // before the node enters the tree.
-    void set_archetype_stream_part_sides(int p_sides);
-    int get_archetype_stream_part_sides() const;
-    // The far field of the dropped instances (default on): their moments, per LOD, as blobs the coarse chunks fold into a
-    // surface (moment_layers.hpp; --moments=0 to leave it out). Must be set before the node enters the tree.
-    void set_archetype_moments(bool p_enabled);
-    bool get_archetype_moments() const;
-    // The band rule's erosion rate, cells per LOD (default 1, in (0, 4]): the skirt's depth and the fastest a part
-    // shrinks before its drop (--instance_erode). Must be set before the node enters the tree.
-    void set_archetype_erode(float p_cells);
-    float get_archetype_erode() const;
-    // The band rule's resolution, cells (default 1): a part is kept while its half thickness (its moments) holds this
-    // many cells, and erodes only just before its drop (Archetype::set_band; --instance_resolve). Must be set before
-    // the node enters the tree.
-    void set_archetype_resolve(float p_cells);
-    float get_archetype_resolve() const;
 
     // Screen-space error target of the LOD selection (higher = coarser = fewer chunks/triangles).
     void set_lod_pixel_error(float p_error);
@@ -232,11 +209,6 @@ public:
     // had before any rebase (a float: for reports and replayable poses, not exact far away).
     Vector3 get_render_offset_m() const;
 
-    // Dual contouring of Hermite data (DC-lite): sharp UNION / SUBTRACT creases are
-    // placed on the crease instead of the Surface Nets mass point. Off by default (Surface Nets).
-    void set_dual_contouring(bool p_enable);
-    bool get_dual_contouring() const;
-
     int get_pending_chunk_count() const;
 
     // Per-pass GPU timings in get_debug_stats()["gpu_breakdown"] (needs the viewport to measure its
@@ -274,23 +246,14 @@ public:
     void set_direct_compact_max_extent(float p_chunks);
     float get_direct_compact_max_extent() const;
 
-    // How the discoverer drops LOD tree nodes holding no surface (ChunkDiscoverer::CullMode).
-    void set_discovery_cull_mode(int p_mode);
-    int get_discovery_cull_mode() const;
-    // Remember each LOD tree node's cull verdict across scans (exact: the SDF does not change).
-    void set_discovery_cache(bool p_enable);
-    bool get_discovery_cache() const;
     void set_specialize_shaders(bool p_enable);
     bool get_specialize_shaders() const;
-    // Debug: recompute every cached verdict and report mismatches as errors.
-    void set_discovery_verify(bool p_enable);
-    bool get_discovery_verify() const;
     // Debug: check every scan delta against the full scans and every incremental destroy check against
     // the full recompute (VoxelState::verify_against_full), ERROR on a difference.
     void set_destroy_verify(bool p_enable);
     bool get_destroy_verify() const;
-    // Where the discoverer evaluates the corners of its cull test: 0 CPU, 1 (and -1, auto) GPU (LocalPointsGPU, a
-    // local device on the discoverer thread; CPU with a warning if it can't be created). Both give the same scans.
+    // Where the discoverer evaluates the corners of its cull test: 0 CPU, 1 GPU (the default: LocalPointsGPU, a local
+    // device on the discoverer thread; CPU with a warning if it can't be created). Both give the same scans.
     void set_discoverer_mode(int p_mode);
     int get_discoverer_mode() const;
     // Debug: diff every scan against a fresh CPU scan, ERROR on any difference (--discovery_compare).
@@ -303,9 +266,6 @@ public:
     // Debug: every batch of the GPU's readings read again on the CPU, ERROR on a difference (--walk_verify).
     void set_walk_verify(bool p_enable);
     bool get_walk_verify() const;
-    // The walk keys a drain task walks together with the GPU field (SDFTable::WALK_BATCH_GPU by default).
-    void set_walk_batch(int p_keys);
-    int get_walk_batch() const;
 
     // 0 shaded, 1 normals, 2 lod, 3 page, 4 wireframe, 5 chunk, 6 group, 7 quad index.
     void set_debug_view(int p_view);
@@ -316,7 +276,8 @@ public:
     void set_log_level(int p_level);
     int get_log_level() const;
 
-    // Instance edits (archetype table). The anchor is in LOD0 voxels (int64, never through Vector3i);
+    // Instance edits (archetype table). type: a library index (get_type_index of its name: "sphere", "capsule", ...,
+    // archetype_table.hpp). The anchor is in LOD0 voxels (int64, never through Vector3i);
     // rotation is a 9-float row-major basis and params up to 8 floats (empty: identity / zero). op is a
     // Combine (0 union, 1 smooth union, 2 subtract, 3 smooth subtract). Returns the new id or -1.
     // add_instance / move_instance re-mesh the chunks the edit can change and rescan the discoverer.
@@ -324,6 +285,11 @@ public:
             int p_op, float p_k);
     bool remove_instance(int p_id);
     bool move_instance(int p_id, int64_t p_x, int64_t p_y, int64_t p_z, const PackedFloat32Array &p_rotation);
+    // The library index of the type named p_name, -1 if none is (or before the world starts).
+    int get_type_index(const String &p_name) const;
+    // The live edits written as an edits file at p_path (res://, user://, absolute; WorldFile's format): a world file's
+    // "edits" loads them. Empty, or why not.
+    String save_edits(const String &p_path) const;
 
     // The player's dig tools (ov::DigTool): origin and unit direction in render space. dig_spray / dig_tube every frame
     // their button is held, dig_release when it is released. set_dig_settings takes any of dig_radius, dig_length,

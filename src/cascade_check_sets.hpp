@@ -129,7 +129,7 @@ inline ov::str set_world(SpikeSet p_v, const ov::str &p_world) {
 }
 
 // p_sdf configured for p_v (r_param: the variant's chunk parameters); returns its LOD count. r_error: why the set has no
-// world to run on, empty if it has one (its file refused, the template 4f needs, or a planet or climate the cascade
+// world to run on, empty if it has one (its file refused, the template ground 4f needs, or a planet or climate the cascade
 // refused: SDFCascade::get_world_error); without r_error that is an ERR. CascadeCheck::run fails on it before any check.
 inline int configure_variant(SDFCascade &p_sdf, SpikeSet p_v, const ov::str &p_world, ChunkParam &r_param, ov::str *r_error = nullptr) {
     auto failed = [&](const ov::str &p_error) {
@@ -146,7 +146,7 @@ inline int configure_variant(SDFCascade &p_sdf, SpikeSet p_v, const ov::str &p_w
     }
     ov::Value ground;
     if (base_set(p_v) == SpikeSet::L4F) {
-        if (failed(SDFCascade::template_table(world.voxel_m, ground))) {
+        if (failed(WorldFile::ground_table(ground))) {
             return 0;
         }
         // Every biome on the template's notes (every biome alike: blend factoring takes them out of the weights), its

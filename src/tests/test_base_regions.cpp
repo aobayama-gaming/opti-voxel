@@ -206,23 +206,24 @@ TEST_CASE("BaseSurface::planet: a small planet lowers its switch LOD, down to th
     }
 }
 
-TEST_CASE("SDFCascade: a planet's relief is capped at PLANET_RELIEF of its radius, Earth's and the flat world's untouched") {
+TEST_CASE("SDFCascade: a note plays at its written amplitude, on the flat world and on any planet") {
     ChunkParam param;
     param.voxel_size = 0.05f;
     auto max_amp = [&](double p_radius_m, const char *p_world) {
-        SDFCascade sdf;
+        GroundSDF sdf;
         if (p_world != nullptr) {
             CHECK(load_table(p_world, sdf.climate_data) == ov::str());
         }
         sdf.planet_radius_m = p_radius_m;
         sdf.configure(param, 16);
+        CHECK(sdf.get_world_error() == ov::str());
         return double(ClimateTest::note_amp(sdf.program()));
     };
     const double flat = max_amp(0.0, nullptr);
-    CHECK(flat == doctest::Approx(3276.8 / 0.05)); // the template's cap (its world files)
+    CHECK(flat == doctest::Approx(3276.8 / 0.05)); // the template's top note (ground.biomes.json)
     CHECK(max_amp(6371000.0, nullptr) == flat);
-    // The template's 3.3 km octaves are over a 2 km planet's note cap: its own ground (tiny.world.json) stops under it.
-    CHECK(max_amp(2000.0, "res://worlds/tiny.world.json") <= SDFCascade::PLANET_RELIEF / SDFCascade::PLANET_HEADROOM * 2000.0 / 0.05);
+    // A 2 km planet takes tiny.world.json's 409.6 m note as written (a cap held every note under 8 m before).
+    CHECK(max_amp(2000.0, "res://worlds/tiny.world.json") == doctest::Approx(409.6 / 0.05));
 }
 
 // p_sdf configured at 5 cm and 16 LODs on a planet of p_radius_m (a torus round p_ring_m > 0) with p_path's climate
@@ -238,48 +239,62 @@ static void configure_planet(SDFCascade &r_sdf, const char *p_path, double p_rad
     r_sdf.configure(param, 16);
 }
 
-TEST_CASE("SDFCascade: on a 2 km planet its own ground fits its relief; the template's and the example's metres don't") {
-    // tiny.world.json: the template's octaves stopped under the relief, the program's output bound within the 62.5 m cap.
+TEST_CASE("SDFCascade: a 2 km planet takes 400 m notes and refuses a ground under its centre, never another ground") {
+    // tiny.world.json: the template's octaves up to 3.3 km wavelengths, 819 m of amplitudes in all: above the centre.
     SDFCascade tiny;
     configure_planet(tiny, "res://worlds/tiny.world.json", 2000.0);
     CHECK(tiny.get_world_error() == ov::str());
     CHECK(tiny.get_climate() != nullptr);
     const Terrain::LevelProgram &prog = tiny.program();
     const size_t out = size_t(prog.output);
-    CHECK(ov::max(std::fabs(prog.lo[out]), std::fabs(prog.hi[out])) <= SDFCascade::PLANET_RELIEF * 2000.0 / 0.05);
+    CHECK(prog.lo[out] > -2000.0 / 0.05);
+    CHECK(prog.hi[out] > 400.0 / 0.05);
     CHECK(ClimateTest::note_top_k(prog) == 16);
-    // The template itself (no climate): refused over the cap, a flat ground; not a world error (none was asked for).
-    SDFCascade bare;
+    CHECK(tiny.ground_top_m() == doctest::Approx(prog.hi[out] * 0.05));
+    // The template ground itself: its 3.3 km notes reach through the centre. A world error and no program, not a flat
+    // ground.
+    GroundSDF bare;
     configure_planet(bare, nullptr, 2000.0);
-    CHECK(ClimateTest::note_count(bare.program()) == 0);
-    CHECK(bare.get_world_error() == ov::str());
-    // The example's mountains (km of relief): more than the planet's 62.5 m, the world error (World::start refuses it).
-    SDFCascade example;
-    configure_planet(example, "res://climate/example.json", 2000.0);
-    CHECK(example.get_climate() == nullptr);
-    CHECK(ov::contains(example.get_world_error(), "over the cap"));
+    CHECK(ov::contains(bare.get_world_error(), "past the planet's centre"));
+    CHECK(bare.program().nodes.empty());
+    // A given ground 2.5 km down: refused likewise, no template instead (World::start refuses it); the flat world takes it.
+    SDFCascade sunk;
+    sunk.climate_data = ClimateTest::json(R"({"biomes": [{"name": "deep", "graph": {"nodes": [{"id": "c", "kind": "constant", "value_m": -2500},
+        {"id": "o", "kind": "output", "height": "c"}]}}]})");
+    configure_planet(sunk, nullptr, 2000.0);
+    CHECK(sunk.get_climate() == nullptr);
+    CHECK(ov::contains(sunk.get_world_error(), "past the planet's centre"));
+    CHECK(sunk.program().nodes.empty());
+    configure_planet(sunk, nullptr, 0.0);
+    CHECK(sunk.get_world_error() == ov::str());
+    CHECK(sunk.get_climate() != nullptr);
 }
 
-TEST_CASE("SDFCascade: a refused planet is a world error, never a silent flat world") {
+TEST_CASE("SDFCascade: a refused planet is a world error and no program, never a silent flat world") {
     // A torus whose ring is its tube (under BaseSurface::MIN_RING_TUBES): it used to open as the flat datum, ok.
     SDFCascade torus;
-    configure_planet(torus, nullptr, 2000.0, 2000.0);
+    configure_planet(torus, "res://worlds/tiny.world.json", 2000.0, 2000.0);
     CHECK_FALSE(torus.get_base().curved());
     CHECK(ov::contains(torus.get_world_error(), "the planet (radius 2000 m, ring 2000 m)"));
     CHECK(ov::contains(torus.get_world_error(), "ring must be at least"));
+    CHECK(torus.program().nodes.empty());
+    CHECK(torus.get_climate() == nullptr);
     ov::str refusal;
     CHECK(BaseSurface::planet(2000.0, 0.05, 2000.0, &refusal).kind() == BaseSurface::Kind::FLAT);
     CHECK(ov::contains(refusal, "ring must be at least"));
     // A sphere past 2^60 voxels.
-    SDFCascade huge;
+    GroundSDF huge;
     configure_planet(huge, nullptr, 1e20);
     CHECK(ov::contains(huge.get_world_error(), "the radius must be in"));
-    // An accepted torus, and a refused planet reconfigured flat: no error left.
+    CHECK(huge.program().nodes.empty());
+    // An accepted torus (its 2 km tube takes tiny's ground, kept from above), and a refused planet reconfigured flat: no
+    // error left.
     configure_planet(torus, nullptr, 2000.0, 6000.0);
     CHECK(torus.get_base().kind() == BaseSurface::Kind::TORUS);
     CHECK(torus.get_world_error() == ov::str());
     configure_planet(huge, nullptr, 0.0);
     CHECK(huge.get_world_error() == ov::str());
+    CHECK_FALSE(huge.program().nodes.empty());
 }
 
 TEST_CASE("BaseSurface::on_base: the base's point along the up, on any side of a planet") {

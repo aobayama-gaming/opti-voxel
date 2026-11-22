@@ -1,14 +1,15 @@
 {
- "comment": "Biome features (lava lakes, floating islands) over a 4 km zone round the scene centre.",
+ "comment": "Biome features (lava lakes, floating islands) over a 4 km square round the scene centre (feature_region: the features don't stream yet).",
  "engine": {
   "voxel_m": 0.5,
   "lods": 15
  },
- "zone": {
-  "side_m": 4000
- },
+ "biomes": "res://worlds/ground.biomes.json",
  "features": [
   {"kind": "lava_lake", "cell_m": 640, "chance": 0.6, "radius_m": [18, 45]},
   {"kind": "floating_island", "cell_m": 640, "chance": 0.5, "radius_m": [15, 40]}
- ]
+ ],
+ "feature_region": {
+  "side_m": 4000
+ }
 }
