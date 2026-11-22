@@ -1,7 +1,6 @@
 {
  "comment": "A modulation with no field (one biome playing the ground's notes, the finest through a plain shape so the compiler keeps them modulated), for the tests (test_climate.cpp, CascadeSpike set 4d), plain bands.",
  "engine": {"voxel_m": 0.05, "lods": 25},
- "climate": {"fields": []},
  "biomes": [
   {
    "name": "desert",

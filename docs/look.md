@@ -145,8 +145,8 @@ that follow it (the climate's map below is 3D for the same reason).
   range is 0.05 to 0.12), albedo 0.99; under Earth's radius scaled like the atmosphere (lengths times s, extinction over
   s, s at least `RELIEF_BOTTOMS` reliefs over Earth's bottom), then lifted, its thickness kept, until its bottom is
   `RELIEF_BOTTOMS` (1.25) reliefs up: the march knows nothing of the terrain, so no cloud may reach into it. The
-  relief is the program's top (`SDFCascade::ground_top_m`, a bound: the template grounds' sum of amplitudes, ~6.6 km at
-  5 cm, puts the layer at ~8.2 to ~10.7 km; the old fixed 3.3 km relief had it at 4.1 to 6.6 km); a 2 km planet under
+  relief is the program's top (`SDFCascade::ground_top_m`, a bound: the template ground's sum of amplitudes, ~6.6 km at
+  5 cm and 0.5 m alike, puts the layer at ~8.2 to ~10.7 km; the old fixed 3.3 km relief had it at 4.1 to 6.6 km); a 2 km planet under
   `tiny.world.json`'s 819 m at ~1 to ~2.7 km.
 - **Light:** Hillaire's (Frostbite, "Physically Based Sky, Atmosphere and Cloud Rendering", SIGGRAPH 2016): the
   energy-conserving step, a dual-lobe Henyey-Greenstein phase (0.8 forward, -0.3 back, 0.7 / 0.3), the sun through the

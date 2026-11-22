@@ -61,10 +61,11 @@ public:
     // over these and the biomes' lists, is one source (cell_scatter.hpp) over the zone, each of its sites growing what
     // its biome lists there (BiomePick, pick_share). Set before configure().
     void set_instances(const std::vector<Climate::InstanceShare> &p_instances) { instances = p_instances; }
-    // Every species of p_kind (default_species) at share 1, about p_count sites in a zone of side p_side_m metres (the
-    // cell forest_cell_side gives): a scene given as a count (the tests, the checks).
-    static std::vector<Climate::InstanceShare> counted(Archetype::Species::Kind p_kind, int p_count, double p_side_m);
-    // The species the instances name (a world file's "species", Archetype::default_species without one): the trees the
+    // Every species of p_kind in p_species at share 1, about p_count sites in a zone of side p_side_m metres (the cell
+    // forest_cell_side gives): a scene given as a count (the tests, the checks).
+    static std::vector<Climate::InstanceShare> counted(const std::vector<Archetype::Species> &p_species, Archetype::Species::Kind p_kind, int p_count,
+            double p_side_m);
+    // The species the instances name (a world file's "species", none without one): the trees the
     // tree sources grow, the rocks the rock sources place. Set before configure().
     void set_species(const std::vector<Archetype::Species> &p_species) { species = p_species; }
     // Whether the scatter and the forest stream (instance_stream.hpp: their keys computed as the chunks ask for them, their
@@ -264,7 +265,7 @@ private:
     Zone zone;
     std::vector<Climate::InstanceShare> instances;
     std::vector<Archetype::TreeSpan> trees; // the forest's trees, in id order
-    std::vector<Archetype::Species> species = Archetype::default_species();
+    std::vector<Archetype::Species> species;
     std::vector<Source> sources;
     bool stream_sources = true; // --stream
     int64_t stream_part_sides = Archetype::ScatterSource::STREAM_PART_CELL_SIDES; // --stream_part_sides

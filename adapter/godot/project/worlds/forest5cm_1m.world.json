@@ -4,9 +4,11 @@
   "voxel_m": 0.05,
   "lods": 15
  },
+ "biomes": "res://worlds/ground.biomes.json",
  "zone": {
   "side_m": 5000
  },
+ "species": "res://worlds/species.json",
  "instances": [
   {
    "species": "broadleaf",

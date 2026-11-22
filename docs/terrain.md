@@ -5,14 +5,18 @@ One terrain (the cascade), one instance path (its table), one world file. Read b
 - **A run loads a world.** Every terrain setting is data: `World::Settings::world_path` (`VoxelTerrain.world_path`, `--world=PATH`
   on bench, player, Dawn and the tools; the web's `?world=`) names a world file (`WorldFile`, format in `src/world_file.hpp`). Its
   `engine` (a path or inline: `voxel_m`, `lods`, the master variables) and `climate` (a path or inline: the fields, none for no
-  biomes) sit beside `planet`, `look`, `zone`, `instances`, `species`, `features` and `biomes`; every key is optional. A
-  variant is another file: `adapter/godot/project/worlds/` holds the presets' and the tools' (`default`, `cm`, `lods25`, `biomes`,
-  `forest5cm*`, `earth`, `earth25`, `tiny`, and the template grounds `template_5cm` / `template_50cm`), `climate/world.json`
-  the game's (`--preset=video`). `--preset=` names keep working. The ground is the biomes' graphs, compiled into one
-  `Terrain::LevelProgram` (`docs/climate.md`, `docs/cascade-v2.md`); a world without biomes has the template ground's,
-  itself a world file (`SDFCascade::template_path`: the one of the run's voxel size). Nothing stands in for a refused
-  part: a world whose planet, climate (or template ground: a voxel size without one, or one its base refuses) or species
-  is refused has no ground at all, never the flat datum, the template or a flat ground instead. The world file refuses a
+  fields) sit beside `planet`, `look`, `zone`, `instances`, `species` (a path or the list), `features` and `biomes` (a path
+  or the list); every key is optional to the file (the cascade refuses no `biomes`), and an empty `world_path` is `WorldFile::DEFAULT_PATH`
+  (`worlds/default.world.json`). A variant is another file: `adapter/godot/project/worlds/` holds the presets' and the
+  tools' (`default`, `cm`, `lods25`, `biomes`, `forest5cm*`, `earth`, `earth25`, `tiny`, `tiny_biomes`), `climate/world.json`
+  the game's (`--preset=video`). `--preset=` names keep working. **The world is the file:** the ground is the biomes'
+  graphs, compiled into one `Terrain::LevelProgram` (`docs/climate.md`, `docs/cascade-v2.md`), and a world names its
+  ground: one without biomes is refused (`SDFCascade::attach_climate`: "a world names its ground"). The bare worlds name
+  the template ground, `"biomes": "res://worlds/ground.biomes.json"` (`WorldFile::GROUND_BIOMES`: one biome, no fields;
+  one file at every voxel size, its notes finer than 8 voxels playing nothing); the worlds that grow instances name
+  today's species, `"species": "res://worlds/species.json"` (three trees, a boulder, a pillar; no species without the
+  key). Nothing stands in for a refused part: a world whose planet, climate (or no biomes) or species is refused has no
+  ground at all, never the flat datum, a template or a flat ground instead. The world file refuses a
   planet `BaseSurface::planet` refuses; `SDFCascade::get_world_error` says why the rest was (configure then builds
   no program), `World::start` doesn't start and keeps the reason (`World::get_error`, `VoxelTerrain.get_world_error`:
   the player's HUD and the biome mixer show it in red), and `ClimateReport::check_world` and `CascadeCheck` (before
@@ -21,9 +25,9 @@ One terrain (the cascade), one instance path (its table), one world file. Read b
   cascade drawn without the instances.
   Engine tuning and debug flags stay flags.
 - **One terrain, one instance path.** The ground is always the cascade (`SDFCascade`, `src/sdf_cascade.hpp`: 3D
-  height field, the program the compiler makes of the biomes; without biomes the template ground's, octaves k = 3 up to
-  the first whose amplitude reaches 3.3 km, k = 19 at 5 cm (16 at 0.5 m), the notes past lods + 4 playing
-  nothing, octave k seeded make_octave(seed, k) so the same octaves and bits at any LOD count past it, steepness 1/8;
+  height field, the program the compiler makes of the biomes; the template ground `ground.biomes.json` is octaves
+  0.4 m (k = 3 at 5 cm) up to 26.2 km (k = 19 at 5 cm, 16 at 0.5 m where the three finest play nothing), the notes past
+  lods + 4 playing nothing, octave k seeded make_octave(seed, k) so the same octaves and bits at any LOD count past it, steepness 1/8;
   a 2 km planet's own world (`tiny.world.json`) stops them at 3.3 km wavelengths (819 m); datum at 300 m,
   absolute position only) and instances always go through its table (`SDFTable`, below). Don't add a second way to
   make either: a new terrain is a cascade preset (parameters), a new feature a library type. `VoxelTerrain.terrain_mode`

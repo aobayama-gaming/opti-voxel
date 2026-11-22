@@ -1,4 +1,4 @@
-#include "test_common.hpp"
+#include "test_ground.hpp"
 
 #include "field_gpu.hpp"
 #include "sdf_cascade.hpp"
@@ -10,7 +10,7 @@
 // Without a local device (the headless unit tests) the GPU field ends FAILED and answers nothing: the table's batched
 // field, attached or not, is the CPU's ground_field bit for bit (the site walks fall back).
 TEST_CASE("FieldGPU: without a device it fails, and the table's batched field is the CPU's") {
-    SDFCascade sdf;
+    GroundSDF sdf;
     ChunkParam param;
     param.voxel_size = 0.05f;
     sdf.configure(param, 18);

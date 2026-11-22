@@ -22,7 +22,7 @@
 #include <cmath>
 
 // The meshed terrain: the world's climate compiled into one cascade v2 program (Terrain::compile, docs/cascade-v2.md;
-// without a climate the template ground's, a world file: template_path), its output the height h (value + gradient) of a
+// a world names its ground: no biomes, no program), its output the height h (value + gradient) of a
 // surface over the base surface (BaseSurface::flat at BaseSurface::DATUM_M). A function of the absolute position only.
 //
 // The cascade only exists on lattice points: a LOD-L chunk's samples are the points of Λ_L, computed by
@@ -39,9 +39,8 @@ public:
     // The stream's tasks read ground_field: stopped before this class's members go.
     ~SDFCascade() override { stop_streaming(); }
 
-    // Set before configure(): a climate table (the world file's format), empty for none. configure() compiles it
-    // (Terrain::compile). Without one, the template ground (template_path); one it refuses is a world error
-    // (get_world_error: no program).
+    // Set before configure(): a climate table (the world file's format). configure() compiles it (Terrain::compile).
+    // Without biomes, or one it refuses, it is a world error (get_world_error: no program); the FLAT preset ignores it.
     ov::Value climate_data = ov::Value::object();
     // Set before configure(): the program specialised to the climate's values (Terrain::Mode::SPECIALISED), or generic
     // (false, the biome mixer's: its GPU text interprets the program as data, so an edit compiles nothing).
@@ -86,6 +85,8 @@ public:
             prog = Terrain::LevelProgram(); // no world: every consumer refuses it (get_world_error)
             table = Climate::Table();
             given = false;
+            ground_materials = false;
+            set_ground_materials({});
             return;
         }
         build_table(p_lod_count);
@@ -109,13 +110,13 @@ public:
     }
 
     const Terrain::LevelProgram *get_program() const override { return &prog; }
-    // The world's parsed climate (configure), null without one (the template ground, or a world error).
+    // The world's parsed climate (configure), null without one (the FLAT preset, or a world error).
     const Climate::Table *get_climate() const { return given ? &table : nullptr; }
     // The scenes' sites read their biome from the world's climate (SDFTable's sources, BiomePick).
     const Climate::Table *placing_climate() const override { return get_climate(); }
     const Terrain::LevelProgram *placing_program() const override { return &prog; }
-    // Why configure() built no world, empty if it built the one it was given: a refused planet, climate (or template
-    // ground) or species. Then there is no program, no table and no skirts: nothing may sample it (World::start,
+    // Why configure() built no world, empty if it built the one it was given: a refused planet, climate (or none) or
+    // species. Then there is no program, no table and no skirts: nothing may sample it (World::start,
     // ClimateReport, CascadeCheck refuse it).
     const ov::str &get_world_error() const { return world_error; }
     // Configured on p_world's planet, climate, voxel size and LOD count (r_param.voxel_size set): get_world_error.
@@ -123,6 +124,7 @@ public:
         planet_radius_m = p_world.planet_radius_m;
         planet_ring_m = p_world.planet_ring_m;
         climate_data = p_world.climate_table;
+        set_species(p_world.species);
         r_param.voxel_size = float(p_world.voxel_m);
         configure(r_param, p_world.lods);
         return world_error;
@@ -131,9 +133,10 @@ public:
     // bound over the base (a bound, not the highest point drawn); 0 for a ground that never rises above its base.
     double ground_top_m() const { return prog.hi.empty() ? 0.0 : ov::max(prog.hi[size_t(prog.output)] * double(voxel_size), 0.0); }
 
-    // Whether ground samples take their biome's material: a given climate (each biome's `surface`, a fieldless one's
-    // too; the template ground is drawn as the procedural ground).
-    bool has_ground_materials() const { return given; }
+    // Whether ground samples take their biome's material: a climate with a look of its own (several biomes, or one with
+    // a `surface`; a fieldless one's too). One biome on the default surface (the template ground) is the procedural
+    // ground already: drawn as it, no palette or pick channel.
+    bool has_ground_materials() const { return ground_materials; }
     // The palette index of a ground sample (one no record colours; 0 without ground materials): 1 + its biome p_pick (the
     // base palette holds biome b's material, Climate::biome_material, at 1 + b), the program's pick at the sample. The
     // GPU's cascade_ground_material, bit for bit.
@@ -181,19 +184,6 @@ uint cascade_ground_material(float pick) {
         g.k_max = k_max;
         g.floor = base.curved() ? -base.get_radius() : -INFINITY;
         return g;
-    }
-    // The template ground's world file at p_voxel_m metres (worlds/template_5cm.world.json, template_50cm...): the ground of a
-    // world without biomes, and the graph a new biome starts from (the biome mixer).
-    static ov::str template_path(double p_voxel_m) { return ov::format("res://worlds/template_%dcm.world.json", int64_t(std::llround(p_voxel_m * 100.0))); }
-    // Its climate table in r_table: empty, or why not (no file at that voxel size, or one at another).
-    static ov::str template_table(double p_voxel_m, ov::Value &r_table) {
-        WorldFile w;
-        const ov::str err = WorldFile::load(template_path(p_voxel_m), w);
-        if (!err.empty() || float(w.voxel_m) != float(p_voxel_m)) {
-            return err.empty() ? ov::format("its voxel is %s m, not %s", ov::num(w.voxel_m), ov::num(p_voxel_m)) : err;
-        }
-        r_table = w.climate_table;
-        return ov::str();
     }
     float skirt_depth_m(int p_lod) const override { return skirt_depth_table[p_lod]; }
     const Terrain::LevelProgram &program() const { return prog; }
@@ -493,29 +483,30 @@ vec4 base_stretch_gradient(vec4 g, int j) {
         return err.empty() ? layout_error : err;
     }
 
-    // The program (configure, after the base and voxel size): the flat preset's constant table, else climate_data's,
-    // else (none given) the template ground's. Empty, or why that one can't run here: never another ground instead. The
-    // template and the flat table are specialised whatever specialize says: nothing edits them.
+    // The program (configure, after the base and voxel size): the flat preset's constant table (specialised whatever
+    // specialize says: nothing edits it), else climate_data's. Empty, or why it can't run here (no biomes: a world names
+    // its ground): never another ground instead.
     ov::str attach_climate() {
         given = false;
+        ground_materials = false;
         set_ground_materials({});
         ov::str err;
         if (preset == Preset::FLAT) {
             err = compile_climate(flat_table(), Terrain::Mode::SPECIALISED);
             err = err.empty() ? err : "the flat ground: " + err;
-        } else if (!climate_data.is_empty()) {
+        } else if (climate_data.get("biomes", ov::Value::array()).is_empty()) {
+            err = ov::str("a world names its ground: give it biomes, e.g. \"biomes\": \"") + WorldFile::GROUND_BIOMES + "\"";
+        } else {
             err = compile_climate(climate_data, specialize ? Terrain::Mode::SPECIALISED : Terrain::Mode::GENERIC);
             given = err.empty();
-        } else {
-            ov::Value t;
-            err = template_table(double(voxel_size), t);
-            err = err.empty() ? compile_climate(t, Terrain::Mode::SPECIALISED) : err;
-            err = err.empty() ? err : "the template ground (" + template_path(double(voxel_size)) + "): " + err;
         }
         if (!err.empty()) {
             return err;
         }
         prog.base = base; // compiled on the flat datum 0: the program's stretch and `up` read this one
+        const Climate::Surface plain;
+        const Climate::Surface &first = table.biomes[0].surface;
+        ground_materials = given && (table.biomes.size() > 1 || !(first.flat == plain.flat && first.steep == plain.steep && first.roughness == plain.roughness));
         std::vector<std::pair<ov::str, Material::Params>> grounds;
         for (size_t b = 0; has_ground_materials() && b < table.biomes.size(); b++) {
             grounds.emplace_back("biome:" + table.biomes[b].name, Climate::biome_material(table.biomes[b]));
@@ -532,7 +523,8 @@ vec4 base_stretch_gradient(vec4 g, int j) {
     BaseSurface base; // the ground's reference: flat at the datum, or the planet (configure)
     float voxel_size = 0.5f;
     int k_max = 0; // a note's or a field's coarsest octave (lod_count + 4)
-    Climate::Table table; // the climate's fields and biomes (places, looks, contents): climate_data's, or the template's
+    Climate::Table table; // the climate's fields and biomes (places, looks, contents): climate_data's, or the flat preset's
     bool given = false; // table is climate_data's (get_climate)
+    bool ground_materials = false; // has_ground_materials (attach_climate)
     ov::str world_error; // get_world_error
 };

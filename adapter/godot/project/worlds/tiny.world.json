@@ -1,14 +1,11 @@
 {
- "comment": "A 2 km planet at 5 cm. Its ground is the template's notes (template_5cm.world.json) from 0.4 m to 3.3 km wavelengths, each at an eighth of its wavelength: 819 m of amplitudes in all, played as written.",
+ "comment": "A 2 km planet at 5 cm. Its ground is the template's notes (ground.biomes.json) from 0.4 m to 3.3 km wavelengths, each at an eighth of its wavelength: 819 m of amplitudes in all, played as written.",
  "engine": {
   "voxel_m": 0.05,
   "lods": 15
  },
  "planet": {
   "radius_m": 2000
- },
- "climate": {
-  "fields": []
  },
  "biomes": [
   {

@@ -17,8 +17,8 @@ namespace {
 using Climate::Ground;
 using Term = std::pair<int, float>; // a LIN's input and its coefficient
 
-// Whether p_ground has p_note's octave ([BAND_SHIFT, k_max]: a note the LOD count doesn't have plays nothing, so a
-// world reads at any LOD count).
+// Whether p_ground has p_note's octave ([BAND_SHIFT, k_max]: a note finer than the voxel's lattices or coarser than the
+// LOD count's plays nothing, so a world reads at any voxel and LOD count).
 bool note_plays(const Climate::NoteNode &p_note, const Ground &p_ground) {
     return p_note.k >= ExactNoise::BAND_SHIFT && p_note.k <= p_ground.k_max;
 }
@@ -235,7 +235,7 @@ private:
         return error.empty() ? id : -1;
     }
 
-    // A note's unit noise (r_unit, -1 if the LOD count doesn't have its octave: it plays nothing) and its amplitude.
+    // A note's unit noise (r_unit, -1 if the ground doesn't have its octave: it plays nothing) and its amplitude.
     void note(const ov::Value &p_n, uint32_t p_seed, int &r_unit, float &r_amp) {
         r_unit = -1;
         r_amp = 0.0f;

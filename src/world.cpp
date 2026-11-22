@@ -65,16 +65,12 @@ bool World::fail(const str &p_error) {
 
 bool World::load_world() {
     OV_ERR_FAIL_COND_V_MSG(started, false, "World: the world is set before start.");
-    if (config.world_path == content_path && config.world_json == content_json && config.world_dir == content_dir) {
+    if (content_read && config.world_path == content_path && config.world_json == content_json && config.world_dir == content_dir) {
         return true;
     }
     WorldFile loaded;
-    str err;
-    if (!config.world_json.empty()) {
-        err = WorldFile::parse_text(config.world_json, config.world_dir, loaded);
-    } else if (!config.world_path.empty()) {
-        err = WorldFile::load(config.world_path, loaded);
-    }
+    const str err = config.world_json.empty() ? WorldFile::load(config.world_path.empty() ? str(WorldFile::DEFAULT_PATH) : config.world_path, loaded)
+                                              : WorldFile::parse_text(config.world_json, config.world_dir, loaded);
     if (!err.empty()) {
         return fail(err);
     }
@@ -82,6 +78,7 @@ bool World::load_world() {
     content_path = config.world_path;
     content_json = config.world_json;
     content_dir = config.world_dir;
+    content_read = true;
     config.chunk_param.voxel_size = float(content.voxel_m);
     return true;
 }

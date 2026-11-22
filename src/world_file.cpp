@@ -30,6 +30,10 @@ ov::str read_object(const ov::str &p_path, ov::Value &r_data) {
     return WorldFile::parse_object(text, p_path, r_data);
 }
 
+ov::str resolve(const ov::str &p_dir, const ov::str &p_path) {
+    return is_absolute(p_path) ? p_path : ov::path_join(p_dir, p_path);
+}
+
 // The object at p_data[p_key], or the file its string names (relative to p_dir), in r_part; empty if the key is absent.
 ov::str object_or_file(const ov::Value &p_data, const char *p_key, const ov::str &p_dir, ov::Value &r_part) {
     r_part = ov::Value::object();
@@ -38,12 +42,30 @@ ov::str object_or_file(const ov::Value &p_data, const char *p_key, const ov::str
     }
     const ov::Value &v = p_data[p_key];
     if (v.is_string()) {
-        return read_object(is_absolute(v.as_str()) ? v.as_str() : ov::path_join(p_dir, v.as_str()), r_part);
+        return read_object(resolve(p_dir, v.as_str()), r_part);
     }
     if (!v.is_object()) {
         return "world: '" + ov::str(p_key) + ov::str("' is not a path or an object.");
     }
     r_part = v;
+    return ov::str();
+}
+
+// The list at p_data[p_key], or the file its string names (relative to p_dir, holding the list), in r_list; empty if
+// the key is absent (r_list nil).
+ov::str list_or_file(const ov::Value &p_data, const char *p_key, const ov::str &p_dir, ov::Value &r_list) {
+    r_list = ov::Value();
+    if (!p_data.has(p_key)) {
+        return ov::str();
+    }
+    const ov::Value &v = p_data[p_key];
+    if (v.is_string()) {
+        return WorldFile::load_list(resolve(p_dir, v.as_str()), r_list);
+    }
+    if (!v.is_array()) {
+        return "world: '" + ov::str(p_key) + ov::str("' is not a path or a list.");
+    }
+    r_list = v;
     return ov::str();
 }
 
@@ -163,17 +185,20 @@ ov::str WorldFile::parse(const ov::Value &p_data, const ov::str &p_dir, WorldFil
             return "world: " + err;
         }
     }
-    if (p_data.has("species")) {
-        err = Archetype::parse_species(p_data["species"], w.species);
-        if (!err.empty()) {
-            return "world: " + err;
-        }
+    ov::Value species, biomes;
+    err = list_or_file(p_data, "species", p_dir, species);
+    if (err.empty() && !species.is_nil()) {
+        err = Archetype::parse_species(species, w.species);
+        err = err.empty() ? err : "world: " + err;
     }
-    if (p_data.has("climate")) {
+    err = err.empty() ? list_or_file(p_data, "biomes", p_dir, biomes) : err;
+    if (!err.empty()) {
+        return err;
+    }
+    // Biomes without a climate: no fields.
+    if (p_data.has("climate") || p_data.has("biomes")) {
         w.climate_table["fields"] = climate.get("fields", ov::Value::array());
-        w.climate_table["biomes"] = p_data.get("biomes", ov::Value::array());
-    } else if (p_data.has("biomes")) {
-        return "world: biomes need a climate.";
+        w.climate_table["biomes"] = biomes.is_nil() ? ov::Value::array() : biomes;
     }
     r_world = w;
     return ov::str();
@@ -192,6 +217,37 @@ ov::str WorldFile::parse_text(const ov::str &p_text, const ov::str &p_dir, World
     ov::Value data;
     const ov::str err = parse_object(p_text, "the world's text", data);
     return err.empty() ? parse(data, p_dir, r_world) : err;
+}
+
+ov::str WorldFile::load_list(const ov::str &p_path, ov::Value &r_list) {
+    ov::str text, json_error;
+    if (!ov::read_file(p_path, text)) {
+        return "world: cannot read " + p_path + ov::str(".");
+    }
+    const ov::Value v = ov::parse_json(text, json_error);
+    if (!v.is_array()) {
+        return "world: " + p_path + ov::str(" is not a JSON list.") + (json_error.empty() ? ov::str() : " " + json_error);
+    }
+    r_list = v;
+    return ov::str();
+}
+
+ov::str WorldFile::ground_table(ov::Value &r_table) {
+    ov::Value biomes;
+    const ov::str err = load_list(GROUND_BIOMES, biomes);
+    if (err.empty()) {
+        r_table = ov::Value::object();
+        r_table["fields"] = ov::Value::array();
+        r_table["biomes"] = biomes;
+    }
+    return err;
+}
+
+ov::str WorldFile::load_species(const ov::str &p_path, std::vector<Archetype::Species> &r_species) {
+    ov::Value list;
+    ov::str err = load_list(p_path, list);
+    err = err.empty() ? Archetype::parse_species(list, r_species) : err;
+    return err.empty() ? err : p_path + ": " + err;
 }
 
 ov::str WorldFile::load(const ov::str &p_path, WorldFile &r_world) {

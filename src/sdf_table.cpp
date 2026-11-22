@@ -426,12 +426,12 @@ RecordFinish SDFTable::record_finish() const {
     return RecordFinish{ param.skirt_depth, instance_band, erode_rule };
 }
 
-std::vector<Climate::InstanceShare> SDFTable::counted(Species::Kind p_kind, int p_count, double p_side_m) {
+std::vector<Climate::InstanceShare> SDFTable::counted(const std::vector<Species> &p_species, Species::Kind p_kind, int p_count, double p_side_m) {
     std::vector<Climate::InstanceShare> out;
     if (p_count <= 0 || !(p_side_m > 0.0)) {
         return out;
     }
-    for (const Species &s : default_species()) {
+    for (const Species &s : p_species) {
         if (s.kind == p_kind) { // cell_side rounds the cell as forest_cell_side
             out.push_back(Climate::InstanceShare{ s.name, p_side_m / std::sqrt(double(p_count)), 1u });
         }

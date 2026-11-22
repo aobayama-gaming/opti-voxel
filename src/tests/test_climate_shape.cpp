@@ -49,7 +49,7 @@ TEST_CASE("Climate shape: curves pass through their points") {
 }
 
 TEST_CASE("Climate shape: malformed shapes and terms are refused with the reason") {
-    SDFCascade sdf;
+    GroundSDF sdf;
     ChunkParam param;
     param.voxel_size = 0.05f;
     sdf.configure(param, 15);

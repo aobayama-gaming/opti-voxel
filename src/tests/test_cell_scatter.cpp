@@ -1,4 +1,4 @@
-#include "test_common.hpp"
+#include "test_ground.hpp"
 
 #include "cell_scatter.hpp"
 #include "sdf_cascade.hpp"
@@ -103,10 +103,10 @@ TEST_CASE("Cell scatter: two halves of a box give the whole, sites and records; 
 TEST_CASE("Cell scatter: the profile bounds every record of the forest and the scatter") {
     ChunkParam param;
     param.voxel_size = 0.05f;
-    SDFCascade sdf;
+    GroundSDF sdf;
     sdf.set_zone(SDFTable::Zone{ 80.0 });
-    std::vector<Climate::InstanceShare> grown = SDFTable::counted(Archetype::Species::TREE, 200, 80.0);
-    for (const Climate::InstanceShare &r : SDFTable::counted(Archetype::Species::ROCK, 400, 80.0)) {
+    std::vector<Climate::InstanceShare> grown = SDFTable::counted(default_species(), Archetype::Species::TREE, 200, 80.0);
+    for (const Climate::InstanceShare &r : SDFTable::counted(default_species(), Archetype::Species::ROCK, 400, 80.0)) {
         grown.push_back(r);
     }
     sdf.set_instances(grown);

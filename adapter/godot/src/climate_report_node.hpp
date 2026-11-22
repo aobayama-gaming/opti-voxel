@@ -37,8 +37,8 @@ public:
     // A shape node's phi at p_ns as a note's (Climate::parse_shape, shape_phi): { error,
     // phi }, the biome mixer's plot.
     static Dictionary shape(const Dictionary &p_node, const PackedFloat32Array &p_ns);
-    // The template biome (SDFCascade::template_table: its world file) at a voxel size, named p_name: a new biome's graph.
-    static Dictionary template_biome(double p_voxel_m, const String &p_name);
+    // The template ground's biome (WorldFile::GROUND_BIOMES, at any voxel size) named p_name: a new biome's graph.
+    static Dictionary template_biome(const String &p_name);
     // A biome's debug colour without its own: its name's hash (the parser's).
     static Color debug_color(const String &p_name);
     // Where a biome is whole on a field: within core of its span (smoothstep(clamp((1 - u^2) KERNEL_FADE)) is 1).

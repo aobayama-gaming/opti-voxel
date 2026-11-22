@@ -28,7 +28,7 @@ class World {
 public:
     // How the engine runs, set before start(); what the terrain is lives in the world file.
     struct Settings {
-        // The world file (WorldFile, a host path), empty for WorldFile's defaults.
+        // The world file (WorldFile, a host path), empty for WorldFile::DEFAULT_PATH.
         str world_path;
         // Or the world itself, a world file's text whose relative paths start from world_dir (an editor's world, never
         // written to a file). The host sets one of the two (VoxelTerrain's setters clear the other).
@@ -208,6 +208,7 @@ private:
     str content_path; // the world it read: world_path, or world_json from world_dir
     str content_json;
     str content_dir;
+    bool content_read = false; // content is what load_world read (not WorldFile defaults)
     Hosts hosts;
     std::unique_ptr<SDFCascade> sdf;
     ChunkDiscoverer *chunk_discoverer = nullptr;

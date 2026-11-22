@@ -116,6 +116,6 @@ The SDF program IR, the GPU table, the locality and band rules, the index and ru
   count; an add past it is refused), then the streamed slots. The bench's
   `--scenario=edit --edits=N` scripts add / move / remove edits, then settles; audit /
   discovery_audit should stay `ok`. The world file's rock entries (`instances`, a biome's or the world's: a
-  `boulder` or a `pillar` species, its `cell_m`) scatter rocks and pillars over its `zone` (a square of `side_m` metres
+  rock or pillar of its `species`, `boulder` or `pillar` in `worlds/species.json`, and its `cell_m`) scatter rocks and pillars over its `zone` (a square of `side_m` metres
   around `centre_m`, default (-50, -150) m: `SDFTable::Zone`), one per cell site (`SCATTER_SITE_SALT` for a kind's finest
   cell), the species its biome's (BiomePick), turned to `up_at`.

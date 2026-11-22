@@ -1,4 +1,4 @@
-#include "test_common.hpp"
+#include "test_ground.hpp"
 
 #include "chunk_gate.hpp"
 #include "sdf_cascade.hpp"
@@ -50,7 +50,7 @@ std::vector<ChunkId> row(const VoxelPos &p_centre, int p_count, int64_t p_step, 
 
 TEST_CASE("ChunkGate: the admit cap counts the chunks that ask for keys, never the READY ones") {
     ChunkParam param;
-    SDFCascade sdf; // no streamed source: every chunk READY
+    GroundSDF sdf; // no streamed source: every chunk READY
     sdf.configure(param, 15);
     ChunkGate gate;
     gate.bind(&sdf, &gate);
@@ -64,9 +64,9 @@ TEST_CASE("ChunkGate: the admit cap counts the chunks that ask for keys, never t
 TEST_CASE("ChunkGate: a frame's popping stops at the cap of parked chunks; next_scan keeps the parked chunks the scan holds") {
     ChunkParam param;
     param.voxel_size = 0.05f;
-    SDFCascade sdf;
+    GroundSDF sdf;
     sdf.set_zone(SDFTable::Zone{ 40.0 });
-    sdf.set_instances(SDFTable::counted(Archetype::Species::TREE, 30, 40.0));
+    sdf.set_instances(SDFTable::counted(default_species(), Archetype::Species::TREE, 30, 40.0));
     param.skirt_depth = MAX(param.skirt_depth, sdf.min_skirt_depth(param, 18));
     sdf.configure(param, 18);
     CHECK(sdf.get_stream() != nullptr);

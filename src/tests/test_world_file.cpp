@@ -21,6 +21,7 @@ TEST_CASE("WorldFile: every key is optional and defaults to the engine's default
     CHECK(w.zone.side_m == 0.0);
     CHECK(w.zone.x_m == SDFTable::Zone().x_m);
     CHECK(w.instances.empty());
+    CHECK(w.species.empty()); // a world names its species (worlds/species.json: today's)
 }
 
 TEST_CASE("WorldFile: inline sections reach their fields") {
@@ -56,6 +57,24 @@ TEST_CASE("WorldFile: the climate's fields merge with the world's biomes into on
     CHECK(w.climate_table["fields"].size() == 1);
     CHECK(w.climate_table["biomes"].size() == 1);
     CHECK(ov::contains(parse(R"({"ground_stretch": [{"wavelength_m": 8}]})", w), "unknown key 'ground_stretch'"));
+    // Biomes without a climate: no fields (before, refused: "biomes need a climate").
+    CHECK(parse(R"({"biomes": [{"name": "a"}]})", w) == ov::str());
+    CHECK(w.climate_table["fields"].size() == 0);
+    CHECK(w.climate_table["biomes"].size() == 1);
+}
+
+// "biomes" and "species" may name a file holding the list (the bare worlds' ground.biomes.json, the forests' species.json).
+TEST_CASE("WorldFile: biomes and species from files") {
+    WorldFile w;
+    CHECK(WorldFile::load("res://worlds/forest5cm.world.json", w) == ov::str());
+    ov::Value ground;
+    CHECK(WorldFile::ground_table(ground) == ov::str());
+    CHECK(ov::to_json(w.climate_table) == ov::to_json(ground));
+    CLIMATE_REQUIRE(w.species.size() == 5);
+    CHECK(w.species[0].name == "broadleaf");
+    CHECK(w.species[2].name == "conifer");
+    CHECK(w.species[4].name == "pillar");
+    CHECK(w.species[4].rock.pillar);
 }
 
 TEST_CASE("WorldFile: a refused file leaves the world untouched and says why") {
@@ -74,7 +93,10 @@ TEST_CASE("WorldFile: a refused file leaves the world untouched and says why") {
     CHECK(ov::contains(parse(R"({"planet": 5})", w), "not an object"));
     CHECK(ov::contains(parse(R"({"engine": 5})", w), "not a path or an object"));
     CHECK(ov::contains(parse(R"({"engine": {"voxel_m": 0}})", w), "positive"));
-    CHECK(ov::contains(parse(R"({"biomes": [{"name": "a"}]})", w), "need a climate"));
+    CHECK(ov::contains(parse(R"({"biomes": 5})", w), "not a path or a list"));
+    CHECK(ov::contains(parse(R"({"species": {"name": "a"}})", w), "not a path or a list"));
+    CHECK(ov::contains(parse(R"({"biomes": "res://worlds/default.world.json"})", w), "not a JSON list"));
+    CHECK(ov::contains(parse(R"({"species": "res://worlds/nowhere.json"})", w), "cannot read"));
     CHECK(ov::contains(parse(R"({"engine": {"lods": 32}})", w), "lods must be"));
     CHECK(ov::contains(parse(R"({"engine": {"lods": 0}})", w), "lods must be"));
     CHECK(ov::contains(parse(R"({"planet": {"radius_m": "6371000"}})", w), "not a number"));
@@ -100,9 +122,7 @@ TEST_CASE("WorldFile: world.json finds its engine and climate next to it") {
     CHECK(w.climate_table["biomes"].size() == 2); // hills, warped
     SDFCascade sdf;
     ChunkParam param;
-    param.voxel_size = float(w.voxel_m);
-    sdf.climate_data = w.climate_table;
-    sdf.configure(param, w.lods);
+    CHECK(sdf.configure_world(w, param) == ov::str()); // its species: worlds/species.json
     CHECK(sdf.get_climate() != nullptr);
 }
 
@@ -119,7 +139,7 @@ TEST_CASE("WorldFile: the project's worlds load and configure as themselves, no 
     for (const char *path : { "res://worlds/default.world.json", "res://worlds/cm.world.json", "res://worlds/lods25.world.json", "res://worlds/biomes.world.json",
                  "res://worlds/forest5cm.world.json", "res://worlds/forest5cm_x10.world.json", "res://worlds/forest5cm_1m.world.json", "res://worlds/forest5cm_41m.world.json",
                  "res://worlds/earth.world.json", "res://worlds/earth25.world.json", "res://worlds/tiny.world.json", "res://worlds/tiny_biomes.world.json",
-                 "res://worlds/template_5cm.world.json", "res://worlds/template_50cm.world.json", "res://climate/world.json", "res://climate/example.json",
+                 "res://climate/world.json", "res://climate/example.json",
                  "res://climate/plain.json", "res://climate/shaped_test.json", "res://climate/fieldless_test.json", "res://climate/eight_biomes_test.json",
                  "res://climate/notes_test.json", "res://climate/programs_test.json", "res://climate/graph_test.json", "res://climate/caves_test.json" }) {
         CAPTURE(path);

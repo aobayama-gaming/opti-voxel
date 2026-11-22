@@ -57,9 +57,9 @@ static func param(p_kind: String, p_name: String) -> Dictionary:
 	return {}
 
 
-# A new biome named p_name: the engine's template (its world file, SDFCascade::template_path).
+# A new biome named p_name: the engine's template ground (WorldFile::GROUND_BIOMES, worlds/ground.biomes.json).
 static func template_biome(p_name: String) -> Dictionary:
-	return ClassDB.class_call_static("ClimateReportNode", "template_biome", voxel_m, p_name)
+	return ClassDB.class_call_static("ClimateReportNode", "template_biome", p_name)
 
 
 # A biome's debug colour: its own (#rrggbb), else its name's hash (the parser's).

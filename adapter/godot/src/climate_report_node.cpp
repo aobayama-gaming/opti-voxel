@@ -23,7 +23,7 @@ void ClimateReportNode::_bind_methods() {
     ClassDB::bind_static_method("ClimateReportNode", D_METHOD("curve", "points", "xs", "voxel_m"), &ClimateReportNode::curve);
     ClassDB::bind_static_method("ClimateReportNode", D_METHOD("graph_kinds"), &ClimateReportNode::graph_kinds);
     ClassDB::bind_static_method("ClimateReportNode", D_METHOD("shape", "node", "ns"), &ClimateReportNode::shape);
-    ClassDB::bind_static_method("ClimateReportNode", D_METHOD("template_biome", "voxel_m", "name"), &ClimateReportNode::template_biome);
+    ClassDB::bind_static_method("ClimateReportNode", D_METHOD("template_biome", "name"), &ClimateReportNode::template_biome);
     ClassDB::bind_static_method("ClimateReportNode", D_METHOD("debug_color", "name"), &ClimateReportNode::debug_color);
     ClassDB::bind_static_method("ClimateReportNode", D_METHOD("kernel_core"), &ClimateReportNode::kernel_core);
     ClassDB::bind_static_method("ClimateReportNode", D_METHOD("preview", "json", "dir", "extent_km", "size", "surface", "center", "background"), &ClimateReportNode::preview, DEFVAL(false));
@@ -130,9 +130,9 @@ Dictionary ClimateReportNode::shape(const Dictionary &p_node, const PackedFloat3
     return d;
 }
 
-Dictionary ClimateReportNode::template_biome(double p_voxel_m, const String &p_name) {
+Dictionary ClimateReportNode::template_biome(const String &p_name) {
     ov::Value table;
-    const ov::str err = SDFCascade::template_table(p_voxel_m, table);
+    const ov::str err = WorldFile::ground_table(table);
     ERR_FAIL_COND_V_MSG(!err.empty() || table["biomes"].size() == 0, Dictionary(), godot_str("ClimateReportNode: the template ground: " + err));
     ov::Value b = std::as_const(table)["biomes"][size_t(0)];
     b["name"] = ov_str(p_name);

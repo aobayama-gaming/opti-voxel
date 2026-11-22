@@ -20,7 +20,7 @@ namespace {
 
 // The ground of an SDFCascade configured at p_voxel metres and p_lods LODs.
 struct GroundFixture {
-    SDFCascade sdf;
+    GroundSDF sdf;
     Ground ground;
 
     GroundFixture(double p_voxel, int p_lods) {
@@ -159,7 +159,7 @@ TEST_CASE("Climate: the plain preset (the example before shaped bands) parses at
     CHECK(t25.fields[0].bands[10].amp == temp.bands[0].amp);
     CHECK(ClimateTest::ground_note_count(prog25) == 17);
 
-    // 14 LODs: the ranges lose k = 19; a single wavelength past the top is refused.
+    // 14 LODs: the ranges lose k = 19; a single wavelength past the top plays nothing, like a note's (it was refused).
     GroundFixture g14(0.05, 14);
     Table t14;
     Terrain::LevelProgram prog14;
@@ -168,7 +168,29 @@ TEST_CASE("Climate: the plain preset (the example before shaped bands) parses at
     CHECK(ClimateTest::ground_note_count(prog14) == 16);
     Table single;
     const char *past_top = R"({"fields": [{"name": "t", "bands": [{"wavelength_m": 26000, "amp": 1}]}], "biomes": [{"name": "a"}]})";
-    CHECK(ov::contains(parse_json(past_top, g14.ground, single), "outside the cascade's range"));
+    CHECK(parse_json(past_top, g14.ground, single) == ov::str());
+    CLIMATE_REQUIRE(single.fields.size() == 1);
+    CHECK(single.fields[0].bands.empty());
+}
+
+// One ground at every voxel size: a note or a band finer than 8 voxels plays nothing, like one past the LOD count's top
+// (a note finer than k = 3 was refused, so a 5 cm ground didn't read at 0.5 m).
+TEST_CASE("Climate: a note or a band too fine for the voxel plays nothing") {
+    GroundFixture g(0.5, 15);
+    Table t;
+    Terrain::LevelProgram prog;
+    // 0.4 m (k = 0) and 2 m (k = 2) at 0.5 m: nothing plays; 4 m (k = 3) does. A stretch past a silent note's octave
+    // doesn't matter.
+    CHECK(parse_json(R"({"fields": [{"name": "t", "bands": [{"wavelength_m": 0.4, "amp": 1}, {"from_m": 0.1, "to_m": 4, "amp": 1}]}],
+        "biomes": [{"name": "a", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 0.4, "seed": 1, "amp_m": 1, "stretch_y": 4},
+        {"id": "m", "kind": "note", "wavelength_m": 2, "seed": 1, "amp_m": 1}, {"id": "f", "kind": "note", "wavelength_m": 4, "seed": 1, "amp_m": 1},
+        {"id": "x", "kind": "mix", "rows": [{"in": "n"}, {"in": "m"}, {"in": "f"}]}, {"id": "o", "kind": "output", "height": "x"}]}}]})",
+                  g.ground, t, prog) == ov::str());
+    CLIMATE_REQUIRE(t.fields.size() == 1);
+    CLIMATE_REQUIRE(t.fields[0].bands.size() == 1);
+    CHECK(t.fields[0].bands[0].k == 3);
+    CHECK(ClimateTest::ground_note_count(prog) == 1);
+    CHECK(ClimateTest::note_top_k(prog) == 3);
 }
 
 // The mixer's export check (a world's text): bad JSON and a refused table refused with the reason; the world's own
@@ -220,7 +242,7 @@ TEST_CASE("ClimateReport: preview gives a world's maps from its text, the same t
     // Off the surface (the tangent plane): no trace, every altitude 0.
     const ClimateReport::Preview plane = ClimateReport::preview(world, "res://climate/", 20.0, 16, false, 0.0, 0.0);
     CHECK(std::all_of(plane.altitude_m.begin(), plane.altitude_m.end(), [](float p_a) { return p_a == 0.0f; }));
-    CHECK(ov::contains(ClimateReport::preview(ClimateTest::json(R"({"engine": {"voxel_m": 0.05}})"), "", 20.0, 16, true, 0.0, 0.0).error, "no fields"));
+    CHECK(ov::contains(ClimateReport::preview(ClimateTest::json(R"({"engine": {"voxel_m": 0.05}})"), "", 20.0, 16, true, 0.0, 0.0).error, "a world names its ground"));
     CHECK(ov::contains(ClimateReport::preview(ClimateTest::json(R"({"trees": 1})"), "", 20.0, 16, true, 0.0, 0.0).error, "unknown key"));
     // Every mix row at 0: a ground of no notes (its top lattice -1) is drawn over the whole extent, never queried under
     // Λ_0 (the mixer's map flooded "lattice level out of range" and never drew the next edit).
@@ -261,8 +283,6 @@ TEST_CASE("Climate: malformed tables are refused with the reason") {
         { R"({"fields": [{"name": "t"}], "biomes": [{"name": "a", "at": {"t": [0, 1]}}]})", "the last biome is the default" },
         { R"({"fields": [{"name": "t"}], "biomes": [{"name": "a", "at": {"u": [0, 1]}}, {"name": "b"}]})", "not a field" },
         { R"({"biomes": [{"name": "a", "amp": [{"field": "ground", "wavelength_m": 4000, "x": 2}]}]})", "became the biome's 'graph'" },
-        { R"({"biomes": [{"name": "a", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 1, "seed": 1, "amp_m": 1}, {"id": "o", "kind": "output", "height": "n"}]}}]})",
-                "outside the cascade's range" },
         { R"({"biomes": [{"name": "a", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 4000, "seed": 1, "amp_m": 1e13}, {"id": "o", "kind": "output", "height": "n"}]}}]})",
                 "the base keeps exact" },
         { R"({"biomes": [{"name": "a", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 4000, "amp_m": 1}, {"id": "o", "kind": "output", "height": "n"}]}}]})",
@@ -278,7 +298,7 @@ TEST_CASE("Climate: malformed tables are refused with the reason") {
         { R"({"biomes": [{"name": "a", "height_m": 100}]})", "unknown key 'height_m'" },
         { R"({"biomes": [{"name": "a", "debug_color": "red"}]})", "#rrggbb" },
         { R"({"biomes": [{"name": "a", "debug_color": "#-00001"}]})", "#rrggbb" },
-        { R"({"fields": [{"name": "t", "bands": [{"from_m": 1, "to_m": 1e30, "amp": 1}]}], "biomes": [{"name": "a"}]})", "outside [0, 62]" },
+        { R"({"fields": [{"name": "t", "bands": [{"from_m": 1, "to_m": 1e30, "amp": 1}]}], "biomes": [{"name": "a"}]})", "past the noise's 62" },
         { R"({"fields": [{"name": "t", "bands": [{"wavelength_m": 100, "to_m": 500, "amp": 1}]}], "biomes": [{"name": "a"}]})", "not both" },
         { R"({"fields": [{"name": "t", "seed": 1e20}], "biomes": [{"name": "a"}]})", "whole number" },
         { R"({"fields": [{"name": "t", "seed": 7.9}], "biomes": [{"name": "a"}]})", "whole number" },
@@ -308,7 +328,7 @@ TEST_CASE("Climate: malformed tables are refused with the reason") {
     };
     for (const Case &c : curves) {
         CAPTURE(c.json);
-        ov::Value graph = ClimateTest::template_graph(0.5);
+        ov::Value graph = ClimateTest::template_graph();
         graph["nodes"].at(graph["nodes"].size() - 1)["height"] = "c";
         graph["nodes"].push_back(ClimateTest::json(ov::str(R"({"id": "c", "kind": "curve", "in": "ground", "points": )") + c.json + "}"));
         Table t;
@@ -449,7 +469,7 @@ TEST_CASE("Climate: the blend's bound is the largest biome's reach, not their su
 // share its notes; another seed on one of its octaves is a second note there.
 TEST_CASE("Climate: the compiler shares notes between biomes") {
     GroundFixture g(0.05, 15);
-    const ov::str ground = ClimateTest::ground_graph(0.05);
+    const ov::str ground = ClimateTest::ground_graph();
     const ov::str fields = R"({"fields": [{"name": "t", "bands": [{"wavelength_m": 26000, "amp": 1}]}], "biomes": [)";
     Table t;
     Terrain::LevelProgram same, other;

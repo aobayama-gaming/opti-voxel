@@ -27,6 +27,10 @@ const LINE := 120
 # came from (an autosave older than the key: world.json), else p_path.
 static func read(p_path: String, p_file: String = "") -> Dictionary:
 	var w = JSON.parse_string(FileAccess.get_file_as_string(p_path)) if FileAccess.file_exists(p_path) else null
+	# Biomes named by a file (WorldFile: the list it holds, ground.biomes.json): edited here, exported inline.
+	if w is Dictionary and w.get("biomes") is String:
+		var listed = JSON.parse_string(FileAccess.get_file_as_string(EngineInfo.section_path(w.biomes, p_path)))
+		w.biomes = listed if listed is Array else []
 	if not w is Dictionary or w.get("biomes", []).is_empty():
 		return {}
 	# The mixer's own world model before version 2 (its biomes' "model" graphs): not a world file.

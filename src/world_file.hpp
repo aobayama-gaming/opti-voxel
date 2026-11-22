@@ -10,30 +10,36 @@
 #include <vector>
 
 // A world on disk: what a run loads (World::Settings::world_path), every terrain setting in data. The format (JSON;
-// "comment" keys are ignored, any other unknown key is refused, every key is optional and defaults to the field below):
+// "comment" keys are ignored, any other unknown key is refused, every key but "biomes" is optional and defaults to the
+// field below):
 //
 //   {
 //     "engine": "engine.json" or { "voxel_m": 0.05, "lods": 25 },   the master variables
-//     "climate": "climate.json" or { "fields": [ field... ] },       the fields that place the biomes; none: no biomes
+//     "climate": "climate.json" or { "fields": [ field... ] },       the fields that place the biomes; none: no fields
 //     "planet": { "radius_m": 0, "ring_m": 0 },
 //     "look": { "atmosphere": true, "atmosphere_scale": 0, "clouds": true },
 //     "zone": { "side_m": 0, "centre_m": [-50, -150] },
 //     "instances": [ { "species": "conifer", "cell_m": 5, "share": 1 }... ],
 //     "features": [ { "kind": "lava_lake", "cell_m": 640, "chance": 0.6, "radius_m": [18, 45] }... ],
-//     "species": [ species... ],
-//     "biomes": [ biome..., default biome ]
+//     "species": "species.json" or [ species... ],
+//     "biomes": "ground.biomes.json" or [ biome..., default biome ]
 //   }
 //
-// A path is relative to the file naming it, or absolute (res://, /...). "fields" and "biomes" are the climate table of
-// climate_parse.cpp (each biome a graph of notes, what it grows, its features), merged here and compiled there (at the
-// engine's values). Without biomes, the ground is the template's (SDFCascade::template_path). "species" are what the
-// instances name (species.hpp; Archetype::default_species without the key); "instances" what grows where no biome lists
-// its own (and on a world without biomes), each entry a species, its cell and its share (Climate::parse_instances), over
-// the "zone" (SDFTable::Zone: a square of side_m metres round centre_m, x and z; side 0: none); "features" likewise what
-// stands on a biome that lists none, each entry a kind, its cell, its chance and its radius (Climate::parse_features).
+// A path is relative to the file naming it, or absolute (res://, /...); "species" and "biomes" files hold the list.
+// "fields" and "biomes" are the climate table of climate_parse.cpp (each biome a graph of notes, what it grows, its
+// features), merged here and compiled there (at the engine's values). A world names its ground: without biomes the
+// cascade refuses it (SDFCascade::attach_climate); GROUND_BIOMES is the template ground's. "species" are what the
+// instances name (species.hpp; none without the key, worlds/species.json today's trees and rocks); "instances" what grows
+// where no biome lists its own, each entry a species, its cell and its share (Climate::parse_instances), over the "zone"
+// (SDFTable::Zone: a square of side_m metres round centre_m, x and z; side 0: none); "features" likewise what stands on a
+// biome that lists none, each entry a kind, its cell, its chance and its radius (Climate::parse_features).
 struct WorldFile {
     // The world of a host or check given none.
     static constexpr const char *DEFAULT_PATH = "res://worlds/default.world.json";
+    // The template ground's biomes (one biome, no fields): the bare ground's worlds name it, a new biome starts from it.
+    static constexpr const char *GROUND_BIOMES = "res://worlds/ground.biomes.json";
+    // Today's species (three trees, a boulder, a pillar): the worlds that grow instances name it, the checks read it.
+    static constexpr const char *SPECIES = "res://worlds/species.json";
 
     double voxel_m = 0.5; // LOD 0
     int lods = 15; // LODs 0 .. lods - 1 (at most ChunkMath::MAX_LOD_NUMBERS)
@@ -47,7 +53,7 @@ struct WorldFile {
     SDFTable::Zone zone; // SDFTable::set_zone
     std::vector<Climate::InstanceShare> instances; // SDFTable::set_instances
     std::vector<Climate::FeatureShare> features; // SDFTable::set_features
-    std::vector<Archetype::Species> species = Archetype::default_species(); // SDFTable::set_species
+    std::vector<Archetype::Species> species; // SDFTable::set_species
 
     // The file at p_path (a host path, ov::read_file) in r_world: empty, or why it was refused (r_world untouched).
     static ov::str load(const ov::str &p_path, WorldFile &r_world);
@@ -57,4 +63,10 @@ struct WorldFile {
     static ov::str parse_text(const ov::str &p_text, const ov::str &p_dir, WorldFile &r_world);
     // p_text as a JSON object in r_data: empty, or why not (p_name: the text's name in the message).
     static ov::str parse_object(const ov::str &p_text, const ov::str &p_name, ov::Value &r_data);
+    // The JSON list in the file at p_path (a "species" or "biomes" file) in r_list: empty, or why not.
+    static ov::str load_list(const ov::str &p_path, ov::Value &r_list);
+    // The template ground's climate table ({"fields": [], "biomes": GROUND_BIOMES'}) in r_table: empty, or why not.
+    static ov::str ground_table(ov::Value &r_table);
+    // The species list in the file at p_path (SPECIES: today's) in r_species: empty, or why not.
+    static ov::str load_species(const ov::str &p_path, std::vector<Archetype::Species> &r_species);
 };

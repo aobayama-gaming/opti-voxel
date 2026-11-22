@@ -57,7 +57,7 @@ Per-chunk palettes and per-biome ground materials.
   +15% saturation on greens and browns); `--grade=0` (bench, player) turns it off. The scenes' old brightness /
   contrast / saturation values never applied (adjustments were off) and are gone. The ground's material per biome:
   **Biome materials** below. Next: materials inside one record (an IR change), image textures (triplanar).
-- **Biome materials** (with any climate the world gives, a fieldless one too; not the template ground: `SDFCascade::has_ground_materials`): each biome is a ground material `biome:<name>` (`Climate::biome_material`:
+- **Biome materials** (with a climate of its own look, a fieldless one too: several biomes or one with a `surface`; not one biome on the default surface, the template ground, which already draws as the procedural ground: `SDFCascade::has_ground_materials`): each biome is a ground material `biome:<name>` (`Climate::biome_material`:
   `PATTERN_GROUND`, the page shader's slope blend and contours in the biome's `"surface"` colours, sRGB `#rrggbb`
   `flat` / `steep` + `roughness` in the table, the procedural ground's without; its `debug_color` as the material's
   debug colour). Every chunk palette starts with the **base palette** (`SDFGpuTable::base_palette`: GROUND, then biome

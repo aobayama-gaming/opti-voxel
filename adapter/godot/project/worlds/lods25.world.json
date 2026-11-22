@@ -3,5 +3,6 @@
  "engine": {
   "voxel_m": 0.5,
   "lods": 25
- }
+ },
+ "biomes": "res://worlds/ground.biomes.json"
 }

@@ -13,7 +13,7 @@ namespace {
 // Two biomes over the template ground on a short field (25 m .. 100 m: they alternate within a small forest): "conifers"
 // where t > 0 growing p_conifers' instances, the default growing p_rest's (a JSON list, or empty for the key absent).
 ov::Value two_biomes(const ov::str &p_conifers, const ov::str &p_rest, const ov::str &p_features = ov::str()) {
-    const ov::str ground = ClimateTest::ground_graph(0.05);
+    const ov::str ground = ClimateTest::ground_graph();
     const ov::str rest = p_rest.empty() ? ov::str() : ", \"instances\": " + p_rest;
     return ClimateTest::json(R"({"fields": [{"name": "t", "bands": [{"from_m": 25, "to_m": 100, "amp": 1}]}], "biomes": [{"name": "conifers", "at": {"t": [0.5, 0.5]}, )" + ground +
             ", \"instances\": " + p_conifers + p_features + R"(}, {"name": "rest", )" + ground + rest + "}]}");
@@ -86,12 +86,22 @@ TEST_CASE("BiomePick: one biome or none is 0; a site's biome is a pure function 
     CHECK(us < 200.0);
 }
 
-TEST_CASE("Species: today's by default, a world's list parsed, refused with the reason") {
+TEST_CASE("Species: today's from worlds/species.json, a world's list parsed, refused with the reason") {
     const std::vector<Species> d = default_species();
     CLIMATE_REQUIRE(d.size() == 5);
     CHECK(d[0].name == "broadleaf");
     CHECK(d[2].name == "conifer");
-    CHECK(d[2].tree.cone_tiers == tree_species()[2].cone_tiers);
+    // The file's trees are tree_species()' to the bit (what the engine built in before the file).
+    CLIMATE_REQUIRE(tree_species().size() == 3);
+    for (size_t i = 0; i < 3; i++) {
+        Species built;
+        built.name = d[i].name;
+        built.tree = tree_species()[i];
+        CHECK(species_key({ &built }) == species_key({ &d[i] }));
+    }
+    CHECK(d[3].name == "boulder");
+    CHECK(d[3].rock.radius_lo_m == RockSpecies().radius_lo_m);
+    CHECK(d[3].rock.radius_hi_m == RockSpecies().radius_hi_m);
     CHECK(d[3].kind == Species::ROCK);
     CHECK_FALSE(d[3].rock.pillar);
     CHECK(d[4].rock.pillar);
@@ -124,12 +134,12 @@ TEST_CASE("Species: today's by default, a world's list parsed, refused with the 
 // own (denser there).
 TEST_CASE("BiomePick: a forest grows each site's species from its biome, at its biome's density") {
     auto forest = [](const ov::Value &p_climate) {
-        auto sdf = std::make_unique<SDFCascade>();
+        auto sdf = std::make_unique<GroundSDF>();
         ChunkParam param;
         param.voxel_size = 0.05f;
         sdf->climate_data = p_climate;
         sdf->set_zone(SDFTable::Zone{ 60.0 });
-        sdf->set_instances(SDFTable::counted(Archetype::Species::TREE, 160, 60.0));
+        sdf->set_instances(SDFTable::counted(default_species(), Archetype::Species::TREE, 160, 60.0));
         sdf->set_stream_sources(false);
         sdf->set_moment_blobs(false);
         param.skirt_depth = MAX(param.skirt_depth, sdf->min_skirt_depth(param, 16));

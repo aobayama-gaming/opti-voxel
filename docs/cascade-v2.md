@@ -210,8 +210,10 @@ It drops the ones that only protected the record layouts.
   ground term of fields.
 - **Refusal rules** that only protected the layouts (listed in *The rule*).
 - **Engine settings that are data:** the template biome built in C++ (`template_graph`) became world files
-  (`worlds/template_5cm.world.json`, `template_50cm.world.json`: a file per voxel size, since its octaves are counted in
-  voxels; `SDFCascade::template_path` picks it; a missing or refused one is a world error, no ground at all). A small
+  (`template_5cm` / `template_50cm`, a file per voxel size), then one list a world names (`worlds/ground.biomes.json`,
+  `"biomes": "res://worlds/ground.biomes.json"`: a note finer than 8 voxels plays nothing like one past the top, so one
+  file serves every voxel size; a world without biomes is refused, no template stands in). The species likewise
+  (`worlds/species.json`, the forests' `"species"`; `default_species` gone from the engine). A small
   planet's ground is data too: the template's 3.3 km octaves would cross a 2 km planet's centre and are refused there,
   so `tiny.world.json` carries its own ground, the template's octaves stopped at 3.3 km wavelengths. `SDFCascade::Preset::
   FLAT` and `terrain_mode` stay: the flat ground is already a constant table (`flat_table`), and the preset also picks
@@ -223,7 +225,8 @@ It drops the ones that only protected the record layouts.
   - "neutral modulation leaves the ground bit for bit";
   - the FrameCheck probes of deleted functions.
   (The default-terrain hash of `test_sdf_cascade.cpp` kept its v1 value: the template is a plain fBm, one linear
-  channel, so v2 gives it v1's bits, and its world files are the old C++ graph node for node.)
+  channel, so v2 gives it v1's bits, and its world files were the old C++ graph node for node; at 0.5 m the one file now
+  gives other bits: amplitudes 1/8 of 0.4 m x 2^n wavelengths, not of 4 m x 2^n.)
 - **The legacy mesher and its oracle** (this PR, below).
 
 ## Checks after v2

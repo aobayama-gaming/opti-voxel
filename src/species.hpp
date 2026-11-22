@@ -7,7 +7,7 @@
 
 #include <vector>
 
-// The world's species (a world file's "species"; default_species without one): what its biomes grow (their
+// The world's species (a world file's "species"; none without one, worlds/species.json today's): what its biomes grow (their
 // "instances", Climate::InstanceShare), each named. A tree is a TreeSpecies (its keys, metres and ratios, each optional
 // at TreeSpecies' default); a rock is a boulder or a pillar of a hashed radius in [radius_m[0], radius_m[1]).
 //   { "name": "conifer", "kind": "tree", "height": 20, "crown_radius": 3, "cone_tiers": 4, ... }
@@ -32,8 +32,6 @@ struct Species {
     RockSpecies rock;
 };
 
-// Today's: the three trees of tree_species() (broadleaf, slender, conifer), a boulder and a pillar.
-std::vector<Species> default_species();
 // p_list (a world file's "species") in r_out: empty, or the first error (r_out untouched).
 ov::str parse_species(const ov::Value &p_list, std::vector<Species> &r_out);
 // The species of kind p_kind, in list order (a source's classes).

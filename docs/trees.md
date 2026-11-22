@@ -9,7 +9,8 @@ Library-built instances placed by the stream: trees, the far-field moment blobs,
   amplitude adds `CROWN_BUMP` = 1.5 to L: lumpy foliage up close, smooth once the band rule drops the octaves) and
   5 `cone` (`make_cone_type`, the same bumps on a cone {radius, height, cos, sin, amp}, its rim a smooth max: a
   conifer's tier). The species are data (`src/species.{hpp,cpp}`: a world file's `"species"`, each tree a
-  `TreeSpecies` by its keys, a rock or a pillar by its radius range; `default_species` without the key): today's three
+  `TreeSpecies` by its keys, a rock or a pillar by its radius range, inline or a file holding the list; none without
+  the key): today's, `worlds/species.json` (`WorldFile::SPECIES`, named by the forests' and the biome worlds' files), three
   trees, a broadleaf, a slender one and a conifer (`cone_tiers` = 4 stacked cones, no limbs, ~12 records), a boulder and
   a pillar. A site grows its biome's species (`BiomePick`, `src/biome_pick.*`: the climate's weights read once on the
   CPU at the site, on the coarsest lattice its placement fields resolve, ~20 us, and a hash of the site against them;
@@ -45,8 +46,7 @@ Library-built instances placed by the stream: trees, the far-field moment blobs,
   (`ground_at`), the lake keep-out the distance to a lake's axis (`LavaPool::near`, the sources' `accept`); the zone is
   the world file's `zone` square (`side_m`) over 4 half sides of height up and down. Hashing 3D cells moved every tree,
   the coarse-plane projection (feature/cell-sites) again: forest5cm is another forest than before. **What grows where
-  is data:** the world file's `instances` (a biome's, or the world's for a biome that lists none and a world without
-  biomes) are entries `{species, cell_m, share}`; every entry of a kind (trees, rocks) and a cell, over all the lists,
+  is data:** the world file's `instances` (a biome's, or the world's for a biome that lists none) are entries `{species, cell_m, share}`; every entry of a kind (trees, rocks) and a cell, over all the lists,
   is one source (`SDFTable::groups`: the rocks' then the trees', each kind's finest cell keeping its salt, a coarser one
   `trees_<cell>`), and a site of it grows its biome's entries of that source by their shares (`site_class`: BiomePick,
   `pick_share`; -1, nothing, where its biome names none of them; no pick at all when every biome grows the same). A

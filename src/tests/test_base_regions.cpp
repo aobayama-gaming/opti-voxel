@@ -210,7 +210,7 @@ TEST_CASE("SDFCascade: a note plays at its written amplitude, on the flat world 
     ChunkParam param;
     param.voxel_size = 0.05f;
     auto max_amp = [&](double p_radius_m, const char *p_world) {
-        SDFCascade sdf;
+        GroundSDF sdf;
         if (p_world != nullptr) {
             CHECK(load_table(p_world, sdf.climate_data) == ov::str());
         }
@@ -220,7 +220,7 @@ TEST_CASE("SDFCascade: a note plays at its written amplitude, on the flat world 
         return double(ClimateTest::note_amp(sdf.program()));
     };
     const double flat = max_amp(0.0, nullptr);
-    CHECK(flat == doctest::Approx(3276.8 / 0.05)); // the template's top note (its world files)
+    CHECK(flat == doctest::Approx(3276.8 / 0.05)); // the template's top note (ground.biomes.json)
     CHECK(max_amp(6371000.0, nullptr) == flat);
     // A 2 km planet takes tiny.world.json's 409.6 m note as written (a cap held every note under 8 m before).
     CHECK(max_amp(2000.0, "res://worlds/tiny.world.json") == doctest::Approx(409.6 / 0.05));
@@ -251,11 +251,10 @@ TEST_CASE("SDFCascade: a 2 km planet takes 400 m notes and refuses a ground unde
     CHECK(prog.hi[out] > 400.0 / 0.05);
     CHECK(ClimateTest::note_top_k(prog) == 16);
     CHECK(tiny.ground_top_m() == doctest::Approx(prog.hi[out] * 0.05));
-    // The template itself (no climate): its 3.3 km notes reach through the centre. A world error and no program, not a
-    // flat ground.
-    SDFCascade bare;
+    // The template ground itself: its 3.3 km notes reach through the centre. A world error and no program, not a flat
+    // ground.
+    GroundSDF bare;
     configure_planet(bare, nullptr, 2000.0);
-    CHECK(ov::contains(bare.get_world_error(), "the template ground"));
     CHECK(ov::contains(bare.get_world_error(), "past the planet's centre"));
     CHECK(bare.program().nodes.empty());
     // A given ground 2.5 km down: refused likewise, no template instead (World::start refuses it); the flat world takes it.
@@ -284,7 +283,7 @@ TEST_CASE("SDFCascade: a refused planet is a world error and no program, never a
     CHECK(BaseSurface::planet(2000.0, 0.05, 2000.0, &refusal).kind() == BaseSurface::Kind::FLAT);
     CHECK(ov::contains(refusal, "ring must be at least"));
     // A sphere past 2^60 voxels.
-    SDFCascade huge;
+    GroundSDF huge;
     configure_planet(huge, nullptr, 1e20);
     CHECK(ov::contains(huge.get_world_error(), "the radius must be in"));
     CHECK(huge.program().nodes.empty());

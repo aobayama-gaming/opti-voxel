@@ -1,4 +1,4 @@
-#include "test_common.hpp"
+#include "test_ground.hpp"
 
 #include "cascade_glsl.hpp"
 #include "godot_conv.hpp"
@@ -26,10 +26,10 @@ namespace {
 // The scatter's records alone (p_moments false): the tests count records and lists; the moment blobs have their own.
 struct ScatteredCascade {
     ChunkParam param;
-    SDFCascade sdf;
+    GroundSDF sdf;
     explicit ScatteredCascade(int p_count, double p_area = 200.0, int p_lods = 15, bool p_moments = false) {
         sdf.set_zone(SDFTable::Zone{ p_area });
-        sdf.set_instances(SDFTable::counted(Archetype::Species::ROCK, p_count, p_area));
+        sdf.set_instances(SDFTable::counted(default_species(), Archetype::Species::ROCK, p_count, p_area));
         sdf.set_stream_sources(false);
         sdf.set_moment_blobs(p_moments);
         param.skirt_depth = MAX(param.skirt_depth, sdf.min_skirt_depth(param, p_lods));
@@ -227,9 +227,9 @@ TEST_CASE("SDFCascade table: the skirt covers the ground's step plus the instanc
         CAPTURE(l);
         CHECK(double(rocks.sdf.skirt_depth_m(l)) == doctest::Approx(double(bare.sdf.skirt_depth_m(l)) + Archetype::ERODE_CELLS * cell_m).epsilon(1e-6));
     }
-    SDFCascade unbanded;
+    GroundSDF unbanded;
     unbanded.set_zone(SDFTable::Zone{ 200.0 });
-    unbanded.set_instances(SDFTable::counted(Archetype::Species::ROCK, 50, 200.0));
+    unbanded.set_instances(SDFTable::counted(default_species(), Archetype::Species::ROCK, 50, 200.0));
     unbanded.set_instance_band(false);
     unbanded.configure(bare.param, 15);
     CHECK(unbanded.skirt_depth_m(7) == bare.sdf.skirt_depth_m(7)); // no band rule, no erosion
@@ -384,10 +384,10 @@ TEST_CASE("SDFCascade table: the field step between LOD L and L+1 stays within t
         CAPTURE(scene.name);
         ChunkParam param;
         param.voxel_size = scene.voxel;
-        SDFCascade sdf;
+        GroundSDF sdf;
         sdf.set_zone(SDFTable::Zone{ scene.area_m });
-        std::vector<Climate::InstanceShare> grown = SDFTable::counted(Archetype::Species::ROCK, scene.rocks, scene.area_m);
-        for (const Climate::InstanceShare &t : SDFTable::counted(Archetype::Species::TREE, scene.trees, scene.area_m)) {
+        std::vector<Climate::InstanceShare> grown = SDFTable::counted(default_species(), Archetype::Species::ROCK, scene.rocks, scene.area_m);
+        for (const Climate::InstanceShare &t : SDFTable::counted(default_species(), Archetype::Species::TREE, scene.trees, scene.area_m)) {
             grown.push_back(t);
         }
         sdf.set_instances(grown);
@@ -714,9 +714,9 @@ TEST_CASE("SDFCascade table: a batch keeps the chunks whose lists fit the buffer
 TEST_CASE("SDFCascade table: a streamed chunk's list folds like the CPU's points: scene, streamed, then edit records") {
     ChunkParam param;
     param.voxel_size = 0.05f;
-    SDFCascade sdf;
+    GroundSDF sdf;
     sdf.set_zone(SDFTable::Zone{ 40.0 });
-    sdf.set_instances(SDFTable::counted(Archetype::Species::TREE, 30, 40.0));
+    sdf.set_instances(SDFTable::counted(default_species(), Archetype::Species::TREE, 30, 40.0));
     param.skirt_depth = MAX(param.skirt_depth, sdf.min_skirt_depth(param, 18));
     sdf.configure(param, 18);
     const InstanceStream *stream = sdf.get_stream();
@@ -881,7 +881,7 @@ TEST_CASE("SDFCascade table: the fold variant culls per cube, the bare variants 
 TEST_CASE("SDFCascade table: a zone over ground far above the base keeps its features") {
     ChunkParam param;
     param.voxel_size = 0.5f;
-    SDFCascade probe;
+    GroundSDF probe;
     probe.configure(param, 15);
     const double side_m = 60.0; // its box reaches 2 sides up and down from its centre
     double x_m = 0.0, z_m = 0.0;
@@ -893,7 +893,7 @@ TEST_CASE("SDFCascade table: a zone over ground far above the base keeps its fea
         found = double(probe.get_base().altitude(g)) * param.voxel_size > 2.5 * side_m;
     }
     CHECK_OR_RETURN(found);
-    SDFCascade sdf;
+    GroundSDF sdf;
     sdf.set_zone(SDFTable::Zone{ side_m, x_m, z_m });
     sdf.set_features({ Climate::FeatureShare{ "floating_island", 8.0, 1.0, 2.0, 3.0 } });
     sdf.configure(param, 15);

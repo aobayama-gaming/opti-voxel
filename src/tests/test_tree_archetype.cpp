@@ -1,4 +1,4 @@
-#include "test_common.hpp"
+#include "test_ground.hpp"
 
 #include "test_stream_common.hpp"
 
@@ -324,9 +324,9 @@ TEST_CASE("Tree: grown along a turned up, the tree lies along it") {
 TEST_CASE("SDFCascade forest: the trees are table records, trunks are solid, evaluate() stays the fold") {
     ChunkParam param;
     param.voxel_size = 0.05f;
-    SDFCascade sdf;
+    GroundSDF sdf;
     sdf.set_zone(SDFTable::Zone{ 40.0 });
-    sdf.set_instances(SDFTable::counted(Archetype::Species::TREE, 30, 40.0));
+    sdf.set_instances(SDFTable::counted(default_species(), Archetype::Species::TREE, 30, 40.0));
     sdf.set_stream_sources(false); // the trees' spans
     sdf.set_moment_blobs(false); // the trees' records alone
     param.skirt_depth = MAX(param.skirt_depth, sdf.min_skirt_depth(param, 18));

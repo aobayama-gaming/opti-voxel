@@ -76,15 +76,16 @@ TEST_CASE("Cascade: closed-form level boxes equal the iterated parent boxes, wit
 TEST_CASE("SDFCascade: evaluate equals Terrain::point and height_sdf, bit for bit") {
     for (const int lods : { 15, 25 }) {
         ChunkParam param;
-        SDFCascade sdf;
+        GroundSDF sdf;
         sdf.configure(param, lods);
         const Terrain::LevelProgram &prog = sdf.program();
-        // The template's top (template_50cm.world.json): k = 16 at 0.5 m (26.2 km), whatever the LOD count past it.
+        // The template ground at 0.5 m (ground.biomes.json, written at 5 cm): its 26.2 km note on k = 16 (32.8 km), whatever
+        // the LOD count past it; its notes of 0.4 .. 1.6 m are finer than 8 voxels and play nothing: k = 3 .. 16.
         const int k_top = 16;
         CHECK(prog.top == k_top - 3);
         CHECK(ClimateTest::note_count(prog) == k_top - 2);
         CHECK(ClimateTest::note_top_k(prog) == k_top);
-        // Capped at 3.3 km: 6553.6 voxels at 0.5 m.
+        // Its top note: 3.3 km, 6553.6 voxels at 0.5 m.
         CHECK(ClimateTest::note_amp(prog) == float(3276.8 / 0.5));
         int compared = 0;
         int differing = 0;
@@ -111,7 +112,7 @@ TEST_CASE("SDFCascade: evaluate equals Terrain::point and height_sdf, bit for bi
 
 TEST_CASE("SDFCascade: the shader stub and get_program") {
     ChunkParam param;
-    SDFCascade sdf;
+    GroundSDF sdf;
     sdf.configure(param, 25);
     CHECK(sdf.get_program() == &sdf.program());
     Cascade::ShaderParams params;
@@ -138,17 +139,23 @@ TEST_CASE("SDFCascade: the flat preset is the plane y = FLAT_GROUND_M at every L
     }
 }
 
-// The template ground stops at the first octave at the 3.3 km cap (26.2 km at 5 cm): past 15 LODs the ground is the
-// same octaves, so the same bits.
-TEST_CASE("SDFCascade: the template ground stops at its top, the same at any LOD count past it") {
-    // Each template file's first note is its top: 2^19 voxels at 5 cm, 2^16 at 0.5 m.
-    const ov::Value fine = ClimateTest::template_graph(0.05), coarse = ClimateTest::template_graph(0.5);
-    CHECK(fine["nodes"][size_t(0)]["wavelength_m"].as_double() == 26214.4);
-    CHECK(coarse["nodes"][size_t(0)]["wavelength_m"].as_double() == 32768.0);
+// The template ground stops at its first note (26.2 km): past 15 LODs at 5 cm the ground is the same octaves, so the
+// same bits. One file at every voxel size: at 0.5 m its notes finer than 8 voxels play nothing.
+TEST_CASE("SDFCascade: the template ground stops at its top, the same at any LOD count past it, one file at any voxel") {
+    // The file's first note is its top: 2^19 voxels at 5 cm.
+    const ov::Value graph = ClimateTest::template_graph();
+    CHECK(graph["nodes"][size_t(0)]["wavelength_m"].as_double() == 26214.4);
+    ChunkParam coarse;
+    coarse.voxel_size = 0.5f;
+    GroundSDF s50;
+    s50.configure(coarse, 15);
+    CHECK(s50.get_world_error() == ov::str());
+    CHECK(ClimateTest::note_top_k(s50.program()) == 16);
+    CHECK(ClimateTest::note_count(s50.program()) == 14);
     ChunkParam param;
     param.voxel_size = 0.05f;
     auto top = [&](const SDFCascade &p_sdf) { return ClimateTest::note_top_k(p_sdf.program()); };
-    SDFCascade s15, s25;
+    GroundSDF s15, s25;
     s15.configure(param, 15);
     s25.configure(param, 25);
     CHECK(top(s15) == 19);
@@ -168,9 +175,23 @@ TEST_CASE("SDFCascade: the template ground stops at its top, the same at any LOD
     }
 }
 
-TEST_CASE("Terrain: the band table holds every note in note order") {
+// A world names its ground: without biomes there is no program, the error says how to give it one (before, the
+// template ground stood in).
+TEST_CASE("SDFCascade: a world without biomes is refused") {
     ChunkParam param;
     SDFCascade sdf;
+    sdf.configure(param, 15);
+    CHECK(ov::contains(sdf.get_world_error(), "a world names its ground"));
+    CHECK(ov::contains(sdf.get_world_error(), WorldFile::GROUND_BIOMES));
+    CHECK(sdf.program().nodes.empty());
+    sdf.climate_data = ClimateTest::json(R"({"fields": [{"name": "t"}]})");
+    sdf.configure(param, 15);
+    CHECK(ov::contains(sdf.get_world_error(), "a world names its ground"));
+}
+
+TEST_CASE("Terrain: the band table holds every note in note order") {
+    ChunkParam param;
+    GroundSDF sdf;
     sdf.configure(param, 25);
     const Terrain::LevelProgram &prog = sdf.program();
     const PackedByteArray table = godot_bytes(Terrain::band_table(prog));
@@ -193,7 +214,7 @@ TEST_CASE("Terrain: the band table holds every note in note order") {
 // The threaded batch (the CPU discoverer's corners) is evaluate() point by point, bit for bit.
 TEST_CASE("SDFCascade: evaluate_batch equals evaluate, bit for bit") {
     ChunkParam param;
-    SDFCascade sdf;
+    GroundSDF sdf;
     sdf.configure(param, 25);
     for (const int lod : { 0, 5, 13, 24 }) {
         const int64_t corner = int64_t(param.half_chunk_voxels() * 2) << lod;
@@ -244,7 +265,7 @@ TEST_CASE("CascadeGLSL: point items carry any lattice point and its LOD") {
 // ground_field is its three steps (the GPU's point items read the middle one): the nearest lattice point (ties up), the
 // unit register there, the extension along its gradient; and evaluate_cull is that register in metres.
 TEST_CASE("SDFCascade: ground_field and evaluate_cull are made of ground_unit") {
-    SDFCascade sdf;
+    GroundSDF sdf;
     ChunkParam param;
     param.voxel_size = 0.05f;
     sdf.configure(param, 25);
@@ -265,7 +286,7 @@ TEST_CASE("SDFCascade: ground_field and evaluate_cull are made of ground_unit") 
 // The point pass: the level template with the point fill (frame from the item, the unit register out); the chunk pass's
 // text is unchanged (pinned in test_climate_shape.cpp).
 TEST_CASE("CascadeGLSL: the point pass writes the unit register from the item's own frame") {
-    SDFCascade sdf;
+    GroundSDF sdf;
     ChunkParam param;
     param.voxel_size = 0.05f;
     sdf.configure(param, 25);
@@ -293,7 +314,7 @@ TEST_CASE("SDFCascade: the default terrain's bits are pinned") {
         for (const float voxel : { 0.5f, 0.05f }) {
             ChunkParam param;
             param.voxel_size = voxel;
-            SDFCascade sdf;
+            GroundSDF sdf;
             sdf.preset = preset;
             sdf.configure(param, 25);
             const int64_t datum = sdf.get_datum_y();

@@ -3,7 +3,6 @@
 #include "ov/format.hpp"
 
 #include <cmath>
-#include <initializer_list>
 #include <utility>
 
 namespace Archetype {
@@ -103,25 +102,6 @@ ov::str parse_one(const ov::Value &p_d, const ov::str &p_where, Species &r_s) {
 }
 
 } // namespace
-
-std::vector<Species> default_species() {
-    std::vector<Species> list;
-    const char *const TREES[] = { "broadleaf", "slender", "conifer" };
-    for (size_t i = 0; i < tree_species().size(); i++) {
-        Species s;
-        s.name = i < std::size(TREES) ? TREES[i] : ov::format("tree%d", int64_t(i));
-        s.tree = tree_species()[i];
-        list.push_back(s);
-    }
-    for (const bool pillar : { false, true }) {
-        Species s;
-        s.name = pillar ? "pillar" : "boulder";
-        s.kind = Species::ROCK;
-        s.rock.pillar = pillar;
-        list.push_back(s);
-    }
-    return list;
-}
 
 ov::str parse_species(const ov::Value &p_list, std::vector<Species> &r_out) {
     if (!p_list.is_array()) {

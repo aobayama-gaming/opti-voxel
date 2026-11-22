@@ -13,11 +13,13 @@ by `WorldFile` into the table `Terrain::compile` reads, `docs/terrain.md`) shape
 and any nodes over them (shapes, multifractals, mixes, curves, min / max, smooth min / max, constants, fields, `up`). A
 biome lists exactly what it uses: no engine default notes. The compiler (`src/graph_compile.{hpp,cpp}`) turns the
 fields, the weights and every biome's graph into one `Terrain::LevelProgram`: a note is one node whatever biome mixes
-it (identity: octave, seed, stretch, warp), so a biome more costs only the nodes it adds. Without biomes the ground is
-the **template ground** (`SDFCascade::template_path`: `worlds/template_5cm.world.json` and
-`template_50cm.world.json`, the mixer's start for a new biome too): seed 0xEA27, a note per octave from k = 3 (0.4 m at
-5 cm) to the first at the 3.3 km cap (k = 19 at 5 cm: 26.2 km), each 1/8 of its wavelength, mixed as "ground". Notes
-and fields reach lod_count + 4 at most (`Ground::k_max`, the cascade's top: a note past it plays nothing); the fields
+it (identity: octave, seed, stretch, warp), so a biome more costs only the nodes it adds. A world names its biomes
+(without, the cascade refuses it); the bare worlds name the **template ground** (`worlds/ground.biomes.json`,
+`WorldFile::GROUND_BIOMES`, the mixer's start for a new biome too): seed 0xEA27, a note per octave from 0.4 m (k = 3 at
+5 cm) to 26.2 km (k = 19 at 5 cm), each 1/8 of its wavelength, mixed as "ground"; one file at every voxel size (at
+0.5 m its notes take k = 0 .. 16, the three finer than 8 voxels playing nothing). Notes and fields play from k = 3 (8
+voxels) to lod_count + 4 (`Ground::k_max`, the cascade's top): one outside plays nothing, so a world reads at any voxel
+and LOD count; the fields
 placing the biomes (temperature, humidity, wind: 6.5-26 km, under the top LOD like the ground: a world to walk, not
 continents) are macro inputs until the planned macro engine computes them.
 
@@ -73,9 +75,9 @@ macro layer in double on the CPU, `BaseSurface`'s region machinery).
 ## Implementation
 
 - **Parse** (`climate_parse.cpp`, `Climate::parse_layout`): metres to octaves (a field band or a note is one octave,
-  its wavelength's nearest power of two of voxels: finer than 8 voxels is refused; a note past the LOD count's top
-  plays nothing, and so do the octaves of a field band's `from_m` / `to_m` range, so one table covers 15 and 25 LODs,
-  but a field band of a single `wavelength_m` past the top is refused (`validate_field`)), the fields and biomes (places, looks, contents) validated: at most
+  its wavelength's nearest power of two of voxels: a note or a field octave finer than 8 voxels or past the LOD
+  count's top plays nothing, a single `wavelength_m` or a `from_m` / `to_m` range alike, so one table covers 5 cm and
+  0.5 m, 15 and 25 LODs; past the noise's k = 62 is refused), the fields and biomes (places, looks, contents) validated: at most
   `MAX_FIELDS` (24) fields and `MAX_BIOMES` (16) biomes, names unique identifiers, a field's octave listed once and its
   amplitudes in the noise's exact range, terms on earlier fields, the default biome last and alone without a place.
   Each biome's graph is handed to the compiler as JSON; `graph_kinds` (the node catalogue: each kind's keys) is the
@@ -99,7 +101,7 @@ macro layer in double on the CPU, `BaseSurface`'s region machinery).
   *generic* (`Terrain::Mode::GENERIC`), the graph's structure is kept and the GPU text is a fixed interpreter over the
   program's records (`level_glsl.hpp`): its text depends on the op set and the caps only, so any edit, a node added or
   deleted included, compiles nothing (`cascade_test.sh --generic=1` checks the GPU's generic text against the CPU's
-  generic program). The template ground and the flat table are specialised either way: nothing edits them.
+  generic program). The flat table is specialised either way: nothing edits it.
 - **Stretched notes** (a note's `"stretch_y"`; `Band::stretch`, at most k − 3): through the base
   (`BaseSurface::stretched` / `stretch_gradient`), the noise is read at p − (1 − 2^-j) d n and its gradient's up
   component scaled by 2^−j. Flat: datum + (y − datum) / 2^j exactly (GLSL `base_stretched`); sphere: CPU and GLSL with
@@ -181,7 +183,7 @@ computes no terrain and has no node kind the engine hasn't.
   multifractal's `parent` takes any node. `kinds.gd` only holds titles, tooltips and sliders' ranges. A shape
   node plots the engine's phi (`ClimateReportNode.shape`: `Climate::parse_shape`, `shape_phi`) or its refusal; the
   Height curve's editor draws the engine's curve (`ClimateReportNode.curve`). The output edits the biome's `surface`
-  colours. *New graph* is the engine's template biome (`ClimateReportNode.template_biome`: the template world file's) or an output alone; a biome
+  colours. *New graph* is the engine's template biome (`ClimateReportNode.template_biome`: `worlds/ground.biomes.json`'s) or an output alone; a biome
   without its own debug colour gets the parser's name hash (`ClimateReportNode.debug_color`).
 - **Two modes**: *Biome*, the current biome's graph (the picker in the bar) and the view of it alone; *World*, the
   climate chart and the view of the whole world, its biomes' debug colours blended by their weights over the relief.
