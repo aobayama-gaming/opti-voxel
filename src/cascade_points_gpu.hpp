@@ -7,6 +7,7 @@
 
 #include "ov/bytes.hpp"
 
+#include <memory>
 #include <vector>
 
 // The bare cascade at many points on a Device: the cascade passes with point items (CascadePasses::create_points),
@@ -61,7 +62,8 @@ private:
     CascadePasses passes;
     ov::bytes input_bytes;
     uint64_t batch_serial = 0;
-    Delivery delivery;
+    // Shared with the readback's callback: one that comes after this object is gone writes into its own copy.
+    std::shared_ptr<Delivery> delivery = std::make_shared<Delivery>();
     bool async_readback = true; // false once a readback didn't come with its sync: read_buffer
 
     bool _run_batch(const VoxelPos *p_points, const int *p_lods, uint32_t p_count, ExactNoise::Float4 *r_out, BatchStats &r_stats);

@@ -39,8 +39,11 @@ inline constexpr int MAX_FIELDS = 24;
 inline constexpr int MAX_BIOMES = 16;
 // "stretch_y" at most 2^MAX_STRETCH (Band::stretch).
 inline constexpr int MAX_STRETCH = 8;
-// Seed of the pick's tie-break hash (ExactNoise::hash_cell of the lattice point).
+// Seed of the pick's draw (ExactNoise::hash_cell of the lattice point) and its unit: the hash's top PICK_BITS bits
+// times PICK_UNIT, a uniform in [0, 1) exact in float32.
 inline constexpr uint32_t PICK_SEED = 0xB10E5u;
+inline constexpr int PICK_BITS = 24;
+inline constexpr float PICK_UNIT = 1.0f / float(1u << PICK_BITS);
 
 // coef * the value of an earlier field (`source`, its index).
 struct Term {
@@ -243,9 +246,11 @@ Float4 axis_factor(const Axis &p_axis, const Float4 &p_x);
 Float4 fill(const Float4 &p_x);
 Float4 blend_rcp(const Float4 &p_s);
 Float4 blend_weight(const Float4 &p_k, const Float4 &p_rcp);
-// The index of the largest of the p_count weights p_w (at most MAX_BIOMES) at lattice point p_p of Λ_m; among equal
-// weights (same bits), the (hash % count)-th in list order, hash = ExactNoise::hash_cell(the point's LOD0 voxel,
-// PICK_SEED): the same from every LOD that has the point (the op table's PICK).
+// A biome drawn by the p_count weights p_w (at most MAX_BIOMES) at lattice point p_p of Λ_m (a dithered pick: where
+// two biomes blend 70 / 30, 70% of the points are the first): with t = u * T, u = the top PICK_BITS bits of
+// ExactNoise::hash_cell(the point's LOD0 voxel, PICK_SEED) times PICK_UNIT and T the sum of the positive weights, the
+// first biome whose running sum of positive weights (in list order) is over t, else the last positive one (0 if none);
+// -1 for no weights. The same from every LOD that has the point (the op table's PICK).
 int pick_of(int p_count, const Float4 *p_w, const Vector3i64 &p_p, int p_m);
 // The op table's UP at a sample of LOD p_lod from the base's register there (BaseSurface::at: in voxels of the LOD), in
 // LOD0 voxels: exact (a power of two).

@@ -179,24 +179,24 @@ TEST_CASE("BaseRegions: the sphere's base_at GLSL names the bindings and the swi
     CHECK(!ov::contains(g, "SLOTS"));
 }
 
-TEST_CASE("SDFCascade::planet_base: a large planet raises its switch LOD instead of being refused") {
-    const BaseSurface earth = SDFCascade::planet_base(6371000.0, 0.05);
+TEST_CASE("BaseSurface::planet: a large planet raises its switch LOD instead of being refused") {
+    const BaseSurface earth = BaseSurface::planet(6371000.0, 0.05);
     CHECK(earth.kind() == BaseSurface::Kind::SPHERE);
     CHECK(earth.get_switch_lod() == BaseSurface::SWITCH_LOD);
-    const BaseSurface jupiter = SDFCascade::planet_base(69911000.0, 0.05);
+    const BaseSurface jupiter = BaseSurface::planet(69911000.0, 0.05);
     CHECK(jupiter.kind() == BaseSurface::Kind::SPHERE);
     CHECK(jupiter.get_switch_lod() > BaseSurface::SWITCH_LOD);
-    CHECK(SDFCascade::planet_base(6371000.0, 0.005).kind() == BaseSurface::Kind::SPHERE); // Earth at 5 mm
+    CHECK(BaseSurface::planet(6371000.0, 0.005).kind() == BaseSurface::Kind::SPHERE); // Earth at 5 mm
 }
 
-TEST_CASE("SDFCascade::planet_base: a small planet lowers its switch LOD, down to the radius form alone") {
+TEST_CASE("BaseSurface::planet: a small planet lowers its switch LOD, down to the radius form alone") {
     // 50 km at 5 cm: 10^6 voxels, the curvature form below LOD 5 (its regions 64 * 2^4 voxels, 51 m).
-    const BaseSurface moon = SDFCascade::planet_base(50000.0, 0.05);
+    const BaseSurface moon = BaseSurface::planet(50000.0, 0.05);
     CHECK(moon.kind() == BaseSurface::Kind::SPHERE);
     CHECK(moon.get_switch_lod() == 5);
     // 2 km: 40,000 voxels, the curvature form at LOD 0 only; 100 m: the radius form alone.
     for (const auto &[radius_m, switch_lod] : { std::pair{ 2000.0, 1 }, std::pair{ 100.0, 0 } }) {
-        const BaseSurface tiny = SDFCascade::planet_base(radius_m, 0.05);
+        const BaseSurface tiny = BaseSurface::planet(radius_m, 0.05);
         CHECK(tiny.kind() == BaseSurface::Kind::SPHERE);
         CHECK(tiny.get_switch_lod() == switch_lod);
         // The radius form at the switch next to the pole: |p| - R within a few float steps of the radius.
@@ -225,39 +225,67 @@ TEST_CASE("SDFCascade: a planet's relief is capped at PLANET_RELIEF of its radiu
     CHECK(max_amp(2000.0, "res://worlds/tiny.world.json") <= SDFCascade::PLANET_RELIEF / SDFCascade::PLANET_HEADROOM * 2000.0 / 0.05);
 }
 
+// p_sdf configured at 5 cm and 16 LODs on a planet of p_radius_m (a torus round p_ring_m > 0) with p_path's climate
+// (none: null).
+static void configure_planet(SDFCascade &r_sdf, const char *p_path, double p_radius_m, double p_ring_m = 0.0) {
+    if (p_path != nullptr) {
+        CHECK(load_table(p_path, r_sdf.climate_data) == ov::str());
+    }
+    r_sdf.planet_radius_m = p_radius_m;
+    r_sdf.planet_ring_m = p_ring_m;
+    ChunkParam param;
+    param.voxel_size = 0.05f;
+    r_sdf.configure(param, 16);
+}
+
 TEST_CASE("SDFCascade: on a 2 km planet its own ground fits its relief; the template's and the example's metres don't") {
-    auto configured = [](SDFCascade &r_sdf, const char *p_path) {
-        if (p_path != nullptr) {
-            CHECK(load_table(p_path, r_sdf.climate_data) == ov::str());
-        }
-        r_sdf.planet_radius_m = 2000.0;
-        ChunkParam param;
-        param.voxel_size = 0.05f;
-        r_sdf.configure(param, 16);
-        CHECK((r_sdf.get_climate() != nullptr) == (p_path != nullptr && r_sdf.get_climate_error().empty()));
-    };
     // tiny.world.json: the template's octaves stopped under the relief, the program's output bound within the 62.5 m cap.
     SDFCascade tiny;
-    configured(tiny, "res://worlds/tiny.world.json");
-    CHECK(tiny.get_climate_error() == ov::str());
+    configure_planet(tiny, "res://worlds/tiny.world.json", 2000.0);
+    CHECK(tiny.get_world_error() == ov::str());
+    CHECK(tiny.get_climate() != nullptr);
     const Terrain::LevelProgram &prog = tiny.program();
     const size_t out = size_t(prog.output);
     CHECK(ov::max(std::fabs(prog.lo[out]), std::fabs(prog.hi[out])) <= SDFCascade::PLANET_RELIEF * 2000.0 / 0.05);
     CHECK(ClimateTest::note_top_k(prog) == 16);
-    // The template itself (no climate): refused over the cap, a flat ground.
+    // The template itself (no climate): refused over the cap, a flat ground; not a world error (none was asked for).
     SDFCascade bare;
-    configured(bare, nullptr);
+    configure_planet(bare, nullptr, 2000.0);
     CHECK(ClimateTest::note_count(bare.program()) == 0);
-    // The example's mountains (km of relief): more than the planet's 62.5 m.
+    CHECK(bare.get_world_error() == ov::str());
+    // The example's mountains (km of relief): more than the planet's 62.5 m, the world error (World::start refuses it).
     SDFCascade example;
-    configured(example, "res://climate/example.json");
-    CHECK(example.get_climate_error().find("over the cap") != ov::str::npos);
+    configure_planet(example, "res://climate/example.json", 2000.0);
+    CHECK(example.get_climate() == nullptr);
+    CHECK(ov::contains(example.get_world_error(), "over the cap"));
+}
+
+TEST_CASE("SDFCascade: a refused planet is a world error, never a silent flat world") {
+    // A torus whose ring is its tube (under BaseSurface::MIN_RING_TUBES): it used to open as the flat datum, ok.
+    SDFCascade torus;
+    configure_planet(torus, nullptr, 2000.0, 2000.0);
+    CHECK_FALSE(torus.get_base().curved());
+    CHECK(ov::contains(torus.get_world_error(), "the planet (radius 2000 m, ring 2000 m)"));
+    CHECK(ov::contains(torus.get_world_error(), "ring must be at least"));
+    ov::str refusal;
+    CHECK(BaseSurface::planet(2000.0, 0.05, 2000.0, &refusal).kind() == BaseSurface::Kind::FLAT);
+    CHECK(ov::contains(refusal, "ring must be at least"));
+    // A sphere past 2^60 voxels.
+    SDFCascade huge;
+    configure_planet(huge, nullptr, 1e20);
+    CHECK(ov::contains(huge.get_world_error(), "the radius must be in"));
+    // An accepted torus, and a refused planet reconfigured flat: no error left.
+    configure_planet(torus, nullptr, 2000.0, 6000.0);
+    CHECK(torus.get_base().kind() == BaseSurface::Kind::TORUS);
+    CHECK(torus.get_world_error() == ov::str());
+    configure_planet(huge, nullptr, 0.0);
+    CHECK(huge.get_world_error() == ov::str());
 }
 
 TEST_CASE("BaseSurface::on_base: the base's point along the up, on any side of a planet") {
     const BaseSurface flat = BaseSurface::flat(1234);
     CHECK(flat.on_base(VoxelPos(-5, 99999, 7)) == VoxelPos(-5, 1234, 7));
-    const BaseSurface planet = SDFCascade::planet_base(2000.0, 0.05);
+    const BaseSurface planet = BaseSurface::planet(2000.0, 0.05);
     for (const VoxelPos p : { VoxelPos(100000, 3, -2), VoxelPos(-7, -90000, 11), VoxelPos(5000, 6000, -39000), VoxelPos(0, 0, 0) }) {
         const VoxelPos b = planet.on_base(p);
         CHECK(std::fabs(planet.altitude(b)) <= 1.0);

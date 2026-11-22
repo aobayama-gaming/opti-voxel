@@ -117,10 +117,7 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
     sdf->set_features(content.features);
     sdf->planet_radius_m = planet_radius_m(config, content);
     sdf->planet_ring_m = content.planet_ring_m;
-    if (content.planet_ring_m > 0.0 && !(content.planet_radius_m > 0.0)) {
-        OV_ERR_PRINT("World: ring_m needs radius_m (the tube): the flat world.");
-    }
-    sdf->climate_data = content.climate_table; // parsed and checked by configure() (an ERR there: no climate)
+    sdf->climate_data = content.climate_table; // parsed and checked by configure() (get_world_error)
     sdf->specialize = config.specialize_shaders;
     sdf->set_instance_band(config.archetype_band && config.terrain_mode != 4); // the gallery: a crease test at every LOD, never eroded
     sdf->set_moment_blobs(config.archetype_moments);
@@ -135,6 +132,12 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
     {
         OV_TRACE("world", "start_configure");
         sdf->configure(chunk_param, lod_numbers);
+    }
+    // A refused planet or climate configures another world (the flat datum, the template ground): not the one asked for.
+    if (const str err = sdf->get_world_error(); !err.empty()) {
+        OV_ERR_PRINT("World: " + err + ": the world isn't started.");
+        started = false;
+        return false;
     }
     sdf->set_walk_verify(config.walk_verify);
     if (config.walk_gpu) {
@@ -566,7 +569,8 @@ ChunkId World::start_origin() const {
 
 BaseSurface World::settings_planet() const {
     const double radius = planet_radius_m(config, content);
-    return radius > 0.0 ? SDFCascade::planet_base(radius, double(config.chunk_param.voxel_size), content.planet_ring_m)
+    ov::str refusal; // the configure's world error: start() says it once
+    return radius > 0.0 ? BaseSurface::planet(radius, double(config.chunk_param.voxel_size), content.planet_ring_m, &refusal)
                         : BaseSurface();
 }
 

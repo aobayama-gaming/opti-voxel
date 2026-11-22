@@ -64,23 +64,31 @@ int Table::field_index(const ov::str &p_name) const {
     return -1;
 }
 int pick_of(int p_count, const Float4 *p_w, const Vector3i64 &p_p, int p_m) {
-    int best[MAX_BIOMES];
-    int count = 0;
-    for (int b = 0; b < p_count; b++) {
-        if (count > 0 && ExactNoise::float_bits(p_w[b].w) == ExactNoise::float_bits(p_w[best[0]].w)) {
-            best[count++] = b;
-        } else if (count == 0 || p_w[b].w > p_w[best[0]].w) {
-            best[0] = b;
-            count = 1;
-        }
-    }
-    if (count == 0) {
+    if (p_count <= 0) {
         return -1;
     }
-    // The absolute voxel: the same point seen from two LODs breaks a tie the same way.
+    // Subdivided weights can overshoot below 0: only the positive ones draw.
+    float total = 0.0f;
+    for (int b = 0; b < p_count; b++) {
+        total += ov::max(p_w[b].w, 0.0f);
+    }
+    // The absolute voxel: the same point seen from two LODs draws the same.
     const int64_t step = int64_t(1) << p_m;
     const Vector3i64 voxel(p_p.x * step, p_p.y * step, p_p.z * step);
-    return best[ExactNoise::hash_cell(voxel, PICK_SEED) % uint32_t(count)];
+    const float u = float(ExactNoise::hash_cell(voxel, PICK_SEED) >> (32 - PICK_BITS)) * PICK_UNIT;
+    const float t = u * total;
+    float sum = 0.0f;
+    int last = 0;
+    for (int b = 0; b < p_count; b++) {
+        if (p_w[b].w > 0.0f) {
+            sum += p_w[b].w;
+            last = b;
+            if (t < sum) {
+                return b;
+            }
+        }
+    }
+    return last;
 }
 
 double shape_phi(const Shape &p_shape, double p_n) {

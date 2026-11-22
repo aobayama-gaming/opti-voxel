@@ -53,8 +53,11 @@ continents) are macro inputs until the planned macro engine computes them.
      `smin(mix, up - C)`, `docs/caves.md`).
    Blend factoring (specialised only) takes a node every biome's output has alike out of the weights' products:
    the same ground up to the weights' normalisation error.
-4. **The pick**: the biome with the largest weight (ties by a hash of the absolute voxel, `Climate::pick_of`) gives the
-   sample its material (`biome_material`: the procedural ground in the biome's colours).
+4. **The pick**: a biome drawn by the weights with a hash of the absolute voxel (`Climate::pick_of`, a dithered
+   pick) gives the sample its material (`biome_material`: the procedural ground in the biome's colours). Where two
+   biomes blend 70 / 30, 70% of the samples are the first: the ground's colours mix over the blend like grass
+   thinning into sand, at the cost of one material per sample (smooth colour blends measured +2.2 ms,
+   `docs/materials.md`). Was the largest weight, which cut every colour border sharp even where the heights blend.
 
 The **LOD rule**: a node's level is the level of the finest note it reads (note k on Λ_{k-3}, 8 samples per
 wavelength); it is computed on that lattice from its inputs there and Hermite-subdivided below, the pick copied from
@@ -70,8 +73,9 @@ macro layer in double on the CPU, `BaseSurface`'s region machinery).
 ## Implementation
 
 - **Parse** (`climate_parse.cpp`, `Climate::parse_layout`): metres to octaves (a field band or a note is one octave,
-  its wavelength's nearest power of two of voxels: finer than 8 voxels is refused, past the LOD count's top it plays
-  nothing, so one table covers 15 and 25 LODs), the fields and biomes (places, looks, contents) validated: at most
+  its wavelength's nearest power of two of voxels: finer than 8 voxels is refused; a note past the LOD count's top
+  plays nothing, and so do the octaves of a field band's `from_m` / `to_m` range, so one table covers 15 and 25 LODs,
+  but a field band of a single `wavelength_m` past the top is refused (`validate_field`)), the fields and biomes (places, looks, contents) validated: at most
   `MAX_FIELDS` (24) fields and `MAX_BIOMES` (16) biomes, names unique identifiers, a field's octave listed once and its
   amplitudes in the noise's exact range, terms on earlier fields, the default biome last and alone without a place.
   Each biome's graph is handed to the compiler as JSON; `graph_kinds` (the node catalogue: each kind's keys) is the

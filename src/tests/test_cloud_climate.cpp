@@ -50,7 +50,7 @@ TEST_CASE("Climate: a biome's clouds parse, out of range or unknown keys are ref
     for (const char *bad : { R"({"cover": 1.5, "type": 0.5})", R"({"cover": 0.5})", R"({"cover": 0.5, "type": 0.5, "height": 1})" }) {
         ClimateSDF refused(example_with_clouds(bad), 15);
         CHECK(refused.sdf.get_climate() == nullptr);
-        CHECK_FALSE(refused.sdf.get_climate_error().empty());
+        CHECK_FALSE(refused.sdf.get_world_error().empty());
     }
     ClimateSDF none("res://climate/example.json", 15);
     CHECK_OR_RETURN(none.sdf.get_climate() != nullptr);

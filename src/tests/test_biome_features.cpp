@@ -131,7 +131,7 @@ TEST_CASE("Biome: a cell's site is the same from any box, on the flat datum in t
 
 TEST_CASE("Biome: on a planet, sites are on the base, one per cell, the same from any box, all round") {
     const double voxel = 0.5;
-    const BaseSurface planet = SDFCascade::planet_base(20000.0, voxel); // 20 km: 40,000 voxels
+    const BaseSurface planet = BaseSurface::planet(20000.0, voxel); // 20 km: 40,000 voxels
     CHECK(planet.kind() == BaseSurface::Kind::SPHERE);
     if (!(planet.kind() == BaseSurface::Kind::SPHERE)) {
         return;
@@ -222,7 +222,7 @@ TEST_CASE("Biome: a lava lake on flat ground is a flat lava surface below the ri
 TEST_CASE("Biome: a lava lake 90 degrees round a planet stands on its up, the y axis level there") {
     const double voxel = 0.05;
     const BiomeLibrary lib(voxel);
-    const BaseSurface planet = SDFCascade::planet_base(2000.0, voxel); // 2 km
+    const BaseSurface planet = BaseSurface::planet(2000.0, voxel); // 2 km
     CHECK(planet.kind() == BaseSurface::Kind::SPHERE);
     if (!(planet.kind() == BaseSurface::Kind::SPHERE)) {
         return;

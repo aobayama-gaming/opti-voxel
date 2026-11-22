@@ -232,7 +232,7 @@ private:
     // origin; a rebase then moves that one by even ids only (ChunkMath::recentered_origin), so render-relative Morton keys
     // are no longer root-aligned after one.
     ChunkId start_origin() const;
-    // The settings' planet base (SDFCascade::planet_base), the default flat one without a planet: what start() configures.
+    // The settings' planet base (BaseSurface::planet), the default flat one without a planet: what start() configures.
     BaseSurface settings_planet() const;
     int64_t rebases = 0;
     bool has_camera = false;

@@ -1,5 +1,6 @@
 #include "world_file.hpp"
 
+#include "base_surface.hpp"
 #include "chunk_math.hpp"
 
 #include "ov/files.hpp"
@@ -126,6 +127,19 @@ ov::str WorldFile::parse(const ov::Value &p_data, const ov::str &p_dir, WorldFil
     }
     w.planet_radius_m = planet.get("radius_m", w.planet_radius_m).as_double();
     w.planet_ring_m = planet.get("ring_m", w.planet_ring_m).as_double();
+    if (!(w.planet_radius_m >= 0.0 && std::isfinite(w.planet_radius_m)) || !(w.planet_ring_m >= 0.0 && std::isfinite(w.planet_ring_m))) {
+        return "world: planet: radius_m and ring_m must be finite and >= 0.";
+    }
+    if (w.planet_ring_m > 0.0 && !(w.planet_radius_m > 0.0)) {
+        return "world: planet: ring_m needs radius_m (the torus's tube).";
+    }
+    if (w.planet_radius_m > 0.0) {
+        ov::str refusal;
+        BaseSurface::planet(w.planet_radius_m, w.voxel_m, w.planet_ring_m, &refusal);
+        if (!refusal.empty()) {
+            return "world: planet: " + refusal;
+        }
+    }
     w.atmosphere = look.get("atmosphere", w.atmosphere).as_bool();
     w.atmosphere_scale = look.get("atmosphere_scale", w.atmosphere_scale).as_double();
     w.clouds = look.get("clouds", w.clouds).as_bool();

@@ -554,23 +554,40 @@ TEST_CASE("Climate: a biome is whole at its centre and gone a span away, overlap
     CHECK(w[2].w > 0.0f);
     CHECK(w[1].w == 0.0f);
     CHECK(std::fabs(double(w[0].w) + double(w[2].w) - 1.0) < 1e-6);
-    // At 0 the two kernels are the same bits: hot and cold tie, the hash chooses.
-    at(0.0f, w);
-    CHECK(float_bits(w[0].w) == float_bits(w[1].w));
-    CHECK(w[0].w > w[2].w);
-    // The tie goes by ExactNoise::hash_cell of the point's LOD0 voxel, high words included: the same point gives the
-    // same pick from every lattice that has it.
-    int seen[2] = { 0, 0 };
-    for (int64_t i = 0; i < 16; i++) {
-        const Vector3i64 p(i, -i, i * (int64_t(1) << 33) + 1);
-        const int got = pick(t, w, p, 5);
-        CHECK(got == int(ExactNoise::hash_cell(Vector3i64(p.x * 32, p.y * 32, p.z * 32), PICK_SEED) % 2u));
-        CHECK(pick(t, w, Vector3i64(p.x * 2, p.y * 2, p.z * 2), 4) == got);
-        CHECK(pick(t, w, Vector3i64(p.x * 32, p.y * 32, p.z * 32), 0) == got);
-        seen[got]++;
+    // Where biomes blend, the pick is drawn by their weights (dithered): ExactNoise::hash_cell of the point's LOD0
+    // voxel, high words included, so the same point gives the same pick from every lattice that has it.
+    const float xs_blend[] = { 0.0f, 0.2f, 1.1f };
+    for (float x : xs_blend) {
+        CAPTURE(x);
+        at(x, w);
+        int seen[3] = { 0, 0, 0 };
+        const int n = 4096;
+        for (int64_t i = 0; i < n; i++) {
+            const Vector3i64 p(i, -i, i * (int64_t(1) << 33) + 1);
+            const int got = pick(t, w, p, 5);
+            const uint32_t h = ExactNoise::hash_cell(Vector3i64(p.x * 32, p.y * 32, p.z * 32), PICK_SEED);
+            const float u = float(h >> (32 - PICK_BITS)) * PICK_UNIT * (w[0].w + w[1].w + w[2].w);
+            // w[0] is positive at every x here; past the sum the last positive weight takes the point.
+            const int expect_pick = u < w[0].w ? 0 : (w[1].w > 0.0f && (u < w[0].w + w[1].w || w[2].w <= 0.0f)) ? 1
+                                                                                                                : 2;
+            CHECK(got == expect_pick);
+            CHECK(pick(t, w, Vector3i64(p.x * 2, p.y * 2, p.z * 2), 4) == got);
+            CHECK(pick(t, w, Vector3i64(p.x * 32, p.y * 32, p.z * 32), 0) == got);
+            seen[got]++;
+        }
+        // Each biome's share of the points is its weight, within 4 sigma; a biome of weight 0 is never drawn.
+        for (int b = 0; b < 3; b++) {
+            CAPTURE(b);
+            const double share = double(seen[b]) / n, sigma = std::sqrt(double(w[b].w) * (1.0 - double(w[b].w)) / n);
+            CHECK(std::fabs(share - double(w[b].w)) <= 4.0 * sigma + 1e-9);
+        }
     }
-    CHECK(seen[0] > 0);
-    CHECK(seen[1] > 0);
+    // A negative weight (a subdivision's overshoot) never draws; no weights, no biome.
+    const Float4 neg[2] = { Float4{ 0.0f, 0.0f, 0.0f, -0.01f }, Float4{ 0.0f, 0.0f, 0.0f, 1.0f } };
+    for (int64_t i = 0; i < 64; i++) {
+        CHECK(pick_of(2, neg, Vector3i64(i, 0, 0), 0) == 1);
+    }
+    CHECK(pick_of(0, neg, Vector3i64(), 0) == -1);
 }
 
 // Several notes on one lattice (two seeds of one octave) are each inserted: box runs equal point queries bit for bit,
