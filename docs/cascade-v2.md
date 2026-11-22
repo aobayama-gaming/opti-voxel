@@ -61,8 +61,13 @@ Consequences that the parser stops refusing:
   A biome's weight `w_b` is a node: its `at` kernels and the default biome's `(1 − Σk)²`, normalised (`docs/climate.md`,
   Weights). The ground is `Σ_b w_b · out_b`, where `out_b` is biome b's graph output. The weights' level is their
   fields' (coarse: 6.5–26 km notes), so the climate is computed a few times per chunk and subdivided, like today's carry.
+  A blend is therefore never sharper than that level's lattice (a field's finest band / 8: 51.2 m for a 409.6 m band):
+  a finer band, even of a small amplitude, moves the weights finer (sharper and more organic borders, more channels).
 - **the pick** (the sample's biome: material, species, features) is a discrete node: the largest weight, ties by
-  `hash_cell`. It is carried by copy (the floor parent's value, today's `copied_carry`), never Hermite-subdivided.
+  `hash_cell`. It is computed on the finest level any note is (`Graph::pick_level`), from the weights subdivided there,
+  and carried by copy below it (the floor parent's value), never Hermite-subdivided: a border is the weights' smooth
+  contour, stepped by the terrain's own finest lattice (on the weights' level it was their cells: 51.2 m squares). The
+  levels below the finest note still compute nothing (`fine_cut`).
 
 ### Format changes (world files)
 
