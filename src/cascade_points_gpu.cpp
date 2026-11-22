@@ -111,8 +111,7 @@ bool CascadePointsGPU::_run_batch(const VoxelPos *p_points, const int *p_lods, u
     const int64_t bytes = int64_t(p_count) * int64_t(sizeof(ExactNoise::Float4));
     const bool queued = async_readback;
     if (queued) {
-        Delivery *to = &delivery;
-        device->read_buffer_async(values, 0, uint64_t(bytes), [to, batch](const ov::bytes &p_data) {
+        device->read_buffer_async(values, 0, uint64_t(bytes), [to = delivery, batch](const ov::bytes &p_data) {
             to->bytes = p_data;
             to->serial = batch;
         });
@@ -139,8 +138,8 @@ bool CascadePointsGPU::_run_batch(const VoxelPos *p_points, const int *p_lods, u
     }
 
     ov::bytes out;
-    if (queued && delivery.serial == batch) {
-        out = std::move(delivery.bytes);
+    if (queued && delivery->serial == batch) {
+        out = std::move(delivery->bytes);
     } else {
         if (queued) {
             OV_WARN_PRINT("CascadePointsGPU: the readback didn't come with the sync: read_buffer from now on.");

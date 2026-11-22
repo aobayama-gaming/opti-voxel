@@ -423,15 +423,6 @@ ov::str relief_section(const Table &p_table, const Sampled &p_s, int p_n, double
 
 } // namespace
 
-// The cascade of a voxel size and LOD count on a climate table (parsed JSON): empty, or why the table was refused.
-static ov::str configure(SDFCascade &r_sdf, const ov::Value &p_data, double p_voxel_size, int p_lods) {
-    ChunkParam param;
-    param.voxel_size = float(p_voxel_size);
-    r_sdf.climate_data = p_data;
-    r_sdf.configure(param, p_lods);
-    return r_sdf.get_climate_error();
-}
-
 // The lattice whose p_n points span about p_extent_km (at least Λ_0).
 static int slice_lattice(double p_extent_km, int p_n, double p_voxel_size) {
     return ov::max(0, int(std::floor(std::log2(p_extent_km * 1000.0 / p_n / p_voxel_size))));
@@ -440,12 +431,8 @@ static int slice_lattice(double p_extent_km, int p_n, double p_voxel_size) {
 // A world's cascade, configured on its climate over its base (a planet's: its curvature, its relief caps): empty, or why
 // it has none to sample.
 static ov::str load_climate(const WorldFile &p_world, SDFCascade &r_sdf) {
-    if (p_world.planet_ring_m > 0.0 && !(p_world.planet_radius_m > 0.0)) {
-        return "world: a planet's ring_m needs radius_m (the game runs it flat)."; // World::start's refusal
-    }
-    r_sdf.planet_radius_m = p_world.planet_radius_m;
-    r_sdf.planet_ring_m = p_world.planet_ring_m;
-    const ov::str err = configure(r_sdf, p_world.climate_table, p_world.voxel_m, p_world.lods);
+    ChunkParam param;
+    const ov::str err = r_sdf.configure_world(p_world, param);
     return err.empty() && r_sdf.get_climate() == nullptr ? ov::str("climate: the world has no fields and biomes.") : err;
 }
 

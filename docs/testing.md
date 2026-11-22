@@ -29,7 +29,8 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
   GPU cascade passes vs `Terrain::run` (the world's `LevelProgram`), every channel of every level (read back level by level) and the
   `sdf_sample` of 64+ chunks per LOD 0-24 near 0, +-2^60 and across 2^32 boundaries, in mixed-LOD batches,
   the bare ground `4` and `4c` (the example climate at 5 cm; `4f` its biomes on the template's notes with their curves),
-  each set a world file, voxel and LODs from its engine (G1); the LOD relation on the GPU outputs (G3: at the copy
+  each set a world file, voxel and LODs from its engine (G1; a set whose file doesn't load or whose climate or planet
+  is refused, an unknown label or an empty `--sets` fails the run before any check, and a level not compared counts as differing); the LOD relation on the GPU outputs (G3: at the copy
   points of each chunk's Λ_L, the GPU's Λ_{L+1} channels copied and flushed, then `last_code(L)` on the CPU, against the
   GPU's output and pick); `--generic=1` runs every check on the generic text; the discoverer's point items vs
   `Terrain::point` + `SDFCascade::sdf`, 5,120 corners per LOD (`--points`, D1); the meshers' samples of a cascade

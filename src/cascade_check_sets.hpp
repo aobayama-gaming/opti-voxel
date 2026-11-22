@@ -7,6 +7,7 @@
 #include "ov/value.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <iterator>
 #include <utility>
 #include <vector>
@@ -48,7 +49,7 @@ inline ov::str set_label(SpikeSet p_v) {
     return SET_LABELS[int(base_set(p_v))] + ov::str(int(p_v) & GENERIC ? " generic" : "");
 }
 
-// False (and an error) for an unknown label.
+// False for an unknown label.
 inline bool parse_variant(const ov::str &p_label, SpikeSet &r_set) {
     for (int i = 0; i < int(std::size(SET_LABELS)); i++) {
         if (p_label == SET_LABELS[i]) {
@@ -56,11 +57,38 @@ inline bool parse_variant(const ov::str &p_label, SpikeSet &r_set) {
             return true;
         }
     }
-    ov::str labels;
-    for (const char *l : SET_LABELS) {
-        labels += ov::str(labels.empty() ? "" : ", ") + l;
+    return false;
+}
+
+// The sets of a comma-separated list of labels (whitespace round each ignored, empty items skipped), each with p_generic's
+// bit (0 or GENERIC): empty, or why the list is refused (an unknown label, or no set at all: a check of nothing).
+inline ov::str parse_sets(const ov::str &p_labels, int p_generic, std::vector<SpikeSet> &r_sets) {
+    r_sets.clear();
+    for (size_t from = 0; from <= p_labels.size();) {
+        const size_t comma = std::min(p_labels.find(',', from), p_labels.size());
+        size_t lo = from;
+        size_t hi = comma;
+        while (lo < hi && std::isspace(static_cast<unsigned char>(p_labels[lo]))) {
+            lo++;
+        }
+        while (hi > lo && std::isspace(static_cast<unsigned char>(p_labels[hi - 1]))) {
+            hi--;
+        }
+        from = comma + 1;
+        if (lo == hi) {
+            continue;
+        }
+        SpikeSet set;
+        if (!parse_variant(p_labels.substr(lo, hi - lo), set)) {
+            ov::str labels;
+            for (const char *l : SET_LABELS) {
+                labels += ov::str(labels.empty() ? "" : ", ") + l;
+            }
+            return "unknown set '" + p_labels.substr(lo, hi - lo) + "' (" + labels + ").";
+        }
+        r_sets.push_back(SpikeSet(int(set) | p_generic));
     }
-    OV_ERR_FAIL_V_MSG(false, "CascadeSpike: unknown set '" + p_label + "' (" + labels + ").");
+    return r_sets.empty() ? ov::str("no set to check in '" + p_labels + "'.") : ov::str();
 }
 
 // The median of timings (0 for none).
@@ -100,18 +128,27 @@ inline ov::str set_world(SpikeSet p_v, const ov::str &p_world) {
     }
 }
 
-// p_sdf configured for p_v (r_param: the variant's chunk parameters); returns its LOD count.
-inline int configure_variant(SDFCascade &p_sdf, SpikeSet p_v, const ov::str &p_world, ChunkParam &r_param) {
+// p_sdf configured for p_v (r_param: the variant's chunk parameters); returns its LOD count. r_error: why the set has no
+// world to run on, empty if it has one (its file refused, the template 4f needs, or a planet or climate the cascade
+// refused: SDFCascade::get_world_error); without r_error that is an ERR. CascadeCheck::run fails on it before any check.
+inline int configure_variant(SDFCascade &p_sdf, SpikeSet p_v, const ov::str &p_world, ChunkParam &r_param, ov::str *r_error = nullptr) {
+    auto failed = [&](const ov::str &p_error) {
+        if (r_error != nullptr) {
+            *r_error = p_error;
+        } else if (!p_error.empty()) {
+            OV_ERR_PRINT("CascadeCheck: set " + set_label(p_v) + ": " + p_error);
+        }
+        return !p_error.empty();
+    };
     WorldFile world;
-    const ov::str err = WorldFile::load(set_world(p_v, p_world), world);
-    if (!err.empty()) {
-        OV_ERR_PRINT("CascadeSpike: " + err + " (the set runs on the default world)");
+    if (failed(WorldFile::load(set_world(p_v, p_world), world))) {
+        return 0;
     }
-    r_param.voxel_size = float(world.voxel_m);
-    p_sdf.planet_radius_m = world.planet_radius_m;
-    p_sdf.planet_ring_m = world.planet_ring_m;
     ov::Value ground;
-    if (base_set(p_v) == SpikeSet::L4F && err.empty() && SDFCascade::template_table(world.voxel_m, ground).empty()) {
+    if (base_set(p_v) == SpikeSet::L4F) {
+        if (failed(SDFCascade::template_table(world.voxel_m, ground))) {
+            return 0;
+        }
         // Every biome on the template's notes (every biome alike: blend factoring takes them out of the weights), its
         // curve kept (the fields carried).
         ov::Value &biomes = world.climate_table["biomes"];
@@ -133,9 +170,8 @@ inline int configure_variant(SDFCascade &p_sdf, SpikeSet p_v, const ov::str &p_w
             biomes.at(i)["graph"] = graph;
         }
     }
-    p_sdf.climate_data = world.climate_table;
     p_sdf.specialize = (int(p_v) & GENERIC) == 0;
-    p_sdf.configure(r_param, world.lods);
+    failed(p_sdf.configure_world(world, r_param));
     return world.lods;
 }
 

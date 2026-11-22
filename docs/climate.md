@@ -70,8 +70,9 @@ macro layer in double on the CPU, `BaseSurface`'s region machinery).
 ## Implementation
 
 - **Parse** (`climate_parse.cpp`, `Climate::parse_layout`): metres to octaves (a field band or a note is one octave,
-  its wavelength's nearest power of two of voxels: finer than 8 voxels is refused, past the LOD count's top it plays
-  nothing, so one table covers 15 and 25 LODs), the fields and biomes (places, looks, contents) validated: at most
+  its wavelength's nearest power of two of voxels: finer than 8 voxels is refused; a note past the LOD count's top
+  plays nothing, and so do the octaves of a field band's `from_m` / `to_m` range, so one table covers 15 and 25 LODs,
+  but a field band of a single `wavelength_m` past the top is refused (`validate_field`)), the fields and biomes (places, looks, contents) validated: at most
   `MAX_FIELDS` (24) fields and `MAX_BIOMES` (16) biomes, names unique identifiers, a field's octave listed once and its
   amplitudes in the noise's exact range, terms on earlier fields, the default biome last and alone without a place.
   Each biome's graph is handed to the compiler as JSON; `graph_kinds` (the node catalogue: each kind's keys) is the

@@ -78,6 +78,11 @@ TEST_CASE("WorldFile: a refused file leaves the world untouched and says why") {
     CHECK(ov::contains(parse(R"({"engine": {"lods": 32}})", w), "lods must be"));
     CHECK(ov::contains(parse(R"({"engine": {"lods": 0}})", w), "lods must be"));
     CHECK(ov::contains(parse(R"({"planet": {"radius_m": "6371000"}})", w), "not a number"));
+    CHECK(ov::contains(parse(R"({"planet": {"ring_m": 9000}})", w), "ring_m needs radius_m")); // was a flat world
+    CHECK(ov::contains(parse(R"({"planet": {"radius_m": -2000}})", w), "must be finite and >= 0"));
+    CHECK(ov::contains(parse(R"({"planet": {"radius_m": 1e999}})", w), "must be finite and >= 0"));
+    CHECK(ov::contains(parse(R"({"planet": {"radius_m": 2000, "ring_m": 2000}})", w), "ring must be at least")); // was a flat world
+    CHECK(ov::contains(parse(R"({"planet": {"radius_m": 1e20}})", w), "the radius must be in"));
     CHECK(ov::contains(WorldFile::load("res://worlds/does_not_exist.json", w), "cannot read"));
     CHECK(w.lods == 3);
 }
@@ -108,13 +113,20 @@ TEST_CASE("WorldFile: an empty object is the default world") {
     CHECK(w.lods == 15);
 }
 
-TEST_CASE("WorldFile: the project's worlds load") {
+// World::start refuses a world whose planet or climate the cascade refuses (SDFCascade::get_world_error): every shipped
+// world, and every CascadeCheck set's, loads and configures as itself.
+TEST_CASE("WorldFile: the project's worlds load and configure as themselves, no planet or climate refused") {
     for (const char *path : { "res://worlds/default.world.json", "res://worlds/cm.world.json", "res://worlds/lods25.world.json", "res://worlds/biomes.world.json",
                  "res://worlds/forest5cm.world.json", "res://worlds/forest5cm_x10.world.json", "res://worlds/forest5cm_1m.world.json", "res://worlds/forest5cm_41m.world.json",
-                 "res://worlds/earth.world.json", "res://worlds/earth25.world.json", "res://worlds/tiny.world.json", "res://climate/example.json", "res://climate/plain.json",
-                 "res://climate/shaped_test.json", "res://climate/fieldless_test.json" }) {
+                 "res://worlds/earth.world.json", "res://worlds/earth25.world.json", "res://worlds/tiny.world.json", "res://worlds/tiny_biomes.world.json",
+                 "res://worlds/template_5cm.world.json", "res://worlds/template_50cm.world.json", "res://climate/world.json", "res://climate/example.json",
+                 "res://climate/plain.json", "res://climate/shaped_test.json", "res://climate/fieldless_test.json", "res://climate/eight_biomes_test.json",
+                 "res://climate/notes_test.json", "res://climate/programs_test.json", "res://climate/graph_test.json", "res://climate/caves_test.json" }) {
         CAPTURE(path);
         WorldFile w;
         CHECK(WorldFile::load(path, w) == ov::str());
+        SDFCascade sdf;
+        ChunkParam param;
+        CHECK(sdf.configure_world(w, param) == ov::str());
     }
 }
