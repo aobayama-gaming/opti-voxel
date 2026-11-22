@@ -2,7 +2,9 @@
 # GPU cascade harness: build (unless --no-build), run res://debug/cascade_spike.tscn, check the result.
 #
 #   tools/cascade_test.sh [--no-build] [--world=PATH] [--check=0|1] [--points=0|1] [--table=0|1] [--biomes=0|1] [--timing=0|1] [--runs=10]
-#                         [--sets=4,4c] [--generic=0|1]
+#                         [--sets=4,4c] [--generic=0|1] [--full=0|1]
+#
+# Quick by default: 20 chunks per LOD (every place below still) and no timing; --full=1: 64+ per LOD and the timing.
 #
 # Each set loads its world file (voxel and LODs from its engine); --world is the bare set's and the table's.
 #
@@ -57,8 +59,15 @@ if command -v nvidia-smi > /dev/null; then
     TELEMETRY_PID=$!
 fi
 
+# The NVIDIA driver compiles a climate set's specialised shader in minutes (4c: ~4 min, its G1 debug variant ~15) and its
+# disk cache, at its default cap, evicts it: every run paid it again. A larger cache kept whole makes a rerun of an
+# unchanged shader a hit (G10 on 4c: 233 s -> 21 s). A first run after a GLSL change still compiles: hence the timeout.
+export __GL_SHADER_DISK_CACHE="${__GL_SHADER_DISK_CACHE:-1}"
+export __GL_SHADER_DISK_CACHE_SIZE="${__GL_SHADER_DISK_CACHE_SIZE:-10000000000}"
+export __GL_SHADER_DISK_CACHE_SKIP_CLEANUP="${__GL_SHADER_DISK_CACHE_SKIP_CLEANUP:-1}"
+
 echo ">> running godot (${PASS[*]:-})"
-timeout "${CASCADE_TIMEOUT:-900}" "$GODOT" --path "$ROOT/adapter/godot/project" --resolution 640x360 res://debug/cascade_spike.tscn -- \
+timeout "${CASCADE_TIMEOUT:-3600}" "$GODOT" --path "$ROOT/adapter/godot/project" --resolution 640x360 res://debug/cascade_spike.tscn -- \
     "${PASS[@]}" --out="$RUN_DIR/cascade.json" > "$RUN_DIR/godot.log" 2>&1
 CODE=$?
 [[ -n $TELEMETRY_PID ]] && kill "$TELEMETRY_PID" 2> /dev/null
