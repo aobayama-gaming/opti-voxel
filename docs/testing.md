@@ -18,7 +18,8 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
   trace (`PATH_trace.json`, `src/trace.hpp`: `restart_world`, `restart_stop` / `_load` / `_start`, `start_mesher` ...).
 - `tools/climate_report.sh [--no-build] [--world=PATH] [--extent_km=KM] [--size=N] [--surface=0|1] [--lattice=M]`
   (`ClimateReport`, headless, CPU only, seconds): a climate table sampled on one lattice over the base's tangent plane, each point traced down to its ground
-  surface along the base's up (`--surface=0`: the plane itself, kilometres off the ground at 25 LODs): per-biome share and mean
+  surface along the base's up (`--surface=0`: the plane itself, kilometres off the ground at 25 LODs; on a planet the slice
+  spans at most its diameter, whatever `--extent_km` says): per-biome share and mean
   weight, the pick drift (the share of points whose pick at the coarsest modulated level differs: what the ground's
   coarsest modulated octave reads vs the material), where each pair of biomes meets nearest the centre with the player's `--spawn=U,V` (metres along the base's tangent plane: x, z on the flat world), per-field range,
   the ground under each biome (mean altitude above the base, height std, mean slope), CPU us per point, `biomes_blend.png` /

@@ -471,7 +471,10 @@ ov::Value ClimateReport::run(const ov::str &p_out_dir, const ov::str &p_world_pa
         report["error"] = ov::format("--lattice=%d: above the cascade's top lattice %d.", p_lattice, sdf.program().top);
         OV_ERR_FAIL_V_MSG(report, "ClimateReport: " + report["error"].as_str());
     }
-    const int m = p_lattice >= 0 ? p_lattice : slice_lattice(p_extent_km, n, ground.voxel_size);
+    // On a planet the slice spans at most its diameter: past it the base's tangent plane leaves the ball, and each point's
+    // ground trace runs all its steps through empty space (a 52 km slice of a 2 km planet took minutes for nothing).
+    const double extent_km = sdf.get_base().curved() ? ov::min(p_extent_km, 2.0 * sdf.get_base().get_radius() * ground.voxel_size / 1000.0) : p_extent_km;
+    const int m = p_lattice >= 0 ? p_lattice : slice_lattice(extent_km, n, ground.voxel_size);
     const Slice slice = sample_slice(sdf, p_surface, 0, m, n, p_center_x, p_center_z, true, ov::Priority::HIGH);
     const Sampled &s = slice.s;
     const Vector2i64 &c = slice.c;
