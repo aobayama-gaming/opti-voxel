@@ -53,8 +53,11 @@ continents) are macro inputs until the planned macro engine computes them.
      `smin(mix, up - C)`, `docs/caves.md`).
    Blend factoring (specialised only) takes a node every biome's output has alike out of the weights' products:
    the same ground up to the weights' normalisation error.
-4. **The pick**: the biome with the largest weight (ties by a hash of the absolute voxel, `Climate::pick_of`) gives the
-   sample its material (`biome_material`: the procedural ground in the biome's colours).
+4. **The pick**: a biome drawn by the weights with a hash of the absolute voxel (`Climate::pick_of`, a dithered
+   pick) gives the sample its material (`biome_material`: the procedural ground in the biome's colours). Where two
+   biomes blend 70 / 30, 70% of the samples are the first: the ground's colours mix over the blend like grass
+   thinning into sand, at the cost of one material per sample (smooth colour blends measured +2.2 ms,
+   `docs/materials.md`). Was the largest weight, which cut every colour border sharp even where the heights blend.
 
 The **LOD rule**: a node's level is the level of the finest note it reads (note k on Λ_{k-3}, 8 samples per
 wavelength); it is computed on that lattice from its inputs there and Hermite-subdivided below, the pick copied from
