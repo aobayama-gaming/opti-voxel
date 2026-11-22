@@ -56,15 +56,16 @@ struct Pin {
     uint64_t hash;
 };
 const Pin PINS[] = {
-    { "res://climate/example.json", 14048922634438473485ull },
-    { "res://climate/plain.json", 8812832827283825826ull },
-    { "res://climate/shaped_test.json", 9767343333093668675ull },
+    // The picks re-pinned when the pick became a draw by the weights (dithered), every table with a blend.
+    { "res://climate/example.json", 6565767605931339374ull },
+    { "res://climate/plain.json", 9949175153877951802ull },
+    { "res://climate/shaped_test.json", 17330319201959145420ull },
     { "res://climate/fieldless_test.json", 1997498522675870854ull },
-    { "res://climate/eight_biomes_test.json", 17544743084060714778ull }, // the pick on the finest note's level
-    { "res://climate/notes_test.json", 10293944894637181568ull },
-    { "res://climate/programs_test.json", 15627919854828456144ull },
-    { "res://climate/graph_test.json", 10291101714587891757ull },
-    { "res://climate/caves_test.json", 4148215606099006424ull },
+    { "res://climate/eight_biomes_test.json", 9466126346672727506ull },
+    { "res://climate/notes_test.json", 6665517064464278714ull },
+    { "res://climate/programs_test.json", 6375666810164297034ull },
+    { "res://climate/graph_test.json", 9828489342027509659ull },
+    { "res://climate/caves_test.json", 795051632942004835ull },
     { "res://climate/world.json", 16376013561544507610ull },
 };
 

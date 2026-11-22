@@ -38,7 +38,7 @@ using ExactNoise::Float4;
 //   SHAPE  k[0] + k[1] a + k[2] sabs(a) + k[3] a^2 (Cascade::smooth_abs; each term where its k isn't 0).
 //   AXIS   Climate::axis_factor of in[0], centre k[0], 1 / span k[1]. FILL: Climate::fill. RCP: Climate::blend_rcp.
 //   NORM   Climate::blend_weight(in[0], in[1]): a kernel over the total, capped at 1.
-//   PICK   the index of the largest of its inputs (the biome weights; ties by hash_cell, Climate::pick_of): a discrete
+//   PICK   a biome drawn by its inputs (the biome weights; a hash_cell of the point, Climate::pick_of): a discrete
 //          value, carried by copy (the floor parent's), never interpolated.
 enum class Op : uint8_t {
     NOTE,

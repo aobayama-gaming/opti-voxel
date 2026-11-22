@@ -185,26 +185,24 @@ vec4 tp_norm(vec4 k, vec4 r) {
 }
 
 float tp_pick(vec4 w[MAX_BIOMES], int n, WorldPos p) {
-    float best = w[0].w;
-    uint count = 1u;
-    for (int b = 1; b < n; b++) {
-        if (floatBitsToUint(w[b].w) == floatBitsToUint(best)) {
-            count++;
-        } else if (w[b].w > best) {
-            best = w[b].w;
-            count = 1u;
-        }
-    }
-    uint k = count == 1u ? 0u : hash_cell(p.lo, p.hi, PICK_SEED) % count;
+    precise float total = 0.0;
     for (int b = 0; b < n; b++) {
-        if (floatBitsToUint(w[b].w) == floatBitsToUint(best)) {
-            if (k == 0u) {
+        total += max(w[b].w, 0.0);
+    }
+    precise float u = float(hash_cell(p.lo, p.hi, PICK_SEED) >> PICK_SHIFT) * PICK_UNIT;
+    precise float t = u * total;
+    precise float sum = 0.0;
+    int last = 0;
+    for (int b = 0; b < n; b++) {
+        if (w[b].w > 0.0) {
+            sum += w[b].w;
+            last = b;
+            if (t < sum) {
                 return float(b);
             }
-            k--;
         }
     }
-    return 0.0;
+    return float(last);
 }
 )glsl";
 
@@ -334,7 +332,8 @@ ov::str glsl_helpers() {
     return ov::replace_all(ov::str(GLSL_WARP_HELPERS) + GLSL_HELPERS,
             { { "SABS_E2", glsl_float(Cascade::SMOOTH_ABS_E * Cascade::SMOOTH_ABS_E) }, { "SABS_E", glsl_float(Cascade::SMOOTH_ABS_E) }, { "WARP_LIMIT", glsl_float(Cascade::WARP_LIMIT) },
                     { "FLUSH", Cascade::glsl_flush() }, { "SLOPE", glsl_float(ExactNoise::exact_pow2(-ExactNoise::BAND_SHIFT)) }, { "KERNEL_FADE", glsl_float(Climate::KERNEL_FADE) },
-                    { "MAX_BIOMES", ov::itos(Climate::MAX_BIOMES) }, { "PICK_SEED", ov::itos(int64_t(Climate::PICK_SEED)) + ov::str("u") } });
+                    { "MAX_BIOMES", ov::itos(Climate::MAX_BIOMES) }, { "PICK_SEED", ov::itos(int64_t(Climate::PICK_SEED)) + ov::str("u") },
+                    { "PICK_SHIFT", ov::itos(int64_t(32 - Climate::PICK_BITS)) + ov::str("u") }, { "PICK_UNIT", glsl_float(Climate::PICK_UNIT) } });
 }
 
 Float4 eval_node(const LevelProgram &p_prog, const Node &p_node, const Float4 *p_in, const OpPoint &p_at) {
