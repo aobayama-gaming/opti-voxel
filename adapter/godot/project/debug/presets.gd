@@ -62,7 +62,8 @@ const INT_FLAGS := {"view": "debug_view", "batch": "direct_batch_size", "pages":
 const BOOL_FLAGS := {"lod_far_limit": "lod_far_limit", "stream": "archetype_stream", "walk_gpu": "walk_gpu",
 	"compact": "direct_compaction", "destroy_verify": "destroy_verify", "walk_verify": "walk_verify",
 	"discovery_compare": "discovery_compare"}
-const TERRAINS := {"cascade": 1, "shapes": 4}
+# --terrain=NAME: a world by name (the shapes gallery's), as --world= would name it.
+const TERRAINS := {"shapes": "res://worlds/shapes.world.json"}
 const DISCOVERERS := {"cpu": 0, "gpu": 1}
 
 
@@ -88,9 +89,9 @@ static func apply_args(p_terrain: Node, p_scene_root: Node, p_args: PackedString
 		p_terrain.world_path = args["world"]
 	if args.has("terrain"):
 		if not TERRAINS.has(args["terrain"]):
-			push_error("unknown --terrain=%s (expected cascade or shapes)" % args["terrain"])
+			push_error("unknown --terrain=%s (expected shapes; any world: --world=PATH)" % args["terrain"])
 			return false
-		p_terrain.terrain_mode = TERRAINS[args["terrain"]]
+		p_terrain.world_path = TERRAINS[args["terrain"]]
 	if args.has("discoverer"):
 		if not DISCOVERERS.has(args["discoverer"]):
 			push_error("unknown --discoverer=%s (expected cpu or gpu)" % args["discoverer"])

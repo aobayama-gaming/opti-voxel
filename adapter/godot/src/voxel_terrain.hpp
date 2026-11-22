@@ -87,9 +87,6 @@ public:
     void _process(double delta) override;
     void _exit_tree() override;
 
-    // Terrain: 1 the Hermite cascade terrain (SDFCascade, default), 4 its flat preset under
-    // the shapes gallery (SDFTable::Scene::SHAPES, --terrain=shapes, res://shapes_scene.tscn). 0 was SDFDummy and 3
-    // the archetype demo on an fBm ground (SDFArchetype), both removed: saved scenes keep their numbers.
     // The world file (WorldFile: res:// or absolute): the voxel size, the LODs and every content setting. Set before
     // the node enters the tree; the scene's camera may read voxel_size from then on.
     void set_world_path(const String &p_path);
@@ -99,14 +96,13 @@ public:
     void set_world_json(const String &p_json, const String &p_dir);
     // The running terrain stopped and started again on the world p_json (paths from p_dir), on its device and hosts: the
     // pipelines whose text didn't change are kept (an editor's edit of a world's numbers builds none), its chunks loaded
-    // again. The settings are kept (chunk_param as it entered the tree); the instance edits are dropped. False if the
-    // world was refused: get_world_error says why.
+    // again. The settings are kept (chunk_param as it entered the tree), and the live instance edits (in place of the
+    // world's "edits"; a refused world had none: the next one replays its file's). False if the world was refused:
+    // get_world_error says why.
     bool restart_world(const String &p_json, const String &p_dir);
-    // Why the world didn't start (its file, planet, climate or species refused, no device), or why it draws nothing (the
-    // mesher's passes failed to compile); empty otherwise (ov::World::get_error).
+    // Why the world didn't start (its file, planet, climate, species or edits refused, no device), or why it draws
+    // nothing (the mesher's passes failed to compile); empty otherwise (ov::World::get_error).
     String get_world_error() const;
-    void set_terrain_mode(int p_mode);
-    int get_terrain_mode() const;
 
     // Edge length of a LOD 0 voxel in metres (each LOD level doubles it).
     float get_voxel_size() const;
@@ -282,7 +278,8 @@ public:
     void set_log_level(int p_level);
     int get_log_level() const;
 
-    // Instance edits (archetype table). The anchor is in LOD0 voxels (int64, never through Vector3i);
+    // Instance edits (archetype table). type: a library index (get_type_index of its name: "sphere", "capsule", ...,
+    // archetype_table.hpp). The anchor is in LOD0 voxels (int64, never through Vector3i);
     // rotation is a 9-float row-major basis and params up to 8 floats (empty: identity / zero). op is a
     // Combine (0 union, 1 smooth union, 2 subtract, 3 smooth subtract). Returns the new id or -1.
     // add_instance / move_instance re-mesh the chunks the edit can change and rescan the discoverer.
@@ -290,6 +287,11 @@ public:
             int p_op, float p_k);
     bool remove_instance(int p_id);
     bool move_instance(int p_id, int64_t p_x, int64_t p_y, int64_t p_z, const PackedFloat32Array &p_rotation);
+    // The library index of the type named p_name, -1 if none is (or before the world starts).
+    int get_type_index(const String &p_name) const;
+    // The live edits written as an edits file at p_path (res://, user://, absolute; WorldFile's format): a world file's
+    // "edits" loads them. Empty, or why not.
+    String save_edits(const String &p_path) const;
 
     // The player's dig tools (ov::DigTool): origin and unit direction in render space. dig_spray / dig_tube every frame
     // their button is held, dig_release when it is released. set_dig_settings takes any of dig_radius, dig_length,

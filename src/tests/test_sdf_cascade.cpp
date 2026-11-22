@@ -121,12 +121,16 @@ TEST_CASE("SDFCascade: the shader stub and get_program") {
     CHECK(!glsl.contains("DATUM_LO"));
 }
 
-TEST_CASE("SDFCascade: the flat preset is the plane y = FLAT_GROUND_M at every LOD") {
+// The shapes gallery's ground (worlds/shapes.world.json, its edits left out): a constant node, the plane of the datum.
+TEST_CASE("SDFCascade: a constant ground is the plane y = datum at every LOD") {
+    WorldFile world;
+    CHECK(WorldFile::load("res://worlds/shapes.world.json", world) == ov::str());
+    world.edits.clear();
     ChunkParam param;
     SDFCascade sdf;
-    sdf.preset = SDFCascade::Preset::FLAT;
-    sdf.configure(param, 15);
-    const int64_t ground = std::llround(SDFCascade::FLAT_GROUND_M / double(param.voxel_size));
+    CHECK(sdf.configure_world(world, param) == ov::str());
+    CHECK(sdf.current()->empty());
+    const int64_t ground = std::llround(BaseSurface::DATUM_M / double(param.voxel_size));
     CHECK(sdf.ground_at(12345, -6789).y == ground);
     for (int lod = 0; lod < 15; lod++) {
         const int64_t step = int64_t(1) << lod;
@@ -302,7 +306,7 @@ TEST_CASE("CascadeGLSL: the point pass writes the unit register from the item's 
 }
 
 // The default terrain's bits, pinned: every register component of the bare cascade (sdf, through the ground's base
-// surface) and evaluate() at lattice points near the ground of every preset, at 0.5 m and 5 cm, near 0 and +-2^60.
+// surface) and evaluate() at lattice points near the ground, at 0.5 m and 5 cm, near 0 and +-2^60.
 // The hash was taken on dev before the base surface (PR "base surface"): a change of formula that moves one bit fails.
 TEST_CASE("SDFCascade: the default terrain's bits are pinned") {
     uint64_t hash = 0xCBF29CE484222325ull;
@@ -310,34 +314,33 @@ TEST_CASE("SDFCascade: the default terrain's bits are pinned") {
         hash = (hash ^ float_bits(p_v)) * 0x100000001B3ull;
     };
     int samples = 0;
-    for (const SDFCascade::Preset preset : { SDFCascade::Preset::DEFAULT, SDFCascade::Preset::FLAT }) {
-        for (const float voxel : { 0.5f, 0.05f }) {
-            ChunkParam param;
-            param.voxel_size = voxel;
-            GroundSDF sdf;
-            sdf.preset = preset;
-            sdf.configure(param, 25);
-            const int64_t datum = sdf.get_datum_y();
-            for (const int64_t base : { int64_t(0), int64_t(12345), (int64_t(1) << 60) - 4000, -(int64_t(1) << 60) + 77 }) {
-                for (int lod = 0; lod < 25; lod += 2) {
-                    const int64_t step = int64_t(1) << lod;
-                    for (int i = -3; i <= 3; i++) {
-                        WorldPos pos;
-                        pos.voxel = VoxelPos(WorldCoord::floor_div(base, step) + i, WorldCoord::floor_div(datum, step) + 5 * i, 2 - i) * step;
-                        float ch[CHANNELS];
-                        sdf.channels_at(pos.voxel, lod, ch);
-                        const ExactNoise::Float4 r = sdf.sdf(ch, pos.voxel, lod);
-                        mix(r.x);
-                        mix(r.y);
-                        mix(r.z);
-                        mix(r.w);
-                        mix(sdf.evaluate(pos, lod));
-                        samples++;
-                    }
+    for (const float voxel : { 0.5f, 0.05f }) {
+        ChunkParam param;
+        param.voxel_size = voxel;
+        GroundSDF sdf;
+        sdf.configure(param, 25);
+        const int64_t datum = sdf.get_datum_y();
+        for (const int64_t base : { int64_t(0), int64_t(12345), (int64_t(1) << 60) - 4000, -(int64_t(1) << 60) + 77 }) {
+            for (int lod = 0; lod < 25; lod += 2) {
+                const int64_t step = int64_t(1) << lod;
+                for (int i = -3; i <= 3; i++) {
+                    WorldPos pos;
+                    pos.voxel = VoxelPos(WorldCoord::floor_div(base, step) + i, WorldCoord::floor_div(datum, step) + 5 * i, 2 - i) * step;
+                    float ch[CHANNELS];
+                    sdf.channels_at(pos.voxel, lod, ch);
+                    const ExactNoise::Float4 r = sdf.sdf(ch, pos.voxel, lod);
+                    mix(r.x);
+                    mix(r.y);
+                    mix(r.z);
+                    mix(r.w);
+                    mix(sdf.evaluate(pos, lod));
+                    samples++;
                 }
             }
         }
     }
-    CHECK(samples == 2 * 2 * 4 * 13 * 7);
-    CHECK(hash == 15955514549431576711ull); // re-pinned when octave k's seed became make_octave(seed, k): the same at any top
+    CHECK(samples == 2 * 4 * 13 * 7);
+    // Re-pinned when the 0.5 m ground became the template file's notes (engine cleanup 2/5: k = 3 .. 16, no longer the
+    // 50 cm file's 0.8x amplitudes) and the flat preset's half left (4/5: the gallery's ground is a world file's).
+    CHECK(hash == 5750492863826811759ull);
 }

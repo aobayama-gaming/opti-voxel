@@ -7,7 +7,7 @@
   (unit-tested). `SDFTable::get_sources()`, streamed (below; stats under `get_debug_stats()["table"]["scatter" | "trees"]`:
   the profile, and `["stream"]`), or with `--stream=0` (`VoxelTerrain.archetype_stream`, bench and player) placed whole in
   the table at configure by `add_source` (count, records per site, moments per material; the reference, and the tests that
-  edit their records by id). Biome features and the shapes gallery stay table records (whole-build blobs). `SourceProfile`
+  edit their records by id). Biome features and the edits (an edits file's, `docs/terrain.md`) stay table records (whole-build blobs). `SourceProfile`
   reads `SAMPLES` (256) hashed sites per class at the origin (`CellScatter::classes`: a site's class is `classify`'s,
   the forest's species of its biome, -1 where none grows, or its variant modulo the class count; class c grown by
   `generate_class`, one class bit for bit as before): reach, `lod_end`, k / margin max (times

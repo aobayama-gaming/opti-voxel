@@ -33,10 +33,10 @@ bool DigTool::march(const Float3 &p_pos, const Float3 &p_dir, double p_stop_m, d
     return false;
 }
 
-int DigTool::place(int p_type, const VoxelPos &p_anchor, const float *p_rotation, const double p_params_m[2], Archetype::Combine p_op, double p_k_m) {
+int DigTool::place(const char *p_type, const VoxelPos &p_anchor, const float *p_rotation, const double p_params_m[2], Archetype::Combine p_op, double p_k_m) {
     const double vs = double(world.settings().chunk_param.voxel_size);
     const float params[8] = { float(p_params_m[0] / vs), float(p_params_m[1] / vs) };
-    const int id = world.add_instance(p_type, p_anchor, p_rotation, params, int(p_op), float(p_k_m / vs));
+    const int id = world.add_instance(world.type_index(p_type), p_anchor, p_rotation, params, int(p_op), float(p_k_m / vs));
     edits += id >= 0 ? 1 : 0;
     return id;
 }
@@ -50,7 +50,7 @@ bool DigTool::dig(const Float3 &p_pos, const Float3 &p_dir) {
     float rotation[9];
     axis_rotation(p_dir, rotation);
     const double params[2] = { settings.dig_length_m, settings.dig_radius_m };
-    return place(SDFTable::CAPSULE_TYPE, hit, rotation, params, Archetype::Combine::SMOOTH_SUBTRACT, settings.dig_k_m) >= 0;
+    return place("capsule", hit, rotation, params, Archetype::Combine::SMOOTH_SUBTRACT, settings.dig_k_m) >= 0;
 }
 
 void DigTool::spray(const Float3 &p_pos, const Float3 &p_dir, double p_dt) {
@@ -65,7 +65,7 @@ void DigTool::spray(const Float3 &p_pos, const Float3 &p_dir, double p_dt) {
         return;
     }
     const double params[2] = { settings.spray_radius_m, 0.0 };
-    stopped = place(SDFTable::SPHERE_TYPE, hit, nullptr, params, Archetype::Combine::SUBTRACT, 0.0) < 0;
+    stopped = place("sphere", hit, nullptr, params, Archetype::Combine::SUBTRACT, 0.0) < 0;
 }
 
 void DigTool::tube(const Float3 &p_pos, const Float3 &p_dir) {
@@ -84,7 +84,7 @@ void DigTool::tube(const Float3 &p_pos, const Float3 &p_dir) {
         march(p_pos, p_dir, 0.5, 0.1, hit, &t);
         const double length = std::fmin(std::fmax(t + settings.drag_length_m, settings.drag_length_m), settings.drag_max_m);
         const double params[2] = { length, settings.drag_radius_m };
-        tube_id = place(SDFTable::CAPSULE_TYPE, anchor, rotation, params, settings.drag_op, settings.dig_k_m);
+        tube_id = place("capsule", anchor, rotation, params, settings.drag_op, settings.dig_k_m);
         stopped = tube_id < 0;
     } else if (anchor != tube_anchor || std::memcmp(rotation, tube_rotation, sizeof(rotation)) != 0) {
         // Only when the pose changed: every edit makes the re-meshes in flight stale.

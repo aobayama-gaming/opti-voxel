@@ -7,8 +7,12 @@
 #include "ov/format.hpp"
 #include "ov/json.hpp"
 
+#include <cerrno>
 #include <cmath>
+#include <cstdlib>
+#include <cstring>
 #include <initializer_list>
+#include <string>
 
 namespace {
 
@@ -103,10 +107,149 @@ ov::Value section(const ov::Value &p_data, const char *p_key, std::initializer_l
     return v;
 }
 
+// p_v as an int64 in decimal text (an anchor's coordinate: JSON numbers are doubles), false if it isn't one.
+bool int64_text(const ov::Value &p_v, int64_t &r_out) {
+    const ov::str &s = p_v.as_str();
+    if (!p_v.is_string() || s.empty()) {
+        return false;
+    }
+    errno = 0;
+    char *end = nullptr;
+    const long long v = std::strtoll(s.c_str(), &end, 10);
+    if (errno != 0 || end != s.c_str() + s.size()) {
+        return false;
+    }
+    r_out = int64_t(v);
+    return true;
+}
+
+// p_v as a list of p_min to p_max numbers in r_out (as floats), false if it isn't one.
+bool float_list(const ov::Value &p_v, size_t p_min, size_t p_max, float *r_out) {
+    if (!p_v.is_array() || p_v.size() < p_min || p_v.size() > p_max) {
+        return false;
+    }
+    for (size_t i = 0; i < p_v.size(); i++) {
+        if (!p_v[i].is_number()) {
+            return false;
+        }
+        r_out[i] = float(p_v[i].as_double());
+    }
+    return true;
+}
+
+// The edits file's entry p_d (the p_index-th) in r_edit: empty, or why it was refused.
+ov::str parse_edit(const ov::Value &p_d, size_t p_index, SDFTable::Edit &r_edit) {
+    const ov::str where = ov::format("edits: entry %d", int64_t(p_index));
+    if (!p_d.is_object()) {
+        return "world: " + where + ": not an object.";
+    }
+    const ov::str err = unknown_key(p_d, where.c_str(), { "type", "op", "anchor", "rotation", "params", "k" });
+    if (!err.empty()) {
+        return err;
+    }
+    SDFTable::Edit e;
+    if (!p_d["type"].is_string()) {
+        return "world: " + where + ": 'type' is a library type's name.";
+    }
+    e.type = p_d["type"].as_str();
+    if (!Archetype::combine_named(p_d["op"].as_str(), e.op)) {
+        return "world: " + where + ": 'op' is union, smooth_union, subtract or smooth_subtract.";
+    }
+    const ov::Value &a = p_d["anchor"];
+    if (!(a.is_array() && a.size() == 3 && int64_text(a[0], e.anchor.x) && int64_text(a[1], e.anchor.y) && int64_text(a[2], e.anchor.z))) {
+        return "world: " + where + ": 'anchor' is [\"x\", \"y\", \"z\"], LOD0 voxels as int64 strings.";
+    }
+    if (p_d.has("rotation") && !float_list(p_d["rotation"], 9, 9, e.rotation)) {
+        return "world: " + where + ": 'rotation' is 9 numbers, its rows.";
+    }
+    if (p_d.has("params") && !float_list(p_d["params"], 0, 8, e.params)) {
+        return "world: " + where + ": 'params' is at most 8 numbers.";
+    }
+    if (p_d.has("k") && !p_d["k"].is_number()) {
+        return "world: " + where + ": 'k' is a number.";
+    }
+    e.k = float(p_d.get("k", 0.0).as_double());
+    r_edit = e;
+    return ov::str();
+}
+
 } // namespace
 
+ov::str WorldFile::parse_edits(const ov::Value &p_data, std::vector<SDFTable::Edit> &r_edits) {
+    if (!p_data.is_object()) {
+        return "world: edits: not a JSON object.";
+    }
+    const ov::str err = unknown_key(p_data, "edits", { "version", "edits" });
+    if (!err.empty()) {
+        return err;
+    }
+    if (!(p_data["version"].is_number() && p_data["version"].as_double() == 1.0)) {
+        return "world: edits: \"version\": 1 is the only version.";
+    }
+    const ov::Value list = p_data.get("edits", ov::Value::array());
+    if (!list.is_array()) {
+        return "world: edits: 'edits' is a list.";
+    }
+    std::vector<SDFTable::Edit> out(list.size());
+    for (size_t i = 0; i < list.size(); i++) {
+        const ov::str entry = parse_edit(list[i], i, out[i]);
+        if (!entry.empty()) {
+            return entry;
+        }
+    }
+    r_edits = out;
+    return ov::str();
+}
+
+ov::str WorldFile::load_edits(const ov::str &p_path, std::vector<SDFTable::Edit> &r_edits) {
+    ov::Value data;
+    const ov::str err = read_object(p_path, data);
+    return err.empty() ? parse_edits(data, r_edits) : err;
+}
+
+ov::str WorldFile::edits_text(const std::vector<SDFTable::Edit> &p_edits) {
+    static const SDFTable::Edit identity;
+    auto floats = [](const float *p_v, size_t p_count) {
+        ov::Value list = ov::Value::array();
+        for (size_t i = 0; i < p_count; i++) {
+            list.push_back(p_v[i]);
+        }
+        return list;
+    };
+    ov::str out = "{\"version\": 1, \"edits\": [";
+    for (size_t i = 0; i < p_edits.size(); i++) {
+        const SDFTable::Edit &e = p_edits[i];
+        ov::Value d = ov::Value::object();
+        d["type"] = e.type;
+        d["op"] = Archetype::combine_name(e.op);
+        ov::Value anchor = ov::Value::array();
+        for (const int64_t c : { e.anchor.x, e.anchor.y, e.anchor.z }) {
+            anchor.push_back(std::to_string(c));
+        }
+        d["anchor"] = anchor;
+        if (std::memcmp(e.rotation, identity.rotation, sizeof(e.rotation)) != 0) {
+            d["rotation"] = floats(e.rotation, 9);
+        }
+        size_t params = 8; // the trailing +0s left out (read back as 0)
+        while (params > 0 && std::memcmp(&e.params[params - 1], &identity.params[0], sizeof(float)) == 0) {
+            params--;
+        }
+        d["params"] = floats(e.params, params);
+        d["k"] = e.k;
+        out += (i == 0 ? "\n  " : ",\n  ") + ov::to_json(d);
+    }
+    return out + (p_edits.empty() ? "]}\n" : "\n]}\n");
+}
+
+ov::str WorldFile::save_edits(const ov::str &p_path, const std::vector<SDFTable::Edit> &p_edits) {
+    if (!ov::write_file(p_path, edits_text(p_edits))) {
+        return "world: cannot write " + p_path + " (no such directory, or a host that writes no file: Dawn).";
+    }
+    return ov::str();
+}
+
 ov::str WorldFile::parse(const ov::Value &p_data, const ov::str &p_dir, WorldFile &r_world) {
-    ov::str err = unknown_key(p_data, "file", { "engine", "climate", "planet", "look", "zone", "instances", "features", "species", "biomes" });
+    ov::str err = unknown_key(p_data, "file", { "engine", "climate", "planet", "look", "zone", "instances", "features", "species", "biomes", "instance_band", "edits" });
     if (!err.empty()) {
         return err;
     }
@@ -194,6 +337,20 @@ ov::str WorldFile::parse(const ov::Value &p_data, const ov::str &p_dir, WorldFil
     err = err.empty() ? list_or_file(p_data, "biomes", p_dir, biomes) : err;
     if (!err.empty()) {
         return err;
+    }
+    if (p_data.has("instance_band")) {
+        if (p_data["instance_band"].get_type() != ov::Value::BOOL) {
+            return "world: 'instance_band' is true or false.";
+        }
+        w.instance_band = p_data["instance_band"].as_bool();
+    }
+    if (p_data.has("edits")) {
+        ov::Value edits;
+        err = object_or_file(p_data, "edits", p_dir, edits);
+        err = err.empty() ? parse_edits(edits, w.edits) : err;
+        if (!err.empty()) {
+            return err;
+        }
     }
     // Biomes without a climate: no fields.
     if (p_data.has("climate") || p_data.has("biomes")) {

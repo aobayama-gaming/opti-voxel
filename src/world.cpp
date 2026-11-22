@@ -30,11 +30,6 @@ private:
     const uint64_t t0;
 };
 
-// The world's planet radius, none under the shapes gallery (its flat preset).
-double planet_radius_m(const World::Settings &p_config, const WorldFile &p_world) {
-    return p_config.terrain_mode == 4 ? 0.0 : p_world.planet_radius_m;
-}
-
 // A planet's +y pole less the flat datum (LOD0 voxels): where the flat world's voxel 0 goes, so the poses made for its
 // datum stand the same over the pole (start's default origin, scene_shift).
 VoxelPos pole_lift(const BaseSurface &p_planet, double p_voxel_size) {
@@ -58,9 +53,6 @@ World::~World() {
 }
 
 str World::Settings::validate() const {
-    if (terrain_mode != 1 && terrain_mode != 4) {
-        return format("terrain_mode %d: expected 1 (cascade) or 4 (shapes gallery).", terrain_mode);
-    }
     if (discoverer_mode < 0 || discoverer_mode > 1) {
         return format("discoverer_mode %d: expected 0 (CPU) or 1 (GPU).", discoverer_mode);
     }
@@ -156,21 +148,17 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
     }
     world_origin_chunk = chunk_param.origin_chunk;
 
-    // One terrain, the cascade: mode 4 is its flat preset under the shapes gallery.
-    if (config.terrain_mode == 4) {
-        sdf->preset = SDFCascade::Preset::FLAT;
-        sdf->set_scene(SDFTable::Scene::SHAPES);
-    }
     sdf->set_zone(content.zone);
     sdf->set_instances(content.instances);
     sdf->set_species(content.species);
     sdf->set_stream_sources(config.archetype_stream);
     sdf->set_features(content.features);
-    sdf->planet_radius_m = planet_radius_m(config, content);
+    sdf->planet_radius_m = content.planet_radius_m;
     sdf->planet_ring_m = content.planet_ring_m;
     sdf->climate_data = content.climate_table; // parsed and checked by configure() (get_world_error)
     sdf->specialize = config.specialize_shaders;
-    sdf->set_instance_band(config.terrain_mode != 4); // the gallery: a crease test at every LOD, never eroded
+    sdf->set_instance_band(content.instance_band);
+    sdf->set_edits(has_start_edits ? start_edits : content.edits); // replayed by configure() (an edit refused: get_world_error)
     const float min_skirt = sdf->min_skirt_depth(chunk_param, lod_numbers);
     if (chunk_param.skirt_depth < min_skirt) {
         VLOG(1, "World: skirt_depth raised from ", chunk_param.skirt_depth, " to ", min_skirt, " voxels (the terrain's band steps)");
@@ -257,6 +245,14 @@ int World::add_instance(int p_type, const VoxelPos &p_anchor, const float *p_rot
         _apply_instance_edit();
     }
     return id;
+}
+
+int World::type_index(const str &p_name) const {
+    return started ? sdf->get_library().find(p_name) : -1;
+}
+
+str World::save_edits(const str &p_path) const {
+    return WorldFile::save_edits(p_path, live_edits());
 }
 
 bool World::remove_instance(int p_id) {
@@ -616,7 +612,7 @@ ChunkId World::start_origin() const {
 }
 
 BaseSurface World::settings_planet() const {
-    const double radius = planet_radius_m(config, content);
+    const double radius = content.planet_radius_m;
     ov::str refusal; // the configure's world error: start() says it once
     return radius > 0.0 ? BaseSurface::planet(radius, double(config.chunk_param.voxel_size), content.planet_ring_m, &refusal)
                         : BaseSurface();
@@ -706,7 +702,6 @@ ov::Value World::debug_stats() {
         return d;
     }
     const ChunkParam &chunk_param = config.chunk_param;
-    d["terrain_mode"] = config.terrain_mode;
     d["lods"] = content.lods;
     ov::Value origin = ov::Value::object();
     origin["requested_voxel"] = WorldCoord::to_string(config.world_origin_request);
@@ -796,6 +791,7 @@ ov::Value World::debug_stats() {
 
     ov::Value edits = ov::Value::object();
     edits["edits"] = edit_stats.edits;
+    edits["live"] = int64_t(sdf->live_edits().size());
     edits["remesh_total"] = edit_stats.remesh_total;
     edits["remesh_last"] = edit_stats.remesh_last;
     edits["apply"] = edit_stats.apply.to_value();

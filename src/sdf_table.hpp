@@ -15,36 +15,48 @@
 #include "species.hpp"
 #include "tree_archetype.hpp"
 
+#include <algorithm>
 #include <atomic>
+#include <map>
 #include <memory>
 
 // The instance half of the terrain: every point folds the instances near it onto the ground's register
 // (instance_table.hpp, archetype_table.hpp fold_onto; the ground is SDFCascade's). This class owns everything about
 // the instances: the library, the records and their snapshot (read from other threads), the GPU table, the runtime
-// edits, and the scenes placed on the ground (the shapes gallery, the sources the instance lists make: Zone),
-// which only need the subclass's base and ground_under.
+// edits (replayed from a world's edits file at configure), and the sources the instance lists place on the ground
+// (Zone), which only need the subclass's base and ground_under.
 class SDFTable : public SDFBase {
 public:
     static constexpr uint32_t ROCK_SEED = 0x20C4u;
     // The scatter's cell sites (cell_sites.hpp; the forest's is Archetype::TREE_SITE_SALT).
     static constexpr uint32_t SCATTER_SITE_SALT = 0x5CA77u;
-    // The shapes gallery's centre (metres, x and z): the shapes_scene spawn.
-    static constexpr double SHAPES_X = -52.0;
-    static constexpr double SHAPES_Z = -95.0;
-    // The library's first types, the ones edits place (player.gd's SPHERE_TYPE / CAPSULE_TYPE, DigTool): a sphere
-    // {radius}, a capsule {height along local y, radius}, in voxels.
-    static constexpr int SPHERE_TYPE = 0;
-    static constexpr int CAPSULE_TYPE = 1;
-
-    // What build_table places on the ground. PLACED: the scatter and the forest (none by default); SHAPES: the shapes
-    // gallery first (hard unions, subtractions and intersections, sharp creases for dual contouring: a ladder of
-    // eight cubes holed through every face, each twice the size and twice the distance of the last, i.e. about one
-    // LOD coarser each on screen, turned to show the camera the same two faces; a die, a staircase and a cube
-    // tunnelled along its three axes behind the spawn), then the same.
-    enum class Scene { PLACED,
-        SHAPES };
-    // Set before configure().
-    void set_scene(Scene p_scene) { scene = p_scene; }
+    // A runtime edit as an edits file keeps it (WorldFile::parse_edits): a library type by name (TableDef::name: the
+    // DefLibrary's indices are the build's, not the file's), the operator, the anchor (LOD0 voxels), the rotation's rows
+    // and the parameters (voxels), the smooth radius (voxels).
+    struct Edit {
+        ov::str type;
+        Archetype::Combine op = Archetype::Combine::UNION;
+        VoxelPos anchor;
+        float rotation[9] = { 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f };
+        float params[8] = {};
+        float k = 0.0f;
+        // The same bits (the floats compared as bits).
+        bool operator==(const Edit &p_o) const;
+        bool operator!=(const Edit &p_o) const { return !(*this == p_o); }
+    };
+    // The edits configure replays after the scene (a world file's "edits", a restart's live ones), each the instance
+    // add_instance makes of it: their ids come past the scene's, so they fold after the streamed instances too
+    // (compose_list: a subtraction carves the streamed trees). An entry naming no type of the library, or one
+    // add_instance refuses, refuses the world (configure's world error). Set before configure().
+    void set_edits(const std::vector<Edit> &p_edits) { start_edits = p_edits; }
+    // Whether an edit configure replays is hard CSG (k 0: the shapes gallery's), whose creases differ between LODs by up
+    // to a cell when kept whole (set_instance_band(false)): SDFCascade's skirt.
+    bool has_hard_edits() const {
+        return std::any_of(start_edits.begin(), start_edits.end(), [](const Edit &p_e) { return p_e.k == 0.0f; });
+    }
+    // The live edits in id order: the replayed ones and add_instance's, as moved since, the removed ones left out (what
+    // an edits file saves: WorldFile::save_edits). Records the scene placed are never edits.
+    std::vector<Edit> live_edits() const;
 
     // Where the instances stand (a world file's "zone"): a square of side side_m metres around (x_m, z_m) of the base's
     // tangent plane (in front of the main_scene spawn by default), over every height the ground can reach in it; side 0:
@@ -98,8 +110,10 @@ public:
     // The materials the records name (TableRecord::material): the page shader's material_tex.
     const Material::Library &get_materials() const override { return materials; }
 
-    // The band rule for the instances (Archetype::set_band); false keeps them at every LOD. Set before configure().
+    // The band rule for the instances (Archetype::set_band); false keeps them at every LOD (a world's "instance_band").
+    // Set before configure().
     void set_instance_band(bool p_enabled) { instance_band = p_enabled; }
+    bool get_instance_band() const { return instance_band; }
     // The band rule's erosion rate in cells per LOD (Archetype::set_band). Set before configure().
     void set_instance_erode(float p_cells) { erode_rule.rate = p_cells; }
     // The band rule's resolution: a part is kept while its half thickness holds this many cells (Archetype::set_band).
@@ -171,7 +185,8 @@ public:
             bool p_view = false) const;
 
     // Runtime edits: rebuild the snapshot (copy on write) and bump the version; the GPU re-uploads the records when
-    // it changes. last_edit_box() / edit_affects_chunk() tell the terrain what to re-mesh.
+    // it changes. last_edit_box() / edit_affects_chunk() tell the terrain what to re-mesh. p_type: a library index
+    // (get_library().find(name)). An added instance is a live edit (live_edits) until removed.
     int add_instance(int p_type, const VoxelPos &p_anchor, const float *p_rotation, const float *p_params, int p_op, float p_k) override;
     bool remove_instance(int p_id) override;
     bool move_instance(int p_id, const VoxelPos &p_anchor, const float *p_rotation) override;
@@ -204,9 +219,10 @@ public:
     static ov::str edit_error(const float *p_rotation, const float *p_params, int p_op, float p_k);
 
 protected:
-    // The library, the scene's records and the first snapshot, its values in LOD0 voxels times the voxel size
-    // (metres). Call from configure(), after SDFBase's and once ground_under works.
-    void build_table(int p_lod_count);
+    // The library, the scene's records, the replayed edits (set_edits) and the first snapshot, its values in LOD0
+    // voxels times the voxel size (metres). Call from configure(), after SDFBase's and once ground_under works. Empty,
+    // or why the world is refused (an edit refused: nothing published).
+    ov::str build_table(int p_lod_count);
     // Waits for the stream's tasks and drops it: they call the subclass's ground_field, so its destructor calls this first.
     void stop_streaming();
 
@@ -233,14 +249,9 @@ private:
     struct Types {
         int capsule = -1;
         int rock = -1;
-        int holed_cube = -1;
-        int die = -1;
-        int stairs = -1;
-        int tunnel_cube = -1;
         Biome::Types biome;
     };
 
-    Scene scene = Scene::PLACED;
     std::shared_ptr<const Archetype::DefLibrary> library;
     int lod_count = 24;
     uint32_t version = 0;
@@ -275,7 +286,7 @@ private:
     bool has_features = false; // build_table: the zone has some, their library types added
     std::vector<Biome::LavaPool> lava_pools; // keeps trees and rocks out of the lakes (in_lake)
     Material::Library materials;
-    bool instance_band = true; // false: the shapes gallery (and tests)
+    bool instance_band = true; // false: a world's "instance_band" (the shapes gallery), tests
     Archetype::ErodeRule erode_rule; // tests vary it
     bool moment_blobs = true; // false: tests of the records alone
     // The moment layers of the records (add_moment_blobs; an item per record id), kept up to date by the edits, and each
@@ -304,14 +315,15 @@ private:
     // The band rule, unless set_instance_band(false) (the shapes gallery: its ladder is sized one cube per LOD, and
     // eroding the thin frames tears them).
     void finish_record(Archetype::TableRecord &r_rec) const;
+    // The finished record add_instance would append (its inputs checked: the type an index of the library, edit_error,
+    // record_fit_error), or why it is refused. The table's capacity is the caller's.
+    ov::str edit_record(int p_type, const VoxelPos &p_anchor, const float *p_rotation, const float *p_params, int p_op, float p_k,
+            Archetype::TableRecord &r_rec) const;
+    std::vector<Edit> start_edits; // set_edits
+    std::map<uint32_t, Edit> edits; // the live edits by record id (live_edits)
     // The changed record's margins and LODs, then a new snapshot (the previous base plus the edited records'
     // overlay) over the edit region.
     void finish_edit(const Archetype::TableRecord &p_before, const Archetype::TableRecord &p_after, const VoxelBox &p_region, uint32_t p_id);
-    float voxels(double p_metres) const;
-    // A record of type p_type at (p_x, p_z) metres of the base's tangent plane, p_dy_m above the ground there along the
-    // base's up, its local y on that up turned by p_yaw about it, smooth radius p_k_m metres, appended.
-    void place(Archetype::Combine p_op, double p_k_m, int p_type, const float *p_params, double p_x, double p_z, double p_dy_m, double p_yaw);
-    void add_shapes(const Types &p_types);
     // A source's entries: a kind, a cell (LOD0 voxels) and the species named there in the world's order (its classes).
     struct Group {
         Archetype::Species::Kind kind = Archetype::Species::TREE;

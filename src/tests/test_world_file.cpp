@@ -2,6 +2,11 @@
 #include "test_climate_common.hpp"
 #include "world_file.hpp"
 
+#include <cmath>
+#include <cstring>
+
+using namespace Archetype;
+
 namespace {
 
 ov::str parse(const char *p_text, WorldFile &r_world) {
@@ -139,6 +144,7 @@ TEST_CASE("WorldFile: the project's worlds load and configure as themselves, no 
     for (const char *path : { "res://worlds/default.world.json", "res://worlds/cm.world.json", "res://worlds/lods25.world.json", "res://worlds/biomes.world.json",
                  "res://worlds/forest5cm.world.json", "res://worlds/forest5cm_x10.world.json", "res://worlds/forest5cm_1m.world.json", "res://worlds/forest5cm_41m.world.json",
                  "res://worlds/earth.world.json", "res://worlds/earth25.world.json", "res://worlds/tiny.world.json", "res://worlds/tiny_biomes.world.json",
+                 "res://worlds/shapes.world.json",
                  "res://climate/world.json", "res://climate/example.json",
                  "res://climate/plain.json", "res://climate/shaped_test.json", "res://climate/fieldless_test.json", "res://climate/eight_biomes_test.json",
                  "res://climate/notes_test.json", "res://climate/programs_test.json", "res://climate/graph_test.json", "res://climate/caves_test.json" }) {
@@ -149,4 +155,269 @@ TEST_CASE("WorldFile: the project's worlds load and configure as themselves, no 
         ChunkParam param;
         CHECK(sdf.configure_world(w, param) == ov::str());
     }
+}
+
+namespace {
+
+// Three edits that test the format's corners: int64 anchors past 2^53 (JSON numbers would round them), a turned
+// rotation, a trailing -0 param (kept: not +0), floats that need 9 digits, a smooth radius.
+std::vector<SDFTable::Edit> corner_edits() {
+    std::vector<SDFTable::Edit> edits(3);
+    edits[0].type = "sphere";
+    edits[0].op = Combine::SUBTRACT;
+    edits[0].anchor = VoxelPos((int64_t(1) << 53) + 1, -(int64_t(1) << 59) - 3, 12345);
+    edits[0].params[0] = 0.1f;
+    edits[1].type = "capsule";
+    edits[1].op = Combine::SMOOTH_SUBTRACT;
+    edits[1].anchor = VoxelPos(-7, 600, (int64_t(1) << 60) - 1);
+    const float c = float(std::cos(0.7)), s = float(std::sin(0.7));
+    const float turned[9] = { c, 0.0f, -s, 0.0f, 1.0f, 0.0f, s, 0.0f, c };
+    std::copy(turned, turned + 9, edits[1].rotation);
+    edits[1].params[0] = 12.000001f;
+    edits[1].params[1] = 3.3333333f;
+    edits[1].params[2] = -0.0f;
+    edits[1].k = 0.6f;
+    edits[2].type = "crown";
+    edits[2].op = Combine::SMOOTH_UNION;
+    edits[2].params[0] = 9.0f;
+    edits[2].params[1] = 1.0f;
+    edits[2].k = 2.0f;
+    return edits;
+}
+
+// p_text read back as an edits file.
+ov::str read_edits(const ov::str &p_text, std::vector<SDFTable::Edit> &r_edits) {
+    ov::Value data;
+    const ov::str err = WorldFile::parse_object(p_text, "edits", data);
+    return err.empty() ? WorldFile::parse_edits(data, r_edits) : err;
+}
+
+// The records past the scene's (the replayed edits and their moment blobs), as the GPU would read them.
+std::vector<TableRecord> edit_records(const SDFCascade &p_sdf) {
+    const uint32_t scene_end = static_cast<const GpuTable *>(p_sdf.get_gpu_table())->get_scene_end();
+    const std::shared_ptr<const InstanceSnapshot> snap = p_sdf.get_snapshot();
+    std::vector<TableRecord> out;
+    for (uint32_t i = scene_end; i < snap->records.size(); i++) {
+        out.push_back(snap->records[i]);
+    }
+    return out;
+}
+
+bool same_records(const TableRecord &p_a, const TableRecord &p_b) {
+    return p_a.def == p_b.def && p_a.op == p_b.op && p_a.removed == p_b.removed && p_a.anchor == p_b.anchor &&
+            std::memcmp(&p_a.k, &p_b.k, sizeof(float)) == 0 && std::memcmp(p_a.rotation, p_b.rotation, sizeof(p_a.rotation)) == 0 &&
+            std::memcmp(p_a.params, p_b.params, sizeof(p_a.params)) == 0 && p_a.max_lod == p_b.max_lod && p_a.salt == p_b.salt;
+}
+
+} // namespace
+
+TEST_CASE("WorldFile: an edits file round-trips bit for bit, int64 anchors as text") {
+    const std::vector<SDFTable::Edit> edits = corner_edits();
+    const ov::str text = WorldFile::edits_text(edits);
+    CHECK(ov::contains(text, "\"9007199254740993\"")); // 2^53 + 1: a double would read 2^53
+    CHECK(ov::contains(text, "\"-576460752303423491\""));
+    std::vector<SDFTable::Edit> back;
+    CHECK(read_edits(text, back) == ov::str());
+    CLIMATE_REQUIRE(back.size() == edits.size());
+    for (size_t i = 0; i < edits.size(); i++) {
+        CAPTURE(i);
+        CHECK(back[i] == edits[i]);
+    }
+    CHECK(!ov::contains(WorldFile::edits_text({ edits[0] }), "rotation")); // the identity left out
+    CHECK(ov::contains(WorldFile::edits_text({ edits[0] }), "\"params\":[0.10000000149011612]")); // 0.1f's double, the trailing +0s left out
+    std::vector<SDFTable::Edit> none;
+    CHECK(read_edits(WorldFile::edits_text(none), none) == ov::str());
+    CHECK(none.empty());
+}
+
+TEST_CASE("WorldFile: a malformed edits file is refused with the entry and the reason") {
+    std::vector<SDFTable::Edit> edits = corner_edits();
+    const std::vector<SDFTable::Edit> before = edits;
+    const char *anchor = R"("anchor": ["1", "2", "3"])";
+    const std::pair<ov::str, const char *> cases[] = {
+        { R"({"version": 2, "edits": []})", "the only version" },
+        { R"({"edits": []})", "the only version" },
+        { R"({"version": 1, "edit": []})", "unknown key 'edit'" },
+        { R"({"version": 1, "edits": {}})", "'edits' is a list" },
+        { ov::str(R"({"version": 1, "edits": [{"type": "sphere", "op": "intersect", )") + anchor + "}]}", "entry 0: 'op' is union" },
+        { ov::str(R"({"version": 1, "edits": [{"type": "sphere", "op": "union", )") + anchor + R"(}, {"op": "union", )" + anchor + "}]}",
+                "entry 1: 'type'" },
+        { R"({"version": 1, "edits": [{"type": "sphere", "op": "union", "anchor": [1, 2, 3]}]})", "LOD0 voxels as int64 strings" },
+        { R"({"version": 1, "edits": [{"type": "sphere", "op": "union", "anchor": ["1", "2.5", "3"]}]})", "int64 strings" },
+        { R"({"version": 1, "edits": [{"type": "sphere", "op": "union", "anchor": ["1", "2", "99999999999999999999"]}]})", "int64 strings" },
+        { ov::str(R"({"version": 1, "edits": [{"type": "sphere", "op": "union", "rotation": [1, 0, 0, 0, 1, 0, 0, 0], )") + anchor + "}]}",
+                "'rotation' is 9 numbers" },
+        { ov::str(R"({"version": 1, "edits": [{"type": "sphere", "op": "union", "params": [1, 2, 3, 4, 5, 6, 7, 8, 9], )") + anchor + "}]}",
+                "at most 8 numbers" },
+        { ov::str(R"({"version": 1, "edits": [{"type": "sphere", "op": "union", "k": "1", )") + anchor + "}]}", "'k' is a number" },
+        { ov::str(R"({"version": 1, "edits": [{"type": "sphere", "op": "union", "colour": 1, )") + anchor + "}]}", "unknown key 'colour'" },
+    };
+    for (const std::pair<ov::str, const char *> &c : cases) {
+        CAPTURE(c.first);
+        CHECK(ov::contains(read_edits(c.first, edits), c.second));
+    }
+    CLIMATE_REQUIRE(edits.size() == before.size());
+    for (size_t i = 0; i < edits.size(); i++) {
+        CHECK(edits[i] == before[i]); // untouched
+    }
+    WorldFile w;
+    CHECK(ov::contains(parse(R"({"edits": 5})", w), "not a path or an object"));
+    CHECK(ov::contains(parse(R"({"edits": "res://worlds/nowhere.edits.json"})", w), "cannot read"));
+    CHECK(ov::contains(parse(R"({"instance_band": 0})", w), "'instance_band' is true or false"));
+    CHECK(parse(R"({"instance_band": false, "edits": {"version": 1, "edits": [{"type": "die", "op": "union", "anchor": ["0", "0", "0"], "params": [4]}]}})", w) ==
+            ov::str());
+    CHECK(!w.instance_band);
+    CLIMATE_REQUIRE(w.edits.size() == 1);
+    CHECK(w.edits[0].type == "die");
+    CHECK(w.edits[0].params[0] == 4.0f);
+}
+
+// The table's library names each type once (an edits file names them): the crown is no second "rock".
+TEST_CASE("SDFTable: the library's type names are unique and found by name") {
+    GroundSDF sdf;
+    ChunkParam param;
+    sdf.configure(param, 15);
+    CHECK(sdf.get_world_error() == ov::str());
+    const DefLibrary &lib = sdf.get_library();
+    for (int i = 0; i < lib.size(); i++) {
+        CAPTURE(lib[i].name);
+        CHECK(lib.find(lib[i].name) == i);
+    }
+    for (const char *name : { "sphere", "capsule", "rock", "crown", "swiss_cube", "die", "stairs", "tunnel_cube", "moment_blob" }) {
+        CAPTURE(name);
+        CHECK(lib.find(name) >= 0);
+    }
+    CHECK(lib.find("crown") != lib.find("rock"));
+    CHECK(lib.find("no such type") == -1);
+}
+
+// configure replays the edits after the scene: the same records as add_instance makes, live (moved, removed), saved and
+// replayed again to the same bits; their ids past the scene's, so they fold after the streamed instances (compose_list).
+TEST_CASE("SDFTable: the edits replay after the scene, live, and save to the same records") {
+    GroundSDF sdf;
+    ChunkParam param;
+    sdf.set_zone(SDFTable::Zone{ 200.0 });
+    sdf.set_instances(SDFTable::counted(default_species(), Archetype::Species::ROCK, 400, 200.0));
+    const VoxelPos centre = [&] {
+        GroundSDF probe; // the ground under the zone's centre, where a carving sphere goes
+        probe.configure(param, 15);
+        const SDFTable::Zone zone;
+        return probe.ground_at(std::llround(zone.x_m / param.voxel_size), std::llround(zone.z_m / param.voxel_size));
+    }();
+    std::vector<SDFTable::Edit> edits = corner_edits();
+    edits[0].anchor = centre;
+    edits[0].params[0] = 20.0f; // 10 m
+    edits[1].anchor = centre + VoxelPos(400, 0, 0);
+    edits[2].anchor = centre + VoxelPos(-400, 30, 0);
+    sdf.set_edits(edits);
+    param.skirt_depth = ov::max(param.skirt_depth, sdf.min_skirt_depth(param, 15));
+    sdf.configure(param, 15);
+    CLIMATE_REQUIRE(sdf.get_world_error() == ov::str());
+    CHECK(sdf.get_stream() != nullptr); // the rocks stream
+    const std::vector<SDFTable::Edit> live = sdf.live_edits();
+    CLIMATE_REQUIRE(live.size() == edits.size());
+    for (size_t i = 0; i < edits.size(); i++) {
+        CHECK(live[i] == edits[i]);
+    }
+    const std::vector<TableRecord> replayed = edit_records(sdf);
+    CLIMATE_REQUIRE(replayed.size() >= edits.size()); // plus the crown's moment blobs
+    CHECK(replayed[0].def == uint8_t(sdf.get_library().find("sphere")));
+    CHECK(replayed[0].op == Combine::SUBTRACT);
+    CHECK(replayed[0].anchor == centre);
+    // The carving sphere folds last: the air at its centre, whatever rock streams there.
+    WorldPos at;
+    at.voxel = centre;
+    CHECK(sdf.evaluate(at, 0) > 5.0f);
+
+    // Live: a move rewrites the entry, a removal drops it, an add appends one; the same as add_instance's record.
+    const uint32_t scene_end = static_cast<const GpuTable *>(sdf.get_gpu_table())->get_scene_end();
+    const int sphere_id = int(scene_end);
+    CHECK(sdf.move_instance(sphere_id, centre + VoxelPos(0, 2, 0), nullptr));
+    const float params[8] = { 6.0f, 2.0f };
+    const int added = sdf.add_instance(sdf.get_library().find("capsule"), centre + VoxelPos(0, 0, 300), edits[1].rotation, params, int(Combine::UNION), 1.5f);
+    CHECK(added > sphere_id);
+    std::vector<SDFTable::Edit> now = sdf.live_edits();
+    CLIMATE_REQUIRE(now.size() == 4);
+    CHECK(now[0].anchor == centre + VoxelPos(0, 2, 0));
+    CHECK(now[3].type == "capsule");
+    CHECK(now[3].k == 1.5f);
+    const int crown_id = int(scene_end) + 2; // after the sphere and the capsule (blobs come after their record)
+    CHECK(sdf.get_snapshot()->records[crown_id].def == uint8_t(sdf.get_library().find("crown")));
+    CHECK(sdf.remove_instance(crown_id));
+    now = sdf.live_edits();
+    CLIMATE_REQUIRE(now.size() == 3);
+    CHECK(now[2].type == "capsule");
+
+    // Saved, read back and replayed: the same records, bit for bit.
+    std::vector<SDFTable::Edit> saved;
+    CHECK(read_edits(WorldFile::edits_text(now), saved) == ov::str());
+    CLIMATE_REQUIRE(saved.size() == now.size());
+    GroundSDF again;
+    again.set_zone(SDFTable::Zone{ 200.0 });
+    again.set_instances(SDFTable::counted(default_species(), Archetype::Species::ROCK, 400, 200.0));
+    again.set_edits(saved);
+    again.configure(param, 15);
+    CLIMATE_REQUIRE(again.get_world_error() == ov::str());
+    const std::vector<TableRecord> first = edit_records(sdf), second = edit_records(again);
+    std::vector<TableRecord> live_first;
+    for (const TableRecord &r : first) {
+        if (!r.removed && r.op != Combine::ACCUM) {
+            live_first.push_back(r);
+        }
+    }
+    std::vector<TableRecord> live_second;
+    for (const TableRecord &r : second) {
+        if (r.op != Combine::ACCUM) {
+            live_second.push_back(r);
+        }
+    }
+    CLIMATE_REQUIRE(live_first.size() == live_second.size());
+    for (size_t i = 0; i < live_first.size(); i++) {
+        CAPTURE(i);
+        CHECK(same_records(live_first[i], live_second[i]));
+    }
+}
+
+TEST_CASE("SDFTable: an edit naming no type, or refused, refuses the world with its entry") {
+    std::vector<SDFTable::Edit> edits = corner_edits();
+    edits[1].type = "cube";
+    GroundSDF unknown;
+    unknown.set_edits(edits);
+    ChunkParam param;
+    unknown.configure(param, 15);
+    CHECK(ov::contains(unknown.get_world_error(), "edits: entry 1: no library type is named 'cube'"));
+    CHECK(unknown.program().nodes.empty()); // no world
+    edits = corner_edits();
+    edits[2].rotation[0] = 2.0f;
+    GroundSDF skewed;
+    skewed.set_edits(edits);
+    skewed.configure(param, 15);
+    CHECK(ov::contains(skewed.get_world_error(), "edits: entry 2: the rotation is not orthonormal"));
+    edits = corner_edits();
+    edits[0].op = Combine::ACCUM;
+    GroundSDF blob;
+    blob.set_edits(edits);
+    blob.configure(param, 15);
+    CHECK(ov::contains(blob.get_world_error(), "edits: entry 0: op 4"));
+}
+
+// The GPU table holds the scene, the replayed edits and 4096 more (runtime edits).
+TEST_CASE("SDFTable: the table's capacity counts the replayed edits") {
+    std::vector<SDFTable::Edit> edits(13000);
+    for (size_t i = 0; i < edits.size(); i++) {
+        edits[i].type = "sphere";
+        edits[i].op = Combine::SUBTRACT;
+        edits[i].anchor = VoxelPos(int64_t(i % 100) * 8, 600, int64_t(i / 100) * 8);
+        edits[i].params[0] = 2.0f;
+    }
+    GroundSDF sdf;
+    sdf.set_edits(edits);
+    ChunkParam param;
+    sdf.configure(param, 15);
+    CLIMATE_REQUIRE(sdf.get_world_error() == ov::str());
+    const GpuTable &gpu = *static_cast<const GpuTable *>(sdf.get_gpu_table());
+    CHECK(gpu.get_scene_end() == 0);
+    CHECK(sdf.get_snapshot()->records.size() == 13000);
+    CHECK(gpu.table_capacity() == 13000 + 4096);
+    CHECK(sdf.live_edits().size() == 13000);
 }

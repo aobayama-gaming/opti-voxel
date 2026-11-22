@@ -20,12 +20,12 @@ var pending_audit := {}  # the mark waiting for its discovery audit report
 var clip_terrain: Node = null  # the clip planes follow the altitude (Presets.clip_planes)
 var base_near := 0.05
 
-# The sibling VoxelTerrain's flags (`-- --world=PATH`, `--terrain=cascade|shapes`, `--lod_error=F`, ...: bench.gd's list)
+# The sibling VoxelTerrain's flags (`-- --world=PATH`, `--terrain=shapes`, `--lod_error=F`, ...: bench.gd's list)
 # go through Presets.apply_args in _enter_tree: they must be set before the terrain's _ready, and every node enters the
 # tree before any is ready.
-var spawn_altitude := 200.0  # --altitude=M: start M metres above the ground (not in the shapes gallery)
+@export var spawn_altitude := 200.0  # start this many metres above the ground (--altitude=M; the shapes scene: 8)
 var spawn_tangent = null  # --spawn=U,V: metres along the base's tangent plane (Vector2), null: the scene's spawn
-var altitude_terrain: Node = null  # flight speed follows the altitude over it; not in the shapes gallery
+var altitude_terrain: Node = null  # flight speed follows the altitude over it
 var smoothed_altitude := 0.0  # 0: not read yet
 const ALTITUDE_TAU := 0.2  # seconds: the altitude reading's time constant, in log space
 const FLY_RATE := 1.0  # altitudes per second
@@ -74,7 +74,7 @@ func _enter_tree() -> void:
 			left_tube = true
 	if terrain:
 		terrain.set_dig_settings(dig_settings)
-		if terrain.terrain_mode != 4 and spawn_tangent == null:
+		if spawn_tangent == null:
 			position += terrain.get_scene_shift()  # on a planet: over its +y pole, before the terrain's first scan
 
 func _ready():
@@ -82,7 +82,7 @@ func _ready():
 	if terrain:
 		clip_terrain = terrain
 		base_near = camera.near
-	if terrain and terrain.terrain_mode != 4:  # the shapes gallery keeps the scene's spawn
+	if terrain:
 		altitude_terrain = terrain
 		if spawn_tangent != null:
 			global_position = terrain.get_tangent_position(spawn_tangent)
@@ -252,6 +252,19 @@ func _stand(p_turn: float = 0.0) -> void:
 	yaw = rotation.y  # the marks' heading
 
 
+func _save_edits() -> void:
+	var terrain := _terrain()
+	if not terrain:
+		return
+	var world: String = terrain.world_path.get_file().trim_suffix(".json").trim_suffix(".world")
+	var path := "user://%s.edits.json" % (world if world != "" else "default")
+	var error: String = terrain.save_edits(path)
+	if error != "":
+		push_error("player: " + error)
+	else:
+		print("EDITS saved to ", ProjectSettings.globalize_path(path))
+
+
 func _write_mark(m: Dictionary) -> void:
 	var path := marks_dir + "/marks.jsonl"
 	var f := FileAccess.open(path, FileAccess.READ_WRITE if FileAccess.file_exists(path) else FileAccess.WRITE)
@@ -299,6 +312,10 @@ func _input(event: InputEvent) -> void:
 
 	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_H:
 		_mark("hole", true)
+
+	# F5 saves the live instance edits (the digs) as user://<world>.edits.json: a world file's "edits" key loads them.
+	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_F5:
+		_save_edits()
 
 	# V cycles the debug views (VoxelTerrain.debug_view): shaded, normals, LOD, page, wireframe, chunk, group, quad, faceted,
 	# material, biome (12; 10 / 11 are the bench's bark probe). B toggles the biome view.

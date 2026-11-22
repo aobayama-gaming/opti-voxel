@@ -120,7 +120,8 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
   `bench/results/<date>-discovery.md`. Run it after touching the discoverer or the SDF.
 - Hole hunting: run the main scene with `godot --path adapter/godot/project -- --marks=DIR`; H saves the camera
   pose, a screenshot, the chunk counts and a discovery audit to `DIR/marks.jsonl` (closing the window
-  saves a last pose). Replay a mark with `bench.sh --cam_pos=... --pitch=... --yaw=... --lod_error=4`.
+  saves a last pose); F5 saves the live instance edits (the digs) to `user://<world>.edits.json`, which a world file's
+  `"edits"` loads. Replay a mark with `bench.sh --cam_pos=... --pitch=... --yaw=... --lod_error=4`.
 - `--view=N` debug views: 1 normals, 2 LOD, 3 page, 4 wireframe, 5 chunk, 6 group, 7 quad index,
   8 faceted (clay, per-triangle normals: crisp creases; the shapes scene starts in it), 9 material (palette ids),
   10 / 11 the bark seam probe (raw bytes, `bench.gd --probe`), 12 biome (each material's debug colour: a climate's

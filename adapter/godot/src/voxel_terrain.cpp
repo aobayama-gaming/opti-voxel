@@ -23,8 +23,6 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_world_json", "json", "dir"), &VoxelTerrain::set_world_json);
     ClassDB::bind_method(D_METHOD("restart_world", "json", "dir"), &VoxelTerrain::restart_world);
     ClassDB::bind_method(D_METHOD("get_world_error"), &VoxelTerrain::get_world_error);
-    ClassDB::bind_method(D_METHOD("set_terrain_mode", "mode"), &VoxelTerrain::set_terrain_mode);
-    ClassDB::bind_method(D_METHOD("get_terrain_mode"), &VoxelTerrain::get_terrain_mode);
     ClassDB::bind_method(D_METHOD("get_voxel_size"), &VoxelTerrain::get_voxel_size);
     ClassDB::bind_method(D_METHOD("set_world_origin_x", "voxel"), &VoxelTerrain::set_world_origin_x);
     ClassDB::bind_method(D_METHOD("get_world_origin_x"), &VoxelTerrain::get_world_origin_x);
@@ -134,13 +132,14 @@ void VoxelTerrain::_bind_methods() {
             DEFVAL(PackedFloat32Array()), DEFVAL(PackedFloat32Array()), DEFVAL(0), DEFVAL(0.0f));
     ClassDB::bind_method(D_METHOD("remove_instance", "id"), &VoxelTerrain::remove_instance);
     ClassDB::bind_method(D_METHOD("move_instance", "id", "x", "y", "z", "rotation"), &VoxelTerrain::move_instance, DEFVAL(PackedFloat32Array()));
+    ClassDB::bind_method(D_METHOD("get_type_index", "name"), &VoxelTerrain::get_type_index);
+    ClassDB::bind_method(D_METHOD("save_edits", "path"), &VoxelTerrain::save_edits);
 
     ADD_PROPERTY(PropertyInfo(Variant::STRING, "world_path", PROPERTY_HINT_FILE, "*.json"), "set_world_path", "get_world_path");
     // Read-only, from the world file.
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "voxel_size", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_NONE), "", "get_voxel_size");
     ADD_PROPERTY(PropertyInfo(Variant::INT, "lod_numbers", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_NONE), "", "get_lod_numbers");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "planet_radius", PROPERTY_HINT_NONE, "", PROPERTY_USAGE_NONE), "", "get_planet_radius");
-    ADD_PROPERTY(PropertyInfo(Variant::INT, "terrain_mode", PROPERTY_HINT_ENUM, "Cascade:1,Shapes:4"), "set_terrain_mode", "get_terrain_mode");
     ADD_PROPERTY(PropertyInfo(Variant::BOOL, "archetype_stream"), "set_archetype_stream", "get_archetype_stream");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_pixel_error", PROPERTY_HINT_RANGE, "0.25,64,0.25"), "set_lod_pixel_error", "get_lod_pixel_error");
     ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "lod_pixel_error_back", PROPERTY_HINT_RANGE, "0,64,0.25"), "set_lod_pixel_error_back", "get_lod_pixel_error_back");
@@ -202,17 +201,6 @@ void VoxelTerrain::set_world_json(const String &p_json, const String &p_dir) {
 
 String VoxelTerrain::get_world_path() const {
     return godot_str(cfg().world_path);
-}
-
-void VoxelTerrain::set_terrain_mode(int p_mode) {
-    if (!_settable("terrain_mode")) {
-        return;
-    }
-    cfg().terrain_mode = p_mode;
-}
-
-int VoxelTerrain::get_terrain_mode() const {
-    return cfg().terrain_mode;
 }
 
 float VoxelTerrain::get_voxel_size() const {
@@ -883,6 +871,9 @@ bool VoxelTerrain::restart_world(const String &p_json, const String &p_dir) {
     ERR_FAIL_NULL_V_MSG(main_device, false, "restart_world: the terrain is not in the tree (set_world_json before it enters).");
     OV_TRACE("terrain", "restart_world");
     main_device->post([device = main_device]() { device->park(); });
+    // The live edits go on in the next world (a world refused before has none: the next one replays its file's).
+    const bool keep_edits = world->is_started();
+    const std::vector<SDFTable::Edit> edits = world->live_edits();
     ov::World::Kept kept; // the next world's mesher draws on the same pages, its discoverer on the same local device
     {
         OV_TRACE("terrain", "restart_stop");
@@ -900,6 +891,9 @@ bool VoxelTerrain::restart_world(const String &p_json, const String &p_dir) {
     cfg().world_path.clear();
     cfg().world_json = ov_str(p_json);
     cfg().world_dir = ov_str(p_dir);
+    if (keep_edits) {
+        world->set_start_edits(edits);
+    }
     bool started = false;
     {
         OV_TRACE("terrain", "restart_load");
@@ -943,6 +937,14 @@ bool VoxelTerrain::remove_instance(int p_id) {
 bool VoxelTerrain::move_instance(int p_id, int64_t p_x, int64_t p_y, int64_t p_z, const PackedFloat32Array &p_rotation) {
     float rot[9];
     return world->move_instance(p_id, VoxelPos(p_x, p_y, p_z), edit_floats(p_rotation, 9, rot, false));
+}
+
+int VoxelTerrain::get_type_index(const String &p_name) const {
+    return world->type_index(ov_str(p_name));
+}
+
+String VoxelTerrain::save_edits(const String &p_path) const {
+    return godot_str(world->save_edits(ov_str(p_path)));
 }
 
 bool VoxelTerrain::dig_hole(const Vector3 &p_origin, const Vector3 &p_dir) {

@@ -22,7 +22,9 @@
 //     "instances": [ { "species": "conifer", "cell_m": 5, "share": 1 }... ],
 //     "features": [ { "kind": "lava_lake", "cell_m": 640, "chance": 0.6, "radius_m": [18, 45] }... ],
 //     "species": "species.json" or [ species... ],
-//     "biomes": "ground.biomes.json" or [ biome..., default biome ]
+//     "biomes": "ground.biomes.json" or [ biome..., default biome ],
+//     "instance_band": true,
+//     "edits": "<name>.edits.json" or { "version": 1, "edits": [ edit... ] }
 //   }
 //
 // A path is relative to the file naming it, or absolute (res://, /...); "species" and "biomes" files hold the list.
@@ -33,6 +35,18 @@
 // where no biome lists its own, each entry a species, its cell and its share (Climate::parse_instances), over the "zone"
 // (SDFTable::Zone: a square of side_m metres round centre_m, x and z; side 0: none); "features" likewise what stands on a
 // biome that lists none, each entry a kind, its cell, its chance and its radius (Climate::parse_features).
+// "instance_band" false keeps every instance whole at every LOD (SDFTable::set_instance_band: no erosion, no drop, no
+// moment blobs; the shapes gallery's hard-CSG creases). "edits" are the runtime edits the world starts with
+// (SDFTable::set_edits), what an edits file holds:
+//
+//   { "version": 1, "edits": [ { "type": "sphere", "op": "subtract", "anchor": ["-104", "600", "-190"],
+//                                "rotation": [9 numbers], "params": [numbers], "k": 0 }... ] }
+//
+// one entry per live edit in id order (a moved edit's entry rewritten, a removed one dropped: the set, not a log).
+// "type" a library type's name (TableDef::name), "op" a combine operator's (Archetype::COMBINE_NAMES), "anchor" the
+// LOD0 voxel as three int64 strings (JSON numbers are doubles), "rotation" the rows of a rotation (absent: identity),
+// "params" up to 8 numbers (voxels; the rest 0), "k" the smooth radius (voxels, absent: 0). The floats round-trip bit for
+// bit (save_edits writes the shortest text of each).
 struct WorldFile {
     // The world of a host or check given none.
     static constexpr const char *DEFAULT_PATH = "res://worlds/default.world.json";
@@ -54,6 +68,8 @@ struct WorldFile {
     std::vector<Climate::InstanceShare> instances; // SDFTable::set_instances
     std::vector<Climate::FeatureShare> features; // SDFTable::set_features
     std::vector<Archetype::Species> species; // SDFTable::set_species
+    bool instance_band = true; // SDFTable::set_instance_band
+    std::vector<SDFTable::Edit> edits; // SDFTable::set_edits
 
     // The file at p_path (a host path, ov::read_file) in r_world: empty, or why it was refused (r_world untouched).
     static ov::str load(const ov::str &p_path, WorldFile &r_world);
@@ -69,4 +85,13 @@ struct WorldFile {
     static ov::str ground_table(ov::Value &r_table);
     // The species list in the file at p_path (SPECIES: today's) in r_species: empty, or why not.
     static ov::str load_species(const ov::str &p_path, std::vector<Archetype::Species> &r_species);
+
+    // An edits file's parsed JSON in r_edits: empty, or why it was refused (r_edits untouched).
+    static ov::str parse_edits(const ov::Value &p_data, std::vector<SDFTable::Edit> &r_edits);
+    // The edits file at p_path in r_edits: empty, or why not.
+    static ov::str load_edits(const ov::str &p_path, std::vector<SDFTable::Edit> &r_edits);
+    // p_edits as an edits file's text (one entry per line).
+    static ov::str edits_text(const std::vector<SDFTable::Edit> &p_edits);
+    // p_edits written to p_path (a host path, ov::write_file): empty, or why not.
+    static ov::str save_edits(const ov::str &p_path, const std::vector<SDFTable::Edit> &p_edits);
 };

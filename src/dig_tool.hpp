@@ -58,8 +58,8 @@ private:
     // The LOD0 voxel of the first point along the ray where the SDF is at most p_stop_m, stepping half the distance (at
     // least p_min_step_m), and its distance along the ray (r_t, if given); false when nothing is within reach.
     bool march(const Float3 &p_pos, const Float3 &p_dir, double p_stop_m, double p_min_step_m, VoxelPos &r_hit, double *r_t = nullptr) const;
-    // One edit at p_anchor, sizes in metres (params[0..1], k): its id, -1 when refused.
-    int place(int p_type, const VoxelPos &p_anchor, const float *p_rotation, const double p_params_m[2], Archetype::Combine p_op, double p_k_m);
+    // One edit of the library type named p_type at p_anchor, sizes in metres (params[0..1], k): its id, -1 when refused.
+    int place(const char *p_type, const VoxelPos &p_anchor, const float *p_rotation, const double p_params_m[2], Archetype::Combine p_op, double p_k_m);
 };
 
 } // namespace ov

@@ -65,7 +65,7 @@ The SDF program IR, the GPU table, the locality and band rules, the index and ru
   LODs 0-6, a 4,000-rock scatter and a 5 cm forest, the field step is within the outer chunk's skirt, except over a
   record dropped at L+1: no skirt bounds that step, but what is left of the record at L is at most `erode` cells thick
   and the fine rim's skirt lifts it to air (checked). `SDFTable::set_instance_band(false)` keeps every instance whole
-  (the shapes gallery, and the tests' reference). A rock scatter at a fixed density gives the same list lengths whatever N, empty from LOD 6 on.
+  (a world's `"instance_band": false`: the shapes gallery; and the tests' reference). A rock scatter at a fixed density gives the same list lengths whatever N, empty from LOD 6 on.
   **The index** (`instance_table`): an instance is stored once, at the finest LOD whose chunk span holds its
   grown box, in the node holding its centre (every touched node only when wider than a top-LOD node);
   subtree lists stop above each instance's `max_lod`. A chunk's list gathers the subtrees of the 125 chunks
@@ -96,7 +96,8 @@ The SDF program IR, the GPU table, the locality and band rules, the index and ru
   library type:** a `Builder` in `archetype_table.cpp` using `t_local` / `t_param` / `t_perlin*` and a
   bounds lambda of the params, then `DefLibrary::add` (a new *op* also needs the "Adding an op" list).
   **Runtime edits:** `VoxelTerrain.add_instance(type, x, y, z, rotation, params, op, k)` /
-  `remove_instance(id)` / `move_instance(id, x, y, z, rotation)` (anchors are int64 LOD0 voxels, never
+  `remove_instance(id)` / `move_instance(id, x, y, z, rotation)` (type a library index, `get_type_index("capsule")`: the
+  library's type names are unique and the scripts and `DigTool` name their types; anchors are int64 LOD0 voxels, never
   through `Vector3i`); the op must be 0-3, k >= 0, params finite and normal, the rotation orthonormal,
   the anchor within +-2^60 voxels and the box (any rotation) plus 2 k at most
   `SDFTable::max_instance_extent()` (4 top-LOD chunk spans, at most 2^29: `Archetype::record_fit_error`),
@@ -115,8 +116,11 @@ The SDF program IR, the GPU table, the locality and band rules, the index and ru
   page, are killed (else the old surface stays drawn); an edit also requires the new version from the
   chunks in flight for their first mesh (not loaded yet, so not listed). `remesh_queue` holds a chunk once. `add_new_loaded` drops a
   pending `to_destroy_chunk` entry so a re-meshed chunk is not freed twice. The GPU buffers are sized for
-  `instance_capacity()` records up front: the table's `table_capacity()` (default 16384 or the scene + 4096, removed ones
-  count; an add past it is refused), then the streamed slots. The bench's
+  `instance_capacity()` records up front: the table's `table_capacity()` (default 16384 or the scene and the replayed
+  edits + 4096, removed ones count; an add past it is refused), then the streamed slots. The live edits
+  (`SDFTable::live_edits`: an added record until removed, as moved since) are what an edits file saves and a world file's
+  `"edits"` replays at configure, after the scene (`docs/terrain.md`, "The edits file"), and what
+  `VoxelTerrain.restart_world` keeps. The bench's
   `--scenario=edit --edits=N` scripts add / move / remove edits, then settles; audit /
   discovery_audit should stay `ok`. The world file's rock entries (`instances`, a biome's or the world's: a
   rock or pillar of its `species`, `boulder` or `pillar` in `worlds/species.json`, and its `cell_m`) scatter rocks and pillars over its `zone` (a square of `side_m` metres

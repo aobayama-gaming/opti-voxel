@@ -454,7 +454,9 @@ TreeTypes crown_types(int p_branch, int p_crown, const TableDef &p_crown_def, in
 
 TreeTypes add_tree_types(DefLibrary &r_library, double p_voxel) {
     const int branch = r_library.add(make_branch_type(), Material::BARK);
-    const int crown = r_library.add(make_rock_type(crown_k(p_voxel), CROWN_SEED), Material::LEAVES);
+    std::shared_ptr<TableDef> crown_def = std::make_shared<TableDef>(*make_rock_type(crown_k(p_voxel), CROWN_SEED));
+    crown_def->name = "crown";
+    const int crown = r_library.add(crown_def, Material::LEAVES);
     const int cone = r_library.add(make_cone_type(crown_k(p_voxel), CROWN_SEED), Material::LEAVES);
     return crown_types(branch, crown, r_library[crown], cone);
 }

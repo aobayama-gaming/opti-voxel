@@ -4,6 +4,8 @@
 #include "material_ids.hpp"
 #include "world_coord.hpp"
 
+#include "ov/str.hpp"
+
 #include <memory>
 #include <utility>
 #include <vector>
@@ -28,6 +30,24 @@ enum class Combine : uint8_t {
     SMOOTH_SUBTRACT, // smooth_max(r, -c), radius k
     ACCUM, // a moment blob: c is an occupancy, summed into phi; the fold's epilogue draws phi (moment_surface)
 };
+
+// The operators' names, in the enum's order (an edits file's "op", WorldFile).
+inline constexpr const char *COMBINE_NAMES[] = { "union", "smooth_union", "subtract", "smooth_subtract", "accum" };
+
+inline const char *combine_name(Combine p_op) {
+    return COMBINE_NAMES[int(p_op)];
+}
+
+// The operator named p_name in r_op; false if none is.
+inline bool combine_named(const ov::str &p_name, Combine &r_op) {
+    for (int i = 0; i < int(sizeof(COMBINE_NAMES) / sizeof(COMBINE_NAMES[0])); i++) {
+        if (p_name == COMBINE_NAMES[i]) {
+            r_op = Combine(i);
+            return true;
+        }
+    }
+    return false;
+}
 
 // The operators that cut the register instead of adding to it.
 inline bool is_cutter(Combine p_op) {

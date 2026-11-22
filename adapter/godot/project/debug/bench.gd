@@ -64,10 +64,8 @@ extends Node3D
 ##   --max_in_flight=N            mesher batches waiting for their directory at most (default 3 per batch per frame)
 ##   --world=PATH                 the world file (VoxelTerrain.world_path, src/world_file.hpp): voxel size, LODs, trees,
 ##                                planet, climate, look (default: the scene's, res://worlds/default.world.json)
-##   --terrain=cascade|shapes
-##                                VoxelTerrain.terrain_mode (default cascade: the Hermite cascade terrain,
-##                                SDFCascade; shapes: its flat preset under the
-##                                hard-CSG shapes gallery, SDFTable::Scene::SHAPES)
+##   --terrain=shapes             the hard-CSG shapes gallery: --world=res://worlds/shapes.world.json (a constant
+##                                ground, the gallery in its edits file)
 ##   Instances (around x -50 z -150 m, on the ground):
 ##   --stream=0                   place the scatter and the forest whole at configure instead of streaming them
 ##   --lod_error=F                LOD screen-space error target (default 2.0; higher = coarser)
@@ -202,7 +200,7 @@ func _ready() -> void:
 			child.global_position += shift
 	start_pos = camera.global_position
 	add_child(terrain)
-	var above_ground: String = args.get("above_ground", "" if terrain.terrain_mode == 4 or args.has("cam_pos") else "50")
+	var above_ground: String = args.get("above_ground", "" if args.has("cam_pos") else "50")
 	if above_ground != "":
 		_place_above_ground(float(above_ground))  # the fly path starts there too
 		start_pos = camera.global_position
@@ -367,7 +365,7 @@ func _run_edits() -> void:
 			else:
 				terrain.move_instance(idx, vox[0], vox[1], vox[2])
 		else:
-			var id: int = terrain.add_instance(0, vox[0], vox[1], vox[2],
+			var id: int = terrain.add_instance(terrain.get_type_index("sphere"), vox[0], vox[1], vox[2],
 				PackedFloat32Array(), PackedFloat32Array([4.0 / vt]), 3, 1.0 / vt)
 			if id >= 0:
 				edit_ids.append(id)
@@ -378,9 +376,6 @@ func _run_edits() -> void:
 # 1.5 m radius) starting along the view, one per frame, then the left-click tube for --drag_s seconds: a
 # 20 m SUBTRACT capsule from 0.5 m ahead of the camera whose direction sweeps 10 degrees either side
 # (re-placed every frame, as when the player turns), then removed.
-const CAPSULE_TYPE := 1  # SDFTable's library: 0 sphere, 1 capsule, 2 rock (build_table)
-
-
 func _dig_capsule(vt: float, pos: Vector3, fwd: Vector3, length: float, radius: float, op: int, id: int) -> int:
 	var up := Vector3.UP
 	if absf(fwd.dot(up)) > 0.99:
@@ -391,7 +386,7 @@ func _dig_capsule(vt: float, pos: Vector3, fwd: Vector3, length: float, radius: 
 	var v := _voxel_of(pos, vt)
 	if id < 0:
 		var params := PackedFloat32Array([length / vt, radius / vt])
-		return terrain.add_instance(CAPSULE_TYPE, v[0], v[1], v[2], rot, params, op, 0.3 / vt)
+		return terrain.add_instance(terrain.get_type_index("capsule"), v[0], v[1], v[2], rot, params, op, 0.3 / vt)
 	terrain.move_instance(id, v[0], v[1], v[2], rot)
 	return id
 

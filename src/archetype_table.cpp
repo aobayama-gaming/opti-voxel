@@ -23,6 +23,15 @@ int DefLibrary::add(const TableDefPtr &p_def, uint32_t p_material) {
     return int(list.size() - 1);
 }
 
+int DefLibrary::find(const ov::str &p_name) const {
+    for (size_t i = 0; i < list.size(); i++) {
+        if (list[i]->name == p_name) {
+            return int(i);
+        }
+    }
+    return -1;
+}
+
 namespace {
 
 // Half the smallest side of the band depth's box (voxels).

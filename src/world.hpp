@@ -34,8 +34,6 @@ public:
         // written to a file). The host sets one of the two (VoxelTerrain's setters clear the other).
         str world_json;
         str world_dir;
-        // 1 the world's Hermite cascade terrain, 4 the flat preset under the shapes gallery.
-        int terrain_mode = 1;
         ChunkParam chunk_param; // skirt_depth set by the host, voxel_size by load_world; the render origin by start() and recenter()
         VoxelPos world_origin_request; // LOD0 voxels, snapped down to the root chunk span by start()
         // recenter() moves the render origin to the camera once it is farther than this from it (metres, on any axis):
@@ -177,11 +175,23 @@ public:
 
     void set_debug_view(int p_view);
 
-    // Instance edits (archetype table): the anchor in LOD0 voxels, a 9-float row-major rotation and 8 params (null:
-    // identity / zero), op a Combine. The chunks the edit can change are re-meshed, the discoverer rescans.
+    // Instance edits (archetype table): p_type a library index (type_index), the anchor in LOD0 voxels, a 9-float
+    // row-major rotation and 8 params (null: identity / zero), op a Combine. The chunks the edit can change are re-meshed,
+    // the discoverer rescans.
     int add_instance(int p_type, const VoxelPos &p_anchor, const float *p_rotation, const float *p_params, int p_op, float p_k);
     bool remove_instance(int p_id);
     bool move_instance(int p_id, const VoxelPos &p_anchor, const float *p_rotation);
+    // The library index of the type named p_name (DefLibrary::find), -1 if none is (or before start).
+    int type_index(const str &p_name) const;
+    // The live edits (SDFTable::live_edits): what a restart keeps and an edits file saves.
+    std::vector<SDFTable::Edit> live_edits() const { return sdf->live_edits(); }
+    // The live edits written as an edits file at p_path (a host path; WorldFile::save_edits): empty, or why not.
+    str save_edits(const str &p_path) const;
+    // The edits the next start() replays in place of the world file's "edits" (a restart keeps the live ones).
+    void set_start_edits(const std::vector<SDFTable::Edit> &p_edits) {
+        start_edits = p_edits;
+        has_start_edits = true;
+    }
 
     ov::Value debug_stats();
     // { section: total ms since start } of frame(), cheap enough to read every frame.
@@ -202,6 +212,8 @@ private:
     str content_json;
     str content_dir;
     bool content_read = false; // content is what load_world read (not WorldFile defaults)
+    std::vector<SDFTable::Edit> start_edits; // set_start_edits
+    bool has_start_edits = false;
     Hosts hosts;
     std::unique_ptr<SDFCascade> sdf;
     ChunkDiscoverer *chunk_discoverer = nullptr;

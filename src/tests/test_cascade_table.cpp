@@ -286,20 +286,24 @@ TEST_CASE("SDFCascade table: evaluating on another thread while the main thread 
     CHECK(evaluations.load() > 0);
 }
 
-TEST_CASE("SDFCascade table: the shapes gallery on the flat preset: cubes holed through, a pipped die, stairs, tunnels") {
+// worlds/shapes.world.json: a constant ground, the band rule off, the gallery in its edits file.
+TEST_CASE("SDFCascade table: the shapes gallery's world: cubes holed through, a pipped die, stairs, tunnels") {
+    WorldFile world;
+    CHECK(WorldFile::load("res://worlds/shapes.world.json", world) == ov::str());
+    CHECK(!world.instance_band);
     ChunkParam param;
-    const double vs = param.voxel_size;
     SDFCascade sdf;
-    sdf.preset = SDFCascade::Preset::FLAT;
-    sdf.set_scene(SDFTable::Scene::SHAPES);
-    sdf.set_instance_band(false); // as VoxelTerrain sets it for the gallery
-    sdf.configure(param, 25);
-    CHECK(sdf.min_skirt_depth(param, 25) == 0.0f);
-    CHECK(sdf.skirt_depth_m(3) == doctest::Approx(double(param.skirt_depth) * vs * 8.0)); // full skirt_depth cells: hard creases
+    CHECK(sdf.configure_world(world, param) == ov::str());
+    const double vs = param.voxel_size;
+    CHECK(sdf.min_skirt_depth(param, world.lods) == 0.0f);
+    // The constant ground has no step: the creases' skirt_depth cells (a hard crease differs between LODs by a cell).
+    CHECK(sdf.skirt_depth_m(3) == doctest::Approx(double(param.skirt_depth) * vs * 8.0));
     for (int i = 0; i < sdf.get_library().size(); i++) {
-        CHECK(sdf.get_library()[i].program.validate(25).empty());
+        CHECK(sdf.get_library()[i].program.validate(world.lods).empty());
     }
     const auto snap = sdf.get_snapshot();
+    CHECK(static_cast<const GpuTable *>(sdf.get_gpu_table())->get_scene_end() == 0); // every record an edit
+    CHECK(sdf.live_edits().size() == 11);
     CHECK(snap->records.size() == 11); // 8 cubes, the die, the stairs, the tunnelled cube
     if (snap->records.size() != 11) {
         return;
@@ -314,9 +318,9 @@ TEST_CASE("SDFCascade table: the shapes gallery on the flat preset: cubes holed 
         p.voxel = p_anchor + VoxelPos(std::llround(p_x / vs), std::llround(p_y / vs), std::llround(p_z / vs));
         return sdf.evaluate(p, 0);
     };
-    // Far from the shapes: 10 m above the flat ground.
+    // Far from the shapes: 10 m above the flat ground, the datum.
     const VoxelPos ground(0, sdf.ground_at(0, 0).y, 0);
-    CHECK(ground.y == std::llround(SDFCascade::FLAT_GROUND_M / vs));
+    CHECK(ground.y == std::llround(BaseSurface::DATUM_M / vs));
     CHECK(std::abs(sdf_at(ground, 5000.0, 10.0, 5000.0) - 10.0f) < 1e-3f);
     // Rings around vertical lines: the yaw of an instance doesn't move them.
     auto ring = [&](const VoxelPos &p_centre, double p_radius, double p_y) {

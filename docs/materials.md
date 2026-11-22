@@ -7,7 +7,7 @@ Per-chunk palettes and per-biome ground materials.
   id 0 `GROUND` is the page shader's procedural slope / height colours; ids < 2^24). By default it is its type's
   (`DefLibrary::add(def, material)`, `Material::FROM_TYPE` resolved by `SDFTable::finish_record`: branch bark, crown
   and cone leaves, basin scorched rock, island island rock; the generic shapes (sphere, capsule, rock, cylinder, the
-  shapes gallery) are `Material::INHERIT`, the lava slab sets lava), so runtime `add_instance` edits get theirs too.
+  gallery's composites) are `Material::INHERIT`, the lava slab sets lava), so runtime `add_instance` edits get theirs too.
   An `INHERIT` cutter colours nothing: the fold skips its win, so the sample keeps what it had (the dig tool's
   capsule carves a tree and the hole shows bark). On a union it resolves to ground (`Archetype::record_material`, in
   `SDFTable::finish_record`): an inheriting union would take whatever record won the sample before it in list order. It takes the list word's reserved

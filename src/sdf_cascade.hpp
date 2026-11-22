@@ -40,25 +40,17 @@ public:
     ~SDFCascade() override { stop_streaming(); }
 
     // Set before configure(): a climate table (the world file's format). configure() compiles it (Terrain::compile).
-    // Without biomes, or one it refuses, it is a world error (get_world_error: no program); the FLAT preset ignores it.
+    // Without biomes, or one it refuses, it is a world error (get_world_error: no program).
     ov::Value climate_data = ov::Value::object();
     // Set before configure(): the program specialised to the climate's values (Terrain::Mode::SPECIALISED), or generic
     // (false, the biome mixer's: its GPU text interprets the program as data, so an edit compiles nothing).
     bool specialize = true;
 
-    // Set before configure(). DEFAULT: the climate's notes. FLAT (the shapes gallery): a constant output, the ground at
-    // FLAT_GROUND_M, a plane y = datum (the same passes, a zero height).
-    enum class Preset { DEFAULT,
-        FLAT };
-    Preset preset = Preset::DEFAULT;
     // > 0: the ground's base is a sphere of this radius (metres) centred on the voxel (0, 0, 0) (BaseSurface::sphere: a
     // centre on its 2^31-voxel grid, exactly), its +y pole at y = radius; 0: the flat datum.
     double planet_radius_m = 0.0;
     // > 0 with a planet: a torus instead, a ring of this radius (metres) round y, its tube planet_radius_m.
     double planet_ring_m = 0.0;
-    // The flat preset's ground, its base: 50 m below the datum. The page shader's contour lines lie halfway between whole
-    // 100 m of altitude, never at 0: on one, a flat ground has fwidth ~ 0 and float noise picks the shade per triangle.
-    static constexpr double FLAT_GROUND_M = BaseSurface::DATUM_M - 50.0;
 
     // A note's or a field's coarsest octave at p_lod_count LODs (the cascade's top lattice's).
     static int top_octave(int p_lod_count) { return p_lod_count + 4; }
@@ -67,7 +59,7 @@ public:
         SDFBase::configure(p_param, p_lod_count);
         const double vs = p_param.voxel_size;
         k_max = top_octave(p_lod_count);
-        base = BaseSurface::flat(std::llround((preset == Preset::FLAT ? FLAT_GROUND_M : BaseSurface::DATUM_M) / vs));
+        base = BaseSurface::flat(std::llround(BaseSurface::DATUM_M / vs));
         voxel_size = p_param.voxel_size;
         skirt_depth_table.clear();
         moment_skirt_table.clear();
@@ -81,6 +73,7 @@ public:
         }
         world_error = world_error.empty() ? attach_climate() : world_error;
         world_error = world_error.empty() ? species_error() : world_error;
+        world_error = world_error.empty() ? build_table(p_lod_count) : world_error;
         if (!world_error.empty()) {
             prog = Terrain::LevelProgram(); // no world: every consumer refuses it (get_world_error)
             table = Climate::Table();
@@ -89,42 +82,49 @@ public:
             set_ground_materials({});
             return;
         }
-        build_table(p_lod_count);
         // Skirt depth per LOD (metres). A face neighbour is at most one LOD away, so its surface differs from this chunk's
         // by the program's step (LevelProgram::step: the output's largest change when the notes of Λ_L are dropped), never
         // deeper than skirt_depth cells of the LOD: the groove at the border is depth / 4. With instances placed, plus their
-        // erosion step (SDFTable::min_skirt_depth cells): next to a rock smooth-unioned into the ground both steps happen at
-        // the same seam, so the sum. Flat: the hard-CSG gallery's creases differ between LODs by up to a cell, so
-        // skirt_depth cells of the LOD. The moment blobs' own step (SDFTable::MOMENT_SKIRT_CELLS) is added only at the
-        // samples a blob touches (moment_skirt_table, sample_sdf).
-        const double erode_cells = current()->empty() && !get_stream() ? 0.0 : SDFTable::instance_erode_cells();
+        // own step: under the band rule its erosion (SDFTable::min_skirt_depth cells: next to a rock smooth-unioned into
+        // the ground both steps happen at the same seam, so the sum); kept whole at every LOD (a world's "instance_band":
+        // false) no erosion, but hard-CSG edits (has_hard_edits: the shapes gallery on its constant ground, step 0) have
+        // creases which differ between LODs by up to a cell: skirt_depth cells of the LOD. The moment blobs' own step
+        // (SDFTable::MOMENT_SKIRT_CELLS) is added only at the samples a blob touches (moment_skirt_table, sample_sdf).
+        const bool placed = !current()->empty() || get_stream();
+        const double instance_cells = !placed ? 0.0
+                : get_instance_band()         ? double(SDFTable::instance_erode_cells())
+                : SDFTable::has_hard_edits()  ? double(p_param.skirt_depth)
+                                              : 0.0;
         skirt_depth_table.assign(p_lod_count, 0.0f);
         moment_skirt_table.assign(p_lod_count, 0.0f);
         for (int l = 0; l < p_lod_count; l++) {
             const double step = size_t(l) < prog.step.size() ? prog.step[size_t(l)] : 0.0;
             const double cell_m = vs * std::ldexp(1.0, l);
-            const double ground_m = preset == Preset::FLAT ? double(p_param.skirt_depth) * cell_m : ov::min(step * vs, double(p_param.skirt_depth) * cell_m);
-            skirt_depth_table[l] = float(ground_m + erode_cells * cell_m);
+            const double ground_m = ov::min(step * vs, double(p_param.skirt_depth) * cell_m);
+            skirt_depth_table[l] = float(ground_m + instance_cells * cell_m);
             moment_skirt_table[l] = float(SDFTable::moment_skirt_cells() * cell_m);
         }
     }
 
     const Terrain::LevelProgram *get_program() const override { return &prog; }
-    // The world's parsed climate (configure), null without one (the FLAT preset, or a world error).
+    // The world's parsed climate (configure), null without one (a world error).
     const Climate::Table *get_climate() const { return given ? &table : nullptr; }
     // The scenes' sites read their biome from the world's climate (SDFTable's sources, BiomePick).
     const Climate::Table *placing_climate() const override { return get_climate(); }
     const Terrain::LevelProgram *placing_program() const override { return &prog; }
     // Why configure() built no world, empty if it built the one it was given: a refused planet, climate (or none) or
-    // species. Then there is no program, no table and no skirts: nothing may sample it (World::start,
-    // ClimateReport, CascadeCheck refuse it).
+    // species, or edit (SDFTable::set_edits). Then there is no program, no table and no skirts: nothing may sample it
+    // (World::start, ClimateReport, CascadeCheck refuse it).
     const ov::str &get_world_error() const { return world_error; }
-    // Configured on p_world's planet, climate, voxel size and LOD count (r_param.voxel_size set): get_world_error.
+    // Configured on p_world's planet, climate, species, band rule, edits, voxel size and LOD count (r_param.voxel_size
+    // set): get_world_error.
     const ov::str &configure_world(const WorldFile &p_world, ChunkParam &r_param) {
         planet_radius_m = p_world.planet_radius_m;
         planet_ring_m = p_world.planet_ring_m;
         climate_data = p_world.climate_table;
         set_species(p_world.species);
+        set_instance_band(p_world.instance_band);
+        set_edits(p_world.edits);
         r_param.voxel_size = float(p_world.voxel_m);
         configure(r_param, p_world.lods);
         return world_error;
@@ -455,14 +455,6 @@ vec4 base_stretch_gradient(vec4 g, int j) {
     return g;
 }
 )glsl";
-    // The flat preset's table: one biome whose output is 0.
-    static ov::Value flat_table() {
-        ov::str error;
-        return ov::parse_json(R"({"biomes": [{"name": "flat", "graph": {"nodes": [{"id": "c", "kind": "constant", "value_m": 0},
-            {"id": "o", "kind": "output", "height": "c"}]}}]})",
-                error);
-    }
-
     // p_data compiled into the program (its table, given or not): empty, or why it can't run here.
     ov::str compile_climate(const ov::Value &p_data, Terrain::Mode p_mode) {
         ov::str err = Terrain::compile(p_data, climate_ground(), p_mode, table, prog);
@@ -479,18 +471,14 @@ vec4 base_stretch_gradient(vec4 g, int j) {
         return err.empty() ? layout_error : err;
     }
 
-    // The program (configure, after the base and voxel size): the flat preset's constant table (specialised whatever
-    // specialize says: nothing edits it), else climate_data's. Empty, or why it can't run here (no biomes: a world names
-    // its ground): never another ground instead.
+    // The program (configure, after the base and voxel size): climate_data's. Empty, or why it can't run here (no biomes:
+    // a world names its ground): never another ground instead.
     ov::str attach_climate() {
         given = false;
         ground_materials = false;
         set_ground_materials({});
         ov::str err;
-        if (preset == Preset::FLAT) {
-            err = compile_climate(flat_table(), Terrain::Mode::SPECIALISED);
-            err = err.empty() ? err : "the flat ground: " + err;
-        } else if (climate_data.get("biomes", ov::Value::array()).is_empty()) {
+        if (climate_data.get("biomes", ov::Value::array()).is_empty()) {
             err = ov::str("a world names its ground: give it biomes, e.g. \"biomes\": \"") + WorldFile::GROUND_BIOMES + "\"";
         } else {
             err = compile_climate(climate_data, specialize ? Terrain::Mode::SPECIALISED : Terrain::Mode::GENERIC);
@@ -519,7 +507,7 @@ vec4 base_stretch_gradient(vec4 g, int j) {
     BaseSurface base; // the ground's reference: flat at the datum, or the planet (configure)
     float voxel_size = 0.5f;
     int k_max = 0; // a note's or a field's coarsest octave (lod_count + 4)
-    Climate::Table table; // the climate's fields and biomes (places, looks, contents): climate_data's, or the flat preset's
+    Climate::Table table; // the climate's fields and biomes (places, looks, contents): climate_data's
     bool given = false; // table is climate_data's (get_climate)
     bool ground_materials = false; // has_ground_materials (attach_climate)
     ov::str world_error; // get_world_error

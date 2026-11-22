@@ -214,10 +214,10 @@ It drops the ones that only protected the record layouts.
   file serves every voxel size; a world without biomes is refused, no template stands in). The species likewise
   (`worlds/species.json`, the forests' `"species"`; `default_species` gone from the engine). A small
   planet's ground is data too: the template's 3.3 km octaves would cross a 2 km planet's centre and are refused there,
-  so `tiny.world.json` carries its own ground, the template's octaves stopped at 3.3 km wavelengths. `SDFCascade::Preset::
-  FLAT` and `terrain_mode` stay: the flat ground is already a constant table (`flat_table`), and the preset also picks
-  the shapes gallery's ground height, skirts and spawn in World and `player.gd`; folding those into world files is
-  left for later.
+  so `tiny.world.json` carries its own ground, the template's octaves stopped at 3.3 km wavelengths. The flat
+  preset and `terrain_mode` went last (engine cleanup 4/5): the shapes gallery is a world file
+  (`worlds/shapes.world.json`: a constant node, `"instance_band": false`, the gallery in its edits file), its skirts the
+  hard-CSG edits' `skirt_depth` cells (band off), its spawn the player's `spawn_altitude`.
 - **Pins of the old terrain:**
   - `plain.json`'s hashes;
   - the generic == specialised pins on the old tables;
@@ -274,7 +274,7 @@ Measured, not assumed: PR G carries a `tools/bench_ab.sh` table against dev (the
 | **A + B** (done) | the legacy mesher and `--validate` deleted (GPU Direct is the only pipeline); this note |
 | **C** (done) | `LevelProgram`, the op table's CPU form, the compiler; doctests above |
 | **D** (done) | the GLSL forms (specialised, generic); `SDFCascade` on v2; CascadeCheck on v2 |
-| **E** (done) | deletion of *What goes*; tests ported, test tables re-checked and pinned, the template biome as world files (the flat preset kept, above) |
+| **E** (done) | deletion of *What goes*; tests ported, test tables re-checked and pinned, the template biome as world files (the flat preset kept then; gone in engine cleanup 4/5, above) |
 | **F** (done) | biome mixer: node kinds from the engine's catalogue (it already built its nodes from `graph_kinds`; its own loop refusal deleted, the engine's error names the node; the tooltips' v1 rules rewritten), the warp's `x` / `y` / `z` ports in `graph_kinds` (all three or `in`, each gated), any multifractal parent, worlds migrated on read (a field's ground term dropped) |
 | G | the constant relaxation per LOD (`fold_lods`, `docs/cascade.md`: a node of absent notes is a constant, the last level skips what nothing reads, #165); the biome pruning (`guard_biomes`: a biome's own nodes skipped where its weight is 0 over the chunk); the bench table; `docs/perf.md` |
 
