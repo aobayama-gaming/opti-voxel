@@ -48,9 +48,9 @@ Engine, GPU and float traps that already cost a debugging session each.
   and the bench loops on script errors. `find src -name "*.os" -size 0 -delete`, then rebuild.
 - The SDF gradient at a vertex can be exactly 0: on a medial axis, where a cell symmetric about it puts
   its vertex (a capsule thinner than the cell on a lattice line, the scatter's pillars at LODs 1-4), and the
-  nearby corner and Hermite gradients cancel by the same symmetry. `normalize()` of it is NaN and the
-  vertex was dropped (broken quads, `nan_vertices`); both vertex passes take their normal from
-  `vertex_normal` (`gpu_glsl.hpp`: the gradient, else the fallback, else straight up).
+  nearby corner gradients cancel by the same symmetry. `normalize()` of it is NaN and the
+  vertex was dropped (broken quads, `nan_vertices`); the vertex pass takes its normal from
+  `vertex_normal` (`gpu_glsl.hpp`: the gradient, else straight up).
 - SDF samples of exactly 0.0 happen (float heights hit the 0.5 m grid ~1 in 16k vertical crossings).
   Every pass uses the same side rule, solid = `!(w > 0)`, and a crossing's `t` is clamped above 0
   because `t > 0` is what marks a crossing downstream. Mixing `< 0` and `> 0`, or letting t reach 0,

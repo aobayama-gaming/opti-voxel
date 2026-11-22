@@ -6,7 +6,7 @@
 #   tools/biome_mixer.sh --check                                                  headless self-test
 #
 # --check prints the MIXER: line and exits 0 ok, 2 godot crashed / timed out, 4 not ok (a script error too: the check
-# builds every node's UI). Worlds save to adapter/godot/project/climate/worlds/; the last session autosaves (Godot's
+# builds every node's UI). The World menu exports over the world's own file; the last session autosaves (Godot's
 # user:// folder).
 set -uo pipefail
 

@@ -2,6 +2,7 @@
 
 #include "instance_stream.hpp"
 #include "scatter_source.hpp"
+#include "test_trees.hpp"
 #include "tree_archetype.hpp"
 
 #include <algorithm>

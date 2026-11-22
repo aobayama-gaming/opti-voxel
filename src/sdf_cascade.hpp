@@ -141,10 +141,6 @@ public:
     // base palette holds biome b's material, Climate::biome_material, at 1 + b), the program's pick at the sample. The
     // GPU's cascade_ground_material, bit for bit.
     uint32_t ground_material(int p_pick) const { return has_ground_materials() ? uint32_t(1 + p_pick) : 0u; }
-    // The same at LOD0 voxel p_voxel, a multiple of 2^lod.
-    uint32_t ground_material_at(const VoxelPos &p_voxel, int p_lod) const {
-        return ground_material(Terrain::point(prog, Vector3i64(p_voxel.x >> p_lod, p_voxel.y >> p_lod, p_voxel.z >> p_lod), p_lod).pick);
-    }
 
     ov::str get_ground_material_glsl() const override {
         if (!has_ground_materials()) {

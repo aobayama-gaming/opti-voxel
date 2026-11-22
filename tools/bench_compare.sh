@@ -3,7 +3,7 @@
 #
 #   tools/bench_compare.sh [--runs=2] [--scenarios="load fly"] CONFIG...
 #   CONFIG = label:bench-args (bench-args comma-separated), e.g.
-#     tools/bench_compare.sh "base:--lod_error=2" "coarse:--lod_error=4" "coarse-dc:--lod_error=4,--dual_contouring=1"
+#     tools/bench_compare.sh "base:--lod_error=2" "coarse:--lod_error=4" "coarse-cpu:--lod_error=4,--discoverer=cpu"
 # The first config is the baseline. Output: bench/results/<date>-compare.md
 set -uo pipefail
 

@@ -1,6 +1,7 @@
 #include "test_ground.hpp"
 
 #include "test_stream_common.hpp"
+#include "test_trees.hpp"
 
 #include "sdf_cascade.hpp"
 #include "tree_archetype.hpp"

@@ -35,11 +35,11 @@ One terrain (the cascade), one instance path (its table), one world file. Read b
   `FLAT_GROUND_M` = 250 m, off
   the page shader's 100 m contours) under the shapes gallery (`SDFTable::Scene::SHAPES`, `--terrain=shapes`,
   `res://shapes_scene.tscn` with a 60 km far plane: hard-CSG cubes holed through every face, each twice the size and
-  distance of the last, i.e. one per LOD, plus a die, stairs and a tunnelled cube, for dual contouring's creases; the
+  distance of the last, i.e. one per LOD, plus a die, stairs and a tunnelled cube, for hard creases; the
   composites are library types: `swiss_cube`, `die`, `stairs`, `tunnel_cube`; nothing in that scene is banded, its thin frames would tear). 0 was `SDFDummy` (it evaluated every
   octave at every LOD: detail finer than the cell, aliased far away) and 3 `SDFArchetype` (a plain fBm ground, and
-  instances compiled into its program), both removed. `--terrain=cascade|shapes` in `bench.gd` and the
-  main scene. Outside the shapes gallery the player spawns 200 m above the
+  instances compiled into its program), both removed. `--terrain=cascade|shapes` (default cascade) in
+  the bench and the player. Outside the shapes gallery the player spawns 200 m above the
   ground (`--altitude=M`) and flies at its altitude per second (read every frame, the reading smoothed over 0.2 s in log space: no speed steps), and the bench camera starts 50 m above it unless
   `--cam_pos` or `--above_ground=M` (M metres above the terrain under the camera, negative below) says otherwise: the
   cascade's ground is kilometres from the datum.

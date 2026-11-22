@@ -79,15 +79,9 @@ Float4 eval_arith(const Instr &p_in, const Float4 &p_a, const Float4 &p_b, bool 
     }
 }
 
-// INPUT, DIST, RSQRT and the noises (GLSL: emit_instr).
-Float4 eval_special(const Program &p_program, const Instr &p_in, const Float4 *p_r, const WorldPos &p_pos, int p_lod, float p_s,
-        const DefRecord *p_record) {
+// T_INPUT, T_PERLIN3, RSQRT, DIST (GLSL: statement in archetype_glsl.cpp).
+Float4 eval_special(const Instr &p_in, const Float4 *p_r, const WorldPos &p_pos, int p_lod, float p_s, const DefRecord *p_record) {
     switch (p_in.op) {
-        case Op::INPUT: {
-            const VoxelPos &anchor = p_program.anchors[p_in.index];
-            const float v = float(WorldCoord::sat_diff(p_pos.voxel[p_in.axis], anchor[p_in.axis], INPUT_LIMIT)) + axis_of(p_pos.frac, p_in.axis);
-            return Float4{ p_in.axis == 0 ? p_s : 0.0f, p_in.axis == 1 ? p_s : 0.0f, p_in.axis == 2 ? p_s : 0.0f, v };
-        }
         case Op::T_INPUT: {
             // The record's frame: R (p - anchor), the full 9 mul + 6 add (a runtime rotation can't skip
             // zeros as frame() does). q[a] and the dot product are in the generator's order (archetype_glsl).
@@ -100,17 +94,13 @@ Float4 eval_special(const Program &p_program, const Instr &p_in, const Float4 *p
             const float v = q[0] * row[0] + q[1] * row[1] + q[2] * row[2];
             return Float4{ p_s * row[0], p_s * row[1], p_s * row[2], v };
         }
-        case Op::T_PERLIN3:
-        case Op::T_PERLIN2: {
+        case Op::T_PERLIN3: {
             // The lattice follows the record's anchor (offset - anchor, exact int64), the seed is salted.
             if (!ExactNoise::band_kept(p_in.k, p_lod)) {
                 return Float4{}; // the band rule: an octave finer than the LOD is its mean
             }
             const DefRecord &rec = *p_record;
-            const Vector3i64 offset = p_in.offset - rec.anchor;
-            const uint32_t seed = p_in.seed ^ rec.salt;
-            const Float4 n = p_in.op == Op::T_PERLIN3 ? ExactNoise::perlin3(p_pos, p_in.k, seed, offset)
-                                                      : ExactNoise::perlin2(p_pos, p_in.k, seed, offset);
+            const Float4 n = ExactNoise::perlin3(p_pos, p_in.k, p_in.seed ^ rec.salt, p_in.offset - rec.anchor);
             const float f = p_in.value * exact_pow2(p_lod - p_in.k);
             return Float4{ n.x * f, n.y * f, n.z * f, n.w * p_in.value };
         }
@@ -123,19 +113,10 @@ Float4 eval_special(const Program &p_program, const Instr &p_in, const Float4 *p
             const float k = -0.5f * y * y * y;
             return Float4{ a.x * k, a.y * k, a.z * k, y };
         }
-        case Op::DIST: {
+        default: { // DIST
             const Float4 &a = p_r[p_in.a];
             const float q = p_s * inv_grad_length(a, p_s);
             return Float4{ a.x * q, a.y * q, a.z * q, a.w * q };
-        }
-        default: { // PERLIN3, PERLIN2
-            if (!ExactNoise::band_kept(p_in.k, p_lod)) {
-                return Float4{};
-            }
-            const Float4 n = p_in.op == Op::PERLIN3 ? ExactNoise::perlin3(p_pos, p_in.k, p_in.seed, p_in.offset)
-                                                    : ExactNoise::perlin2(p_pos, p_in.k, p_in.seed, p_in.offset);
-            const float f = p_in.value * exact_pow2(p_lod - p_in.k);
-            return Float4{ n.x * f, n.y * f, n.z * f, n.w * p_in.value };
         }
     }
 }
@@ -165,7 +146,7 @@ Float4 eval(const Program &p_program, int p_i, const Float4 *p_r, const WorldPos
         case Op::FLOOR:
             return flat_value(std::floor(p_r[in.a].w));
         default:
-            return eval_special(p_program, in, p_r, p_pos, p_lod, p_s, p_record);
+            return eval_special(in, p_r, p_pos, p_lod, p_s, p_record);
     }
 }
 
@@ -179,13 +160,9 @@ bool is_flat(const Instr &p_in, const std::vector<Instr> &p_code) {
         case Op::T_PARAM:
         case Op::FLOOR:
             return true;
-        case Op::INPUT:
         case Op::T_INPUT:
         case Op::DIST:
-        case Op::PERLIN3:
-        case Op::PERLIN2:
         case Op::T_PERLIN3:
-        case Op::T_PERLIN2:
             return false;
         case Op::NEG:
         case Op::ABS:
@@ -202,13 +179,9 @@ int op_arity(Op p_op) {
     switch (p_op) {
         case Op::CONST:
         case Op::PARAM:
-        case Op::INPUT:
-        case Op::PERLIN3:
-        case Op::PERLIN2:
         case Op::T_INPUT:
         case Op::T_PARAM:
         case Op::T_PERLIN3:
-        case Op::T_PERLIN2:
             return 0;
         case Op::NEG:
         case Op::ABS:
@@ -236,12 +209,8 @@ int op_cost(Op p_op) {
             return 14;
         case Op::T_INPUT: // sat_diff + the full 9 mul + 6 add
             return 24;
-        case Op::PERLIN3:
         case Op::T_PERLIN3:
             return 260;
-        case Op::PERLIN2:
-        case Op::T_PERLIN2:
-            return 110;
         default:
             return 4;
     }
@@ -267,7 +236,7 @@ ov::str Program::validate(int p_lod_count) const {
     }
     for (Reg i = 0; i < Reg(code.size()); i++) {
         const Instr &in = code[i];
-        if (uint8_t(in.op) > uint8_t(Op::T_PERLIN2)) {
+        if (uint8_t(in.op) > uint8_t(Op::LAST)) {
             return format("Archetype: instruction %d: unknown op %d.", i, int(in.op));
         }
         const Reg operands[4] = { in.a, in.b, in.c, in.d };
@@ -278,9 +247,6 @@ ov::str Program::validate(int p_lod_count) const {
         }
         if (in.flat != is_flat(in, code)) {
             return format("Archetype: instruction %d has a wrong flat flag.", i);
-        }
-        if (in.op == Op::INPUT && (in.axis > 2 || in.index < 0 || in.index >= int(anchors.size()))) {
-            return format("Archetype: instruction %d: bad input axis or anchor.", i);
         }
         if (in.op == Op::PARAM && (in.index < 0 || in.index >= int(params.size()))) {
             return format("Archetype: instruction %d: parameter %d out of range.", i, in.index);
@@ -302,11 +268,10 @@ ov::str Program::validate(int p_lod_count) const {
                 return format("Archetype: instruction %d: RSQRT of a register that isn't max(x, c > 0).", i);
             }
         }
-        if ((in.op == Op::CONST || in.op == Op::PERLIN3 || in.op == Op::PERLIN2 || in.op == Op::T_PERLIN3 || in.op == Op::T_PERLIN2) &&
-                !finite_not_denormal(in.value)) {
+        if ((in.op == Op::CONST || in.op == Op::T_PERLIN3) && !finite_not_denormal(in.value)) {
             return format("Archetype: instruction %d: constant %s is denormal or not finite.", i, in.value);
         }
-        if (in.op == Op::PERLIN3 || in.op == Op::PERLIN2 || in.op == Op::T_PERLIN3 || in.op == Op::T_PERLIN2) {
+        if (in.op == Op::T_PERLIN3) {
             ExactNoise::OctaveSet set;
             set.octaves.push_back(ExactNoise::Octave{ in.k, in.seed, in.offset, in.value });
             if (in.k < 0 || in.k > ExactNoise::MAX_K || !ExactNoise::in_exact_range(in.value)) {
@@ -322,13 +287,6 @@ ov::str Program::validate(int p_lod_count) const {
     for (float p : params) {
         if (!finite_not_denormal(p)) {
             return "Archetype: a parameter is denormal or not finite.";
-        }
-    }
-    for (const VoxelPos &a : anchors) {
-        for (int axis = 0; axis < 3; axis++) {
-            if (a[axis] > (int64_t(1) << 61) || a[axis] < -(int64_t(1) << 61)) {
-                return "Archetype: anchor beyond 2^61 voxels.";
-            }
         }
     }
     return ov::str();

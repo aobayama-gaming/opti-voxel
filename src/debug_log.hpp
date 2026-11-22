@@ -11,9 +11,6 @@
 // (ov/log.hpp). 0 = errors only, 1 = info (lifecycle), 2 = verbose (per batch), 3 = trace.
 namespace DebugLog {
 inline std::atomic<int> &level = ov::log_level();
-// Leak accounting for chunk render resources (mesh/instance pairs).
-inline std::atomic<int64_t> chunk_rids_created{ 0 };
-inline std::atomic<int64_t> chunk_rids_freed{ 0 };
 } //namespace DebugLog
 
 // A log line of the pieces joined (ov::cat) when the level reaches p_level.

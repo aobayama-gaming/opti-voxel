@@ -55,7 +55,6 @@ public:
         double z_m = -150.0;
     };
     void set_zone(const Zone &p_zone) { zone = p_zone; }
-    const Zone &get_zone() const { return zone; }
     // What grows where no biome lists its own "instances" (a world file's "instances"; the world without biomes): each
     // entry a species, its cell and its share (Climate::InstanceShare). Every entry of a kind (trees, rocks) and a cell,
     // over these and the biomes' lists, is one source (cell_scatter.hpp) over the zone, each of its sites growing what
@@ -74,7 +73,6 @@ public:
     void set_stream_sources(bool p_enabled) { stream_sources = p_enabled; }
     // The streamed sources' part layers: those whose cell is under this many source cells read the records (1 by default:
     // proxies from the source cell on; ScatterSource::PART_CELL_SIDES: the whole build's blobs). Set before configure().
-    void set_stream_part_sides(int64_t p_sides) { stream_part_sides = p_sides; }
     // The forest's trees, in id order (placed whole only).
     const std::vector<Archetype::TreeSpan> &get_trees() const { return trees; }
     // The procedural sources of the scene (cell_scatter.hpp), by name: the rocks' ("scatter"), then the trees' ("trees"),
@@ -152,7 +150,7 @@ public:
 
     // The lockstep site walks' field on the GPU (VoxelTerrain.walk_gpu, FieldGPU). start_field_gpu after configure() (the
     // point passes need the configured terrain): its thread makes its device; poll() attaches it once ready (the stream
-    // then walks walk_batch_gpu keys per drain task, the sources' ground_batch reads it) and detaches it if it fails.
+    // then walks WALK_BATCH_GPU keys per drain task, the sources' ground_batch reads it) and detaches it if it fails.
     // stop_field_gpu before the terrain goes. Nothing without a stream or a cascade.
     static constexpr size_t WALK_BATCH_GPU = 64;
     static constexpr uint32_t FIELD_GPU_SCRATCH_MB = 64;
@@ -160,8 +158,6 @@ public:
     void stop_field_gpu();
     // Attached now (null detaches): the walk batch follows. poll() calls it; tests attach directly.
     void attach_field_gpu(std::shared_ptr<FieldGPU> p_gpu);
-    // The walk keys per drain task with the GPU attached (default WALK_BATCH_GPU). Set before configure().
-    void set_walk_batch_gpu(size_t p_keys) { walk_batch_gpu = ov::max(p_keys, size_t(1)); }
     // Every batch the GPU answers read again on the CPU, ERR on a difference (debug: --walk_verify).
     void set_walk_verify(bool p_verify) { walk_verify = p_verify; }
     // ground_field at many points, bit for bit (CellScatter::ground_batch). Thread-safe.
@@ -268,23 +264,20 @@ private:
     std::vector<Archetype::Species> species;
     std::vector<Source> sources;
     bool stream_sources = true; // --stream
-    int64_t stream_part_sides = Archetype::ScatterSource::STREAM_PART_CELL_SIDES; // --stream_part_sides
     std::vector<std::shared_ptr<const Archetype::ScatterSource>> streamed; // the valid sources, by their id
     std::shared_ptr<Archetype::InstanceStream> stream; // the gpu table shares it
     std::shared_ptr<FieldGPU> field_gpu; // attached; read by the drain tasks: std::atomic_load / atomic_store
     std::shared_ptr<FieldGPU> field_gpu_starting; // started, not ready yet (main thread)
     bool walk_verify = false;
-    size_t walk_batch_gpu = WALK_BATCH_GPU;
     mutable std::atomic<int64_t> verified_points{ 0 };
     mutable std::atomic<int64_t> verify_differences{ 0 };
     std::vector<Climate::FeatureShare> features;
     bool has_features = false; // build_table: the zone has some, their library types added
     std::vector<Biome::LavaPool> lava_pools; // keeps trees and rocks out of the lakes (in_lake)
     Material::Library materials;
-    bool instance_band = true; // --instance_band
-    Archetype::ErodeRule erode_rule; // --instance_erode, --instance_resolve
-    bool moment_blobs = true; // --moments
-    bool has_moment_blobs = false; // add_moment_blobs placed some
+    bool instance_band = true; // false: the shapes gallery (and tests)
+    Archetype::ErodeRule erode_rule; // tests vary it
+    bool moment_blobs = true; // false: tests of the records alone
     // The moment layers of the records (add_moment_blobs; an item per record id), kept up to date by the edits, and each
     // kept blob's record id by (lod, cell, material).
     struct BlobKey {
@@ -308,8 +301,8 @@ private:
     // handful of entries for it, and at most 2^29 so that box_lo minus the influence margin (clamped to INPUT_LIMIT
     // = 2^30) stays in int32 on the GPU (arch_in_box).
     int64_t max_instance_extent() const;
-    // The band rule, unless set_instance_band(false) (VoxelTerrain: --instance_band=0, and the shapes gallery: its ladder
-    // is sized one cube per LOD, and eroding the thin frames tears them).
+    // The band rule, unless set_instance_band(false) (the shapes gallery: its ladder is sized one cube per LOD, and
+    // eroding the thin frames tears them).
     void finish_record(Archetype::TableRecord &r_rec) const;
     // The changed record's margins and LODs, then a new snapshot (the previous base plus the edited records'
     // overlay) over the edit region.

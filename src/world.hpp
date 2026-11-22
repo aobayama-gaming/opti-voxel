@@ -41,13 +41,7 @@ public:
         // recenter() moves the render origin to the camera once it is farther than this from it (metres, on any axis):
         // render positions stay small, so float precision holds anywhere in the world. 0: never (a fixed origin).
         float rebase_distance_m = 1024.0f;
-        bool archetype_band = true;
-        bool archetype_stream = true;
-        int archetype_stream_part_sides = int(Archetype::ScatterSource::STREAM_PART_CELL_SIDES);
-        bool archetype_moments = true;
-        float archetype_erode = Archetype::ERODE_CELLS;
-        float archetype_resolve = Archetype::ErodeRule().resolve;
-        bool dual_contouring = false;
+        bool archetype_stream = true; // false: every source walked at configure (the oracle of the stream)
         float lod_pixel_error = 2.0f;
         float lod_pixel_error_back = 0.0f; // 0: lod_pixel_error everywhere
         std::vector<float> lod_pixel_errors; // per LOD, replaces lod_pixel_error (0 or past the end: lod_pixel_error)
@@ -57,16 +51,15 @@ public:
         int lod_view_min = 0; // the finest LOD the view loads (ScanView::min_lod), read every frame
         GPUDirectMesher::Settings direct;
         int debug_view = 0;
-        int discovery_cull_mode = ChunkDiscoverer::CULL_LEGACY;
-        bool discovery_cache = true;
         bool specialize_shaders = true; // SDFCascade::specialize
-        bool discovery_verify = false;
         bool destroy_verify = false;
-        int discoverer_mode = -1; // -1 auto: GPU (CPU when no local device can be made), 0 CPU, 1 GPU
+        int discoverer_mode = 1; // 0 CPU, 1 GPU (CPU when no local device can be made)
         bool discovery_compare = false;
         bool walk_gpu = true;
         bool walk_verify = false;
-        int walk_batch = int(SDFTable::WALK_BATCH_GPU);
+
+        // Why these settings can't start a world (a value out of its range), empty if they can. start() refuses with it.
+        str validate() const;
     };
 
     // The camera's projection, which the LOD distances are measured against.

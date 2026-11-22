@@ -91,7 +91,6 @@ struct VoxelState {
     // loaded chunks that can go (copies of their outputs); r_stalled (optional) the Stall of every loaded chunk a
     // dirty chunk has as nearest loaded ancestor.
     void compute_destroy_full(ChunkHashMap &r_to_destroy, StallMap *r_stalled = nullptr) const;
-    void update_destroy_full() { compute_destroy_full(to_destroy_chunk); }
     // The sub-cubes of a loaded chunk that can be hidden (PageFormat's coverage texel): the covered ones of a
     // stalled chunk, none (0) otherwise.
     uint64_t hidden_mask(const ChunkId &p_loaded) const;

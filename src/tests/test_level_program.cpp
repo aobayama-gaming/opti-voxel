@@ -167,13 +167,6 @@ TEST_CASE("Terrain: a warp's x, y, z ports: one node per axis, each gated") {
     CHECK(compile_table(warped(three, R"(, "x": "a", "y": "b")"), prog).find("the three ports") != ov::str::npos);
 }
 
-TEST_CASE("Terrain: a field's ground term is refused") {
-    const ov::Value data = json(R"({"fields": [{"name": "t", "bands": [{"wavelength_m": 26214.4, "amp": 1}], "terms": [{"source": "ground", "x": -0.00003}]}],
-        "biomes": [{"name": "a", "at": {"t": [0, 1]}}, {"name": "d"}]})");
-    LevelProgram prog;
-    CHECK(compile_table(data, prog).find("a 'ground' term is gone") != ov::str::npos);
-}
-
 TEST_CASE("Terrain: a plain fBm is one channel from top to bottom, in both modes") {
     ov::str nodes = "[";
     ov::str rows;

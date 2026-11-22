@@ -4,8 +4,8 @@ extends Control
 ## fields' space, the view the whole world, its biomes blended).
 ## The world file is the truth (world.gd): a biome's graph is its "graph" in world.json, node for node (graph.gd), its
 ## nodes' kinds, inputs and parameters the engine's (EngineInfo.kinds). Every edit sends the world's text to the engine,
-## which draws it (engine_view.gd: ClimateReportNode.preview, the game's own cascade) or says why not; "Open in game" runs
-## the game on it. The mixer computes no terrain and keeps no model of its own.
+## which loads it (engine_view.gd: the game's own terrain, a CPU map of it for the chart) or says why not; "Open in game"
+## runs the game on it. The mixer computes no terrain and keeps no model of its own.
 ## Run: tools/biome_mixer.sh [-- flags]  (godot --path adapter/godot/project res://debug/biome_mixer/biome_mixer.tscn)
 ## Flags:
 ##   --open=PATH        edit the world file PATH (res:// or absolute; a planet's too) instead of the autosave: the World
@@ -19,7 +19,7 @@ extends Control
 ##                      shot a second, the trace)
 ##   --steps=ID.KEY=V1;V2;...  set a node's key to each value in turn (as JSON: 0, "ridged"), held STEP_S each, twice
 ##                      over: one edit a step (a click, a typed 0), measured and printed as --drag's
-##   --shot=PATH        draw once (the sharp map; in 3D, the terrain's load then two restarts, timed), save the window to
+##   --shot=PATH        draw once (the map, then the terrain's load and two restarts, timed), save the window to
 ##                      PATH (and the view alone to PATH_view.png), quit
 ##   --check            headless self-test (checks.gd); prints MIXER: {json} and quits 0 if ok
 ## The World menu exports the world over the file it came from (res://climate/world.json, the game's, by default; the
@@ -36,7 +36,6 @@ const FieldsPanel := preload("res://debug/biome_mixer/fields_panel.gd")
 const Checks := preload("res://debug/biome_mixer/checks.gd")
 
 const WORLD := EngineInfo.WORLD
-const WORLDS_DIR := "res://climate/worlds"
 const STEP_S := 1.5  # --steps: each value held this long (a restart and its load, with room)
 const AUTOSAVE := "user://biome_mixer_autosave.world.json"
 # The Biome mode's view (the World mode's is WorldView's).
@@ -279,7 +278,7 @@ func queue_recompile() -> void:
 func recompile() -> void:
 	compile_queued = false
 	var t0 := Time.get_ticks_usec()
-	preview.show_world(JSON.stringify(_heard(World.preview_file(world, -1 if world_mode() else int(world.current)))), world_mode())
+	preview.show_world(JSON.stringify(_heard(World.preview_file(world, -1 if world_mode() else int(world.current)))))
 	autosave.start()
 	recompile_usec = Time.get_ticks_usec() - t0
 
@@ -433,12 +432,6 @@ func _new_graph(p_template: bool) -> void:
 	set_model(model, true)
 
 
-func _save_world() -> void:
-	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(WORLDS_DIR))
-	var path := "%s/%s.world.json" % [WORLDS_DIR, String(world.get("name", "world")).validate_filename()]
-	status.text = ("Saved " + path) if World.store(path, JSON.stringify(world, "\t", false, true)) else ("Could not write " + path)
-
-
 func _export_world() -> void:
 	status.text = World.write(world).message
 
@@ -586,7 +579,7 @@ func _menu(p_text: String, p_items: Array, p_pressed: Callable) -> MenuButton:
 	return m
 
 
-# The World menu: this world's file again, world.json, or a saved world; save this one, export it over its file.
+# The World menu: this world's file again or world.json; export this one over its file.
 func _fill_worlds(p_menu: MenuButton) -> void:
 	var popup := p_menu.get_popup()
 	popup.clear()
@@ -595,34 +588,21 @@ func _fill_worlds(p_menu: MenuButton) -> void:
 	var path := String(world.get("path", WORLD))
 	var actions := [
 		["Reload %s" % path, func() -> void: set_world(World.read(path), true)],
-		["Save this world to %s" % WORLDS_DIR, _save_world],
 		["Export this world to %s%s" % [path, " (the game's)" if path == WORLD else ""], _export_world],
 	]
 	if path != WORLD:
 		actions.append(["Open %s (the game's)" % WORLD, func() -> void: set_world(World.read(WORLD), true)])
 	for a in actions:
 		popup.add_item(a[0])
-	var files: Array = []
-	if DirAccess.dir_exists_absolute(WORLDS_DIR):
-		files = Array(DirAccess.get_files_at(WORLDS_DIR)).filter(func(f): return f.ends_with(".world.json"))
-	for f in files:
-		popup.add_item("Open " + f)
-	popup.id_pressed.connect(func(i: int) -> void:
-		if i < actions.size():
-			actions[i][1].call()
-		else:
-			# A world saved before its "path" key came from world.json (its sections are world.json's).
-			var w := World.read("%s/%s" % [WORLDS_DIR, files[i - actions.size()]], WORLD)
-			if not w.is_empty():
-				set_world(w, true))
+	popup.id_pressed.connect(func(i: int) -> void: actions[i][1].call())
 
 
 func _shot(p_path: String) -> void:
 	var t := Time.get_ticks_usec()
-	var map := preview.show_world(JSON.stringify(_heard(World.preview_file(world, -1 if world_mode() else int(world.current)))), world_mode(), true)
+	var map := preview.show_world(JSON.stringify(_heard(World.preview_file(world, -1 if world_mode() else int(world.current)))), true)
 	var ms := snappedf((Time.get_ticks_usec() - t) / 1000.0, 0.1)
-	# The 3D view: the first load (its shaders compiled), then two restarts on the same world (an edit's path).
-	var loads: Array = await preview.wait_terrain(120.0, 2) if preview.is_3d() else []
+	# The view: the first load (its shaders compiled), then two restarts on the same world (an edit's path).
+	var loads: Array = await preview.wait_terrain(120.0, 2)
 	await RenderingServer.frame_post_draw
 	await RenderingServer.frame_post_draw
 	get_viewport().get_texture().get_image().save_png(p_path)

@@ -26,7 +26,7 @@ struct ViewerOptions {
     float yaw_deg = 0.0f;
     int view = 0; // 0 shaded, 1 normals, 2 LOD
     float fly_speed = 0.0f; // metres per second straight ahead, a scripted fly on top of the controls
-    int discoverer_mode = -1; // World::Settings::discoverer_mode
+    int discoverer_mode = 1; // World::Settings::discoverer_mode
     bool walk_gpu = true; // World::Settings::walk_gpu
     DawnUpscaler::Settings upscale; // FSR or pixelate > 1: through DawnUpscaler
     float shadow_m = 250.0f; // the sun's shadows over a square this wide around the camera; 0 none

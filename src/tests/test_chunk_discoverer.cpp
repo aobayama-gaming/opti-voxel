@@ -102,7 +102,7 @@ void compare_walks(SDFBase &p_sdf, int p_lods) {
         ChunkDiscoverer::ScanCounters counters;
         ScanView view;
         view.camera_chunk = camera;
-        discoverer->scan(view, ChunkDiscoverer::CULL_LEGACY, got, counters);
+        discoverer->scan(view, true, got, counters);
         CHECK(want.size() > 0);
         CHECK(got.size() == want.size());
         CHECK(set_difference(got, want) == 0);
@@ -123,7 +123,7 @@ void compare_walks(SDFBase &p_sdf, int p_lods) {
             cache.scan_index++;
             LODHashSet cached;
             ChunkDiscoverer::ScanCounters c;
-            discoverer->scan(view, ChunkDiscoverer::CULL_LEGACY, cached, c, &cache);
+            discoverer->scan(view, true, cached, c, &cache);
             CHECK(set_difference(cached, want) == 0);
             CHECK(cached.size() == want.size());
             CHECK(c.verify_mismatches == 0);
@@ -207,8 +207,8 @@ TEST_CASE("ChunkDiscoverer: view-dependent LOD keeps the cone's chunks and one L
         LODHashSet want;
         ChunkDiscoverer::ScanCounters split_counters;
         ChunkDiscoverer::ScanCounters front_counters;
-        discoverer->scan(split, ChunkDiscoverer::CULL_LEGACY, got, split_counters);
-        discoverer->scan(front, ChunkDiscoverer::CULL_LEGACY, want, front_counters);
+        discoverer->scan(split, true, got, split_counters);
+        discoverer->scan(front, true, want, front_counters);
 
         auto in_cone = [&split](const LODHashSet &p_set) {
             LODHashSet r;
@@ -259,7 +259,7 @@ TEST_CASE("ChunkDiscoverer: view-dependent LOD keeps the cone's chunks and one L
         CHECK(looked.memories[9].fade == doctest::Approx(64.0 - 30.0));
         LODHashSet got;
         ChunkDiscoverer::ScanCounters c;
-        discoverer->scan(looked, ChunkDiscoverer::CULL_LEGACY, got, c);
+        discoverer->scan(looked, true, got, c);
         CHECK(split_x_size < got.size());
         CHECK(got.size() < front_x_size);
         std::vector<int64_t> faces;
@@ -448,8 +448,8 @@ TEST_CASE("ChunkDiscoverer: a far plane drops exactly the chunks past it") {
     LODHashSet near;
     ChunkDiscoverer::ScanCounters all_counters;
     ChunkDiscoverer::ScanCounters near_counters;
-    discoverer->scan(open, ChunkDiscoverer::CULL_LEGACY, all, all_counters);
-    discoverer->scan(limited, ChunkDiscoverer::CULL_LEGACY, near, near_counters);
+    discoverer->scan(open, true, all, all_counters);
+    discoverer->scan(limited, true, near, near_counters);
     CHECK(all_counters.beyond_far == 0);
     CHECK(near_counters.beyond_far > 0);
     CHECK(near.size() > 0);
@@ -493,8 +493,8 @@ TEST_CASE("ChunkDiscoverer: a LOD floor replaces the finer chunks by their ances
     LODHashSet coarse;
     ChunkDiscoverer::ScanCounters all_counters;
     ChunkDiscoverer::ScanCounters coarse_counters;
-    discoverer->scan(open, ChunkDiscoverer::CULL_LEGACY, all, all_counters);
-    discoverer->scan(floored, ChunkDiscoverer::CULL_LEGACY, coarse, coarse_counters);
+    discoverer->scan(open, true, all, all_counters);
+    discoverer->scan(floored, true, coarse, coarse_counters);
     int64_t finer = 0;
     for (const ChunkId &id : all) {
         const int lod = ChunkMath::get_lod(id);

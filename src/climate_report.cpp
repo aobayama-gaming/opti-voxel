@@ -279,22 +279,6 @@ double relief_light(const Sampled &p_s, size_t p_i, int p_m, bool p_gradient) {
     return 0.3 + 0.9 * ov::max(0.0, (nx * -0.577 + ny * 0.577 + nz * -0.577) / ln);
 }
 
-// The biomes' blend (blend_rgb) in the relief's light (RGB): the mixer's World view.
-ov::bytes biomes_rgb(const Table &p_table, const Sampled &p_s, int p_n, int p_m) {
-    const int64_t points = int64_t(p_n) * p_n;
-    ov::bytes img;
-    img.resize(points * 3);
-    for (int64_t i = 0; i < points; i++) {
-        double rgb[3];
-        blend_colour(p_table, p_s, size_t(i), rgb);
-        const double light = relief_light(p_s, size_t(i), p_m, false);
-        for (int c = 0; c < 3; c++) {
-            img[i * 3 + c] = rgb_byte(rgb[c] * light);
-        }
-    }
-    return img;
-}
-
 // The relief (RGB): height colours in the relief's light (relief_light).
 ov::bytes shaded_rgb(const Sampled &p_s, int p_n, int p_m, bool p_gradient) {
     const int64_t points = int64_t(p_n) * p_n;
@@ -546,8 +530,6 @@ ClimateReport::Preview ClimateReport::preview(const ov::Value &p_world, const ov
     out.size = n;
     out.lattice = m;
     out.spacing_m = slice.spacing_m;
-    out.biomes = biomes_rgb(table, s, n, m);
-    out.shaded = shaded_rgb(s, n, m, false);
     out.altitude_m.resize(s.altitude.size());
     for (size_t i = 0; i < s.altitude.size(); i++) {
         out.altitude_m[i] = float(s.altitude[i] * voxel);

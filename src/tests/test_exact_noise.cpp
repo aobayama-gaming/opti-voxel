@@ -235,13 +235,14 @@ TEST_CASE("ExactNoise: perlin3 output bits are unchanged (digest)") {
 }
 
 // GLSL_EXACT_NOISE is spliced from fragments shared with GLSL_PERLIN3_CROSS: its text (and so every
-// shader it is in) must stay byte-identical. FNV-1a of the text, recorded on the unsplit string.
+// shader it is in) must stay byte-identical. FNV-1a of the text, recorded on the unsplit string, re-pinned when the dead
+// hash_cell_2d left the text (8240 bytes, 1257729531 before: the only change).
 TEST_CASE("ExactNoise: GLSL_EXACT_NOISE text is unchanged by the perlin3_cross split") {
     uint32_t h = 0x811C9DC5u;
     size_t n = 0;
     for (const char *c = GLSL_EXACT_NOISE; *c != 0; c++, n++) {
         h = (h ^ uint8_t(*c)) * 0x01000193u;
     }
-    CHECK(n == 8240);
-    CHECK(h == 1257729531u);
+    CHECK(n == 8098);
+    CHECK(h == 3305452508u);
 }

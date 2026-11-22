@@ -241,14 +241,13 @@ struct ShaderParams {
     static ov::str at(const ov::str &p_index) { return "cl_param(" + p_index + ")"; }
     // A generic text's variable-length records (the curves, the interpreter's levels): after values (level_shader
     // appends them last), so a record's length never moves the index of a value the text names. p_values' index on
-    // the heap, read by heap_at (cl_heap: cl_param past the values, their count a literal of the structure).
+    // the heap, read in GLSL by cl_heap (cl_param past the values, their count a literal of the structure).
     std::vector<float> heap;
     int64_t put(const std::vector<float> &p_values) {
         const int64_t i = int64_t(heap.size());
         heap.insert(heap.end(), p_values.begin(), p_values.end());
         return i;
     }
-    static ov::str heap_at(const ov::str &p_index) { return "cl_heap(" + p_index + ")"; }
     // p_values in consecutive slots, read at the GLSL index p_index (an int expression, 0 <= p_index < p_values.size()).
     ov::str table(const std::vector<float> &p_values, const ov::str &p_index) { return at(ov::format("%d + (%s)", append(p_values), p_index)); }
     // The block's vec4s (at least one): its size in the text, a function of the structure as the rest of it.

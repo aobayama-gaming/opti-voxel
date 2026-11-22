@@ -8,7 +8,6 @@
 
 #include "ov/json.hpp"
 
-#include <godot_cpp/classes/image.hpp>
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/variant/packed_float32_array.hpp>
 #include <godot_cpp/variant/packed_string_array.hpp>
@@ -59,8 +58,6 @@ Dictionary ClimateReportNode::preview(const String &p_json, const String &p_dir,
     d["spacing_m"] = p.spacing_m;
     d["us_per_point"] = p.us_per_point;
     d["relief_m"] = p.relief_m;
-    d["biomes"] = Image::create_from_data(p.size, p.size, false, Image::FORMAT_RGB8, godot_bytes(p.biomes));
-    d["shaded"] = Image::create_from_data(p.size, p.size, false, Image::FORMAT_RGB8, godot_bytes(p.shaded));
     d["altitude_m"] = godot_floats(p.altitude_m);
     d["fields"] = godot_floats(p.fields);
     d["field_names"] = godot_strings(p.field_names);

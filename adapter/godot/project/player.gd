@@ -20,11 +20,9 @@ var pending_audit := {}  # the mark waiting for its discovery audit report
 var clip_terrain: Node = null  # the clip planes follow the altitude (Presets.clip_planes)
 var base_near := 0.05
 
-# `-- --world=PATH` sets the sibling VoxelTerrain's world file, `-- --terrain=cascade|shapes`
-# its terrain_mode (the Hermite cascade terrain, the default, or its flat preset under the
-# hard-CSG shapes gallery) and
-# `-- --discoverer=cpu|gpu` its discoverer_mode, `-- --walk_gpu=0|1` its walk_gpu: they must be set before the terrain's _ready, and every
-# node enters the tree before any is ready.
+# The sibling VoxelTerrain's flags (`-- --world=PATH`, `--terrain=cascade|shapes`, `--lod_error=F`, ...: bench.gd's list)
+# go through Presets.apply_args in _enter_tree: they must be set before the terrain's _ready, and every node enters the
+# tree before any is ready.
 var spawn_altitude := 200.0  # --altitude=M: start M metres above the ground (not in the shapes gallery)
 var spawn_tangent = null  # --spawn=U,V: metres along the base's tangent plane (Vector2), null: the scene's spawn
 var altitude_terrain: Node = null  # flight speed follows the altitude over it; not in the shapes gallery
@@ -50,23 +48,9 @@ var pixelate := 1           # --pixelate=N: the 3D drawn in N x N blocks, under 
 func _enter_tree() -> void:
 	_setup_upscaling()  # before the terrain's _ready: its LOD reads the render scale
 	var terrain := get_parent().get_node_or_null("VoxelTerrain")
-	Presets.removed_args()
+	if terrain:
+		Presets.apply_args(terrain, get_parent(), Presets.user_args())
 	for a in Presets.user_args():
-		if a.begins_with("--world=") and terrain:
-			terrain.world_path = a.trim_prefix("--world=")
-		if a == "--terrain=cascade" and terrain:
-			terrain.terrain_mode = 1
-		if a.begins_with("--discoverer=") and terrain:
-			var modes := {"cpu": 0, "gpu": 1}
-			var mode := a.trim_prefix("--discoverer=")
-			if modes.has(mode):
-				terrain.discoverer_mode = modes[mode]
-			else:
-				push_error("player: unknown --discoverer=%s (expected cpu or gpu)" % mode)
-		if a.begins_with("--walk_gpu=") and terrain:
-			terrain.walk_gpu = a.trim_prefix("--walk_gpu=") == "1"
-		if a == "--terrain=shapes" and terrain:
-			terrain.terrain_mode = 4
 		if a.begins_with("--altitude="):
 			spawn_altitude = a.trim_prefix("--altitude=").to_float()
 		# --spawn=U,V: metres along the base's tangent plane (VoxelTerrain.get_tangent_position; the flat world's x, z
@@ -77,24 +61,6 @@ func _enter_tree() -> void:
 				spawn_tangent = Vector2(uv[0].to_float(), uv[1].to_float())
 			else:
 				push_error("player: --spawn=%s (expected U,V in metres)" % a.trim_prefix("--spawn="))
-		if a.begins_with("--lod_error=") and terrain:
-			terrain.lod_pixel_error = a.trim_prefix("--lod_error=").to_float()
-		if a.begins_with("--lod_errors=") and terrain:
-			terrain.lod_pixel_errors = PackedFloat32Array(Array(a.trim_prefix("--lod_errors=").split(",")).map(func(e): return e.to_float()))
-		if a.begins_with("--lod_error_back=") and terrain:
-			terrain.lod_pixel_error_back = a.trim_prefix("--lod_error_back=").to_float()
-		if a.begins_with("--lod_view_margin=") and terrain:
-			terrain.lod_view_margin_deg = a.trim_prefix("--lod_view_margin=").to_float()
-		if a.begins_with("--lod_view_memory=") and terrain:
-			terrain.lod_view_memory_m = a.trim_prefix("--lod_view_memory=").to_float()
-		if a.begins_with("--lod_far_limit=") and terrain:
-			terrain.lod_far_limit = a != "--lod_far_limit=0"
-		if a.begins_with("--mesher_budget=") and terrain:
-			terrain.direct_gpu_budget_ms = a.trim_prefix("--mesher_budget=").to_float()
-		if a.begins_with("--view=") and terrain:
-			terrain.debug_view = a.trim_prefix("--view=").to_int()
-		if a == "--grade=0":
-			Presets.ungrade(get_parent())
 		if a == "--ssao=0" and Presets.environment(get_parent()):
 			Presets.environment(get_parent()).ssao_enabled = false
 		if a.begins_with("--ambient=") and Presets.environment(get_parent()):
@@ -106,20 +72,6 @@ func _enter_tree() -> void:
 			dig_settings["drag_union"] = a == "--drag_op=union"
 		if a == "--left_click=tube":
 			left_tube = true
-		if a == "--moments=0" and terrain:
-			terrain.archetype_moments = false
-		if a == "--instance_band=0" and terrain:
-			terrain.archetype_band = false
-		if a == "--stream=0" and terrain:
-			terrain.archetype_stream = false
-		if a.begins_with("--stream_part_sides=") and terrain:
-			terrain.archetype_stream_part_sides = a.trim_prefix("--stream_part_sides=").to_int()
-		if a.begins_with("--instance_erode=") and terrain:
-			terrain.archetype_erode = a.trim_prefix("--instance_erode=").to_float()
-		if a.begins_with("--instance_resolve=") and terrain:
-			terrain.archetype_resolve = a.trim_prefix("--instance_resolve=").to_float()
-		if a == "--dual_contouring=1" and terrain:
-			terrain.dual_contouring = true
 	if terrain:
 		terrain.set_dig_settings(dig_settings)
 		if terrain.terrain_mode != 4 and spawn_tangent == null:

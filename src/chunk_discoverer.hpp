@@ -18,12 +18,6 @@
 
 class ChunkDiscoverer : public ov::WorkerLoop {
 public:
-    // How a node of the LOD tree is dropped as holding no surface.
-    enum CullMode {
-        CULL_NONE = 0, // keep everything (reference set of the discovery audit)
-        CULL_LEGACY = 1, // |SDF| at the 8 corners > 2 chunk sizes
-    };
-
     // One wave of a scan: the nodes of one LOD.
     struct WaveStats {
         int lod = 0;
@@ -82,8 +76,6 @@ private:
     double cone_half_angle = ov::PI; // the view cone of ScanView: every node is in it by default
     double back_scale = 0.0; // ScanView::back_scale
     double memory_distance = 0.0; // chunk-id units (set_view_memory); 0: no memory
-    CullMode cull_mode = CULL_LEGACY;
-    bool use_cache = true;
     CullCache cache;
     LocalGpuThread *gpu_thread = nullptr; // discoverer_mode 1: corners on LocalPointsGPU, on this thread's device
     static constexpr uint32_t GPU_POINTS = 65536; // corners per GPU batch (a wave above it is split)
@@ -143,8 +135,9 @@ private:
     SDFBase *sdf;
 
     // The cull verdicts of one wave (all nodes of LOD p_lod): cached ones from p_cache, the others from
-    // their corners, deduplicated and evaluated in one batch. r_outside[i]: node i holds no surface.
-    void _cull_wave(const std::vector<ChunkId> &p_wave, int p_lod, CullMode p_mode, std::vector<uint8_t> &r_outside, ScanCounters &r_counters,
+    // their corners, deduplicated and evaluated in one batch. r_outside[i]: node i holds no surface (never without
+    // p_cull).
+    void _cull_wave(const std::vector<ChunkId> &p_wave, int p_lod, bool p_cull, std::vector<uint8_t> &r_outside, ScanCounters &r_counters,
             CullCache *p_cache, LocalPointsGPU *p_gpu) const;
     // Fresh verdicts of nodes p_nodes (indices into p_wave, all of LOD p_lod).
     void _corner_verdicts(const std::vector<ChunkId> &p_wave, const std::vector<uint32_t> &p_nodes, int p_lod, std::vector<uint8_t> &r_outside,
@@ -214,13 +207,14 @@ public:
     bool get_scanned_chunks(std::unique_ptr<LODHashSet> &r_scanned_chunks, std::unique_ptr<ScanDelta> &r_delta, ScanView &r_view);
 
     // The full scan around `p_view`'s camera chunk. Const and thread safe: the discovery audit calls it from
-    // the main thread to rebuild the published scan without culling.
+    // the main thread to rebuild the published scan without culling (p_cull false: every node is kept). With p_cull
+    // a node is dropped where |SDF| at its 8 corners exceeds 2 chunk sizes.
     // `p_cache` (optional) remembers each node's verdict across scans. `p_gpu` (optional, the worker
     // thread's own) evaluates the corners on the GPU instead of SDFBase::evaluate_batch, the same bits.
     // Breadth first, one wave per LOD from the top-LOD grid down: the wave's verdicts (_cull_wave), then
     // its surviving nodes are kept or split into the next wave by distance. The scanned set doesn't
     // depend on the visit order, so it is the one the old recursive walk gave (unit-tested).
-    void scan(const ScanView &p_view, CullMode p_mode, LODHashSet &r_chunks, ScanCounters &r_counters,
+    void scan(const ScanView &p_view, bool p_cull, LODHashSet &r_chunks, ScanCounters &r_counters,
             CullCache *p_cache = nullptr, LocalPointsGPU *p_gpu = nullptr) const;
     int get_max_lod() const { return int(lod_distances.size()) - 2; }
     const std::vector<float> &get_lod_distances() const { return lod_distances; }
@@ -234,11 +228,6 @@ public:
     void set_config(
             ChunkParam &p_chunk_param,
             SDFBase *p_sdf);
-    void set_cull_mode(CullMode p_mode) { cull_mode = p_mode; }
-    void set_cache(bool p_enable, bool p_verify) {
-        use_cache = p_enable;
-        cache.verify = p_verify;
-    }
     // Corners on the GPU, on p_thread's device (LocalPointsGPU; null or no device: the CPU, with one warning if it
     // can't be created; it must outlive stop), and the debug diff against a fresh CPU scan.
     void set_gpu(LocalGpuThread *p_thread) { gpu_thread = p_thread; }

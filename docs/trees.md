@@ -59,13 +59,12 @@ Library-built instances placed by the stream: trees, the far-field moment blobs,
   moment; analytic per library type via `TableDef::moments`, else its program on a 24^3 grid), an instance their sum
   per material (`span_moments`: a tree's bark and leaves). Its half thickness is the equal-covariance ellipsoid's
   smallest semi-axis. `set_band` drops it at the later of the first LOD whose cells no longer fit `resolve` times in
-  that half thickness (`VoxelTerrain.archetype_resolve` / `--instance_resolve=F`, default 1) and the first LOD erosion
+  that half thickness (`ErodeRule::resolve`, 1) and the first LOD erosion
   at `rate` from LOD 0 can make it vanish by; its onset is the latest LOD from which that erosion still reaches its
   depth at the drop: whole while resolved, shrinking only in the LODs before its drop, `erode` cells per LOD at most
   (unit-tested). At 5 cm (30 trees, by volume): drawn whole 98 / 93 / 61% at LODs 1 / 3 / 5 (0% when every part
-  eroded from LOD 1), drawn at all 97% at LOD 5 and 48% at LOD 6 (65% and 0%). The rate is
-  `VoxelTerrain.archetype_erode` / `--instance_erode=F` (cells per LOD, default `ERODE_CELLS` = 1, bench and player;
-  the record carries it as `erode`, the skirt follows it): a higher one moves onsets later.
+  eroded from LOD 1), drawn at all 97% at LOD 5 and 48% at LOD 6 (65% and 0%). The rate is `ERODE_CELLS` = 1 cell
+  per LOD (`ErodeRule::rate`; the record carries it as `erode`, the skirt follows it): a higher one moves onsets later.
   **Moment blobs (the far field, `src/moment_layers.*`):** what the parts a LOD no longer draws still weigh. For each
   LOD L, every part hands the share of its mass the LOD lost (its equal-covariance ellipsoid shrunk by its erosion,
   `MomentItem::lost_share`; all of it from its drop on: parts drawn + blobs = its mass at every LOD) to cells of
@@ -93,9 +92,9 @@ Library-built instances placed by the stream: trees, the far-field moment blobs,
   under a coarse canopy uncullable (+18% loaded chunks).
   A dense 5 cm forest keeps a canopy over most columns at LODs 6-8 (unit test); from 1,100 m the forest5cm square
   is a canopy instead of nothing (`bench.sh --preset=forest5cm --cam_pos=-50,320,750 --above_ground=1100 --pitch=-55
-  --yaw=0 [--moments=0]`). The hand-off over every altitude: `tools/forest_lod_sheet.sh` (bench `--scenario=rise
+  --yaw=0`). The hand-off over every altitude: `tools/forest_lod_sheet.sh` (bench `--scenario=rise
   --altitudes=... --rise_shots=DIR`, 20 m to 13 km over the forest, shaded | LOD view, `sheet.png` + lists per step)
-  and the unit test of the canopy columns at LODs 2-9. `VoxelTerrain.archetype_moments` / `--moments=0` (bench, player) leaves them out;
+  and the unit test of the canopy columns at LODs 2-9 (`SDFTable::set_moment_blobs(false)`, the tests', leaves them out);
   `get_debug_stats()["table"]["moments"]`: items, blobs per LOD, build ms (`["trees"]["build_ms"]`: the forest). The
   build runs on the worker pool (`parallel_for.hpp`: each layer's members side by side, then each cell's sums and pruning;
   the forest's ground traces and trees per site, admitted in site order), the same bits: forest5cm_x10 (40,000 trees,

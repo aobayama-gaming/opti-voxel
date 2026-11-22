@@ -14,16 +14,6 @@ Reg Builder::emit(const Instr &p_instr) {
     return Reg(program.code.size() - 1);
 }
 
-int Builder::anchor(const VoxelPos &p_anchor) {
-    for (int i = 0; i < int(program.anchors.size()); i++) {
-        if (program.anchors[i] == p_anchor) {
-            return i;
-        }
-    }
-    program.anchors.push_back(p_anchor);
-    return int(program.anchors.size() - 1);
-}
-
 Reg Builder::constant(float p_value) {
     Instr in;
     in.op = Op::CONST;
@@ -36,21 +26,6 @@ Reg Builder::param(int p_index) {
     in.op = Op::PARAM;
     in.index = p_index;
     return emit(in);
-}
-
-Reg Builder::input(int p_axis, int p_anchor) {
-    if (program.anchors.empty()) {
-        anchor(VoxelPos());
-    }
-    Instr in;
-    in.op = Op::INPUT;
-    in.axis = uint8_t(p_axis);
-    in.index = p_anchor;
-    return emit(in);
-}
-
-Local Builder::local(int p_anchor) {
-    return Local{ input(0, p_anchor), input(1, p_anchor), input(2, p_anchor) };
 }
 
 Reg Builder::t_input(int p_axis) {
@@ -83,9 +58,9 @@ Instr instr(Op p_op, Reg p_a, Reg p_b = -1, Reg p_c = -1, Reg p_d = -1) {
     return in;
 }
 
-Instr noise(Op p_op, int p_k, uint32_t p_seed, const Vector3i64 &p_offset, float p_amp) {
+Instr noise(int p_k, uint32_t p_seed, const Vector3i64 &p_offset, float p_amp) {
     Instr in;
-    in.op = p_op;
+    in.op = Op::T_PERLIN3;
     in.k = p_k;
     in.seed = p_seed;
     in.offset = p_offset;
@@ -129,19 +104,8 @@ Reg Builder::rsqrt(Reg p_a) {
 Reg Builder::dist(Reg p_a) {
     return emit(instr(Op::DIST, p_a));
 }
-Reg Builder::perlin3(int p_k, uint32_t p_seed, const Vector3i64 &p_offset, float p_amp) {
-    return emit(noise(Op::PERLIN3, p_k, p_seed, p_offset, p_amp));
-}
-Reg Builder::perlin2(int p_k, uint32_t p_seed, const Vector3i64 &p_offset, float p_amp) {
-    return emit(noise(Op::PERLIN2, p_k, p_seed, p_offset, p_amp));
-}
-
 Reg Builder::t_perlin3(int p_k, uint32_t p_seed, const Vector3i64 &p_offset, float p_amp) {
-    return emit(noise(Op::T_PERLIN3, p_k, p_seed, p_offset, p_amp));
-}
-
-Reg Builder::t_perlin2(int p_k, uint32_t p_seed, const Vector3i64 &p_offset, float p_amp) {
-    return emit(noise(Op::T_PERLIN2, p_k, p_seed, p_offset, p_amp));
+    return emit(noise(p_k, p_seed, p_offset, p_amp));
 }
 
 // Every builder emits one instruction per statement: C++ leaves the order of a call's arguments
@@ -273,14 +237,6 @@ Reg Builder::smooth_max(Reg p_a, Reg p_b, float p_k) {
     return neg(smooth_min(na, neg(p_b), p_k));
 }
 
-Reg Builder::fbm(const ExactNoise::OctaveSet &p_set) {
-    Reg sum = constant(0.0f);
-    for (const ExactNoise::Octave &o : p_set.octaves) {
-        sum = add(sum, p_set.is_2d ? perlin2(o.k, o.seed, o.offset, o.amp) : perlin3(o.k, o.seed, o.offset, o.amp));
-    }
-    return sum;
-}
-
 Program Builder::finish(Reg p_output) {
     program.output = p_output;
     return program;
@@ -318,15 +274,14 @@ struct Fuzz {
         const int n = int(regs.size());
         return rng.below(10) < 7 ? n - 1 - rng.below(std::min(n, 6)) : rng.below(n);
     }
-    void input(int p_anchors) {
+    void input() {
         // Scaled by 2^-12 .. 2^-20: points within ~2^17 voxels of the anchor give values up to 2^5, a saturated
         // input (an anchor near another FrameSpike origin) up to 2^18.
         const int e = 12 + rng.below(9);
         const int axis = rng.below(3);
-        const int anchor = rng.below(p_anchors);
-        push(b.mul(b.input(axis, anchor), exact_pow2(-e)), std::ldexp(1.0f, 31 - e));
+        push(b.mul(b.t_input(axis), exact_pow2(-e)), std::ldexp(1.0f, 31 - e));
     }
-    void noise(bool p_3d) {
+    void noise() {
         const int k = 2 + rng.below(13);
         const float amp = std::fabs(rng.value(0, 3));
         Vector3i64 offset;
@@ -334,12 +289,12 @@ struct Fuzz {
         offset.y = -int64_t(rng.next());
         offset.z = int64_t(rng.next()) * 3;
         const uint32_t seed = rng.next();
-        push(p_3d ? b.perlin3(k, seed, offset, amp) : b.perlin2(k, seed, offset, amp), 2.0f * amp);
+        push(b.t_perlin3(k, seed, offset, amp), 2.0f * amp);
     }
-    void step(int p_anchors);
+    void step();
 };
 
-void Fuzz::step(int p_anchors) {
+void Fuzz::step() {
     const int ia = pick();
     const int ib = pick();
     const Reg a = regs[ia];
@@ -351,7 +306,7 @@ void Fuzz::step(int p_anchors) {
             push(b.constant(rng.value(-4, 8)), 16.0f);
             break;
         case 1:
-            input(p_anchors);
+            input();
             break;
         case 2:
             push(b.add(a, r_b), ma + mb);
@@ -400,26 +355,21 @@ void Fuzz::step(int p_anchors) {
             }
             break;
         default:
-            noise(rng.below(2) == 0);
+            noise();
             break;
     }
 }
 
 } // namespace
 
-Program random_program(uint32_t p_seed, const std::vector<VoxelPos> &p_anchors, int p_ops) {
+Program random_program(uint32_t p_seed, int p_ops) {
     Fuzz f;
     f.rng.seed = p_seed;
-    for (const VoxelPos &a : p_anchors) {
-        f.b.anchor(a);
-    }
-    // Builder::anchor merges equal anchors: draw from the program's own.
-    const int anchors = std::max(int(f.b.program.anchors.size()), 1);
-    f.input(anchors);
-    f.input(anchors);
-    f.noise(true);
+    f.input();
+    f.input();
+    f.noise();
     while (int(f.b.program.code.size()) < p_ops) {
-        f.step(anchors);
+        f.step();
     }
     return f.b.finish(f.regs.back());
 }

@@ -296,7 +296,7 @@ void SDFTable::stop_field_gpu() {
 void SDFTable::attach_field_gpu(std::shared_ptr<FieldGPU> p_gpu) {
     std::atomic_store(&field_gpu, p_gpu);
     if (stream) {
-        stream->set_walk_batch(p_gpu ? walk_batch_gpu : 1);
+        stream->set_walk_batch(p_gpu ? WALK_BATCH_GPU : 1);
     }
 }
 
@@ -410,7 +410,6 @@ bool SDFTable::blob_fits(const TableRecord &p_rec) const {
 void SDFTable::add_blob_record(const BlobKey &p_key, const TableRecord &p_rec) {
     blob_ids[p_key] = records.size();
     records.push_back(p_rec, version + 1);
-    has_moment_blobs = true;
 }
 
 void SDFTable::blob_changed(uint32_t p_id, const TableRecord &p_old, const TableRecord &p_new, int p_lod, std::vector<uint32_t> &r_ids) {
@@ -687,7 +686,7 @@ void SDFTable::add_stream(uint32_t p_slot_base, ov::Value &r_stats) {
     settings.slot_capacity = ov::min<uint32_t>(InstanceStream::slot_budget(streamed), SDFGpuTable::LIST_ID_MASK + 1 - p_slot_base);
     stream = std::make_shared<InstanceStream>(streamed, param, settings, StreamExecutor::pool());
     if (std::atomic_load(&field_gpu)) {
-        stream->set_walk_batch(walk_batch_gpu); // a reconfigure keeps the attached field
+        stream->set_walk_batch(WALK_BATCH_GPU); // a reconfigure keeps the attached field
     }
     ov::Value d = ov::Value::object();
     d["slots"] = int64_t(settings.slot_capacity);
@@ -883,7 +882,7 @@ ScatterSource::Setup SDFTable::source_setup(const Source &p_source, uint32_t p_i
     s.max_extent = max_instance_extent();
     s.chunk_voxels = param.chunk_voxel_dimension();
     s.lod_count = lod_count;
-    s.part_cell_sides = stream_part_sides;
+    s.part_cell_sides = Archetype::ScatterSource::STREAM_PART_CELL_SIDES;
     return s;
 }
 
@@ -984,7 +983,6 @@ void SDFTable::build_table(int p_lod_count) {
     stop_streaming(); // its tasks read the old sources
     rebuild.cancel(); // a base of the old records
     records.clear();
-    has_moment_blobs = false;
     moment_blob_type = -1;
     blob_ids.clear();
     moment_layers = MomentLayers();

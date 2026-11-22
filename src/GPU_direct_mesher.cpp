@@ -32,7 +32,7 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
 
 /*GLSL_VERTEX_GRADIENT*/
 
-/*GLSL_QEF_VERTEX*/
+/*GLSL_VERTEX_NORMAL*/
 
 shared uint wg_quad_count;
 
@@ -98,7 +98,7 @@ void GPUDirectMesher::initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p
     device = p_device;
     host = p_host;
     settings = p_settings;
-    settings.max_batches_per_frame = ov::clamp(settings.max_batches_per_frame, 1u, MAX_BATCHES_PER_FRAME);
+    // In [1, MAX_BATCHES_PER_FRAME]: World::Settings::validate refuses the others.
     if (settings.max_in_flight == 0) {
         settings.max_in_flight = 3 * settings.max_batches_per_frame;
     }
@@ -136,9 +136,6 @@ void GPUDirectMesher::initialize(SDFBase *p_sdf, ChunkParam p_chunk_param, int p
 }
 
 ov::gpu::Pipeline GPUDirectMesher::_rt_compile(const char *p_pass, const char *p_name) {
-    const bool vertex_pass = (p_pass == GLSL_DIRECT_PASS_VERTICES);
-    // Dual contouring: the vertex pass places its vertex with the shared QEF (gpu_glsl.hpp).
-    const ov::str pass = dual_contouring && vertex_pass ? dual_contouring_pass(p_pass) : ov::str(p_pass);
     // The instance table adds the DefRecord/List buffers at 8/9, the exact int64 helpers (i64_sub, for the
     // table's noise lattice) and the ChunkInput global g_sdf_chunk.
     const SDFGpuTable *table = sdf->get_gpu_table();
@@ -158,8 +155,8 @@ ov::gpu::Pipeline GPUDirectMesher::_rt_compile(const char *p_pass, const char *p
                     { "/*GLSL_PALETTE_BATCH*/", PalettePool::glsl_batch() },
                     { "/*GLSL_HELPER_FUNCTION*/", helpers },
                     { "/*GLSL_SET_CHUNK*/", table->glsl_set_chunk() },
-                    { "/*GLSL_QEF_VERTEX*/", ov::str(GLSL_VERTEX_NORMAL) + (dual_contouring ? GLSL_QEF_VERTEX : "") } });
-    return ov::gpu::compile(*device, ov::str("direct_") + p_name, CascadeGLSL::fill_mesher_pass(code, pass));
+                    { "/*GLSL_VERTEX_NORMAL*/", GLSL_VERTEX_NORMAL } });
+    return ov::gpu::compile(*device, ov::str("direct_") + p_name, CascadeGLSL::fill_mesher_pass(code, p_pass));
 }
 
 void GPUDirectMesher::_rt_initialize() {

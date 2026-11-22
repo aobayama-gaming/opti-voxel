@@ -3,7 +3,7 @@
 # culling and counts the quads of each culled chunk on the GPU (bench --discovery_audit=1). A culled
 # chunk with quads is a miss, i.e. a hole. Also checks that each run settles (loaded == scanned).
 #
-#   tools/discovery_audit.sh [--only=a,b] [-- extra bench args, e.g. --discovery_cull=2]
+#   tools/discovery_audit.sh [--only=a,b] [-- extra bench args, e.g. --discoverer=cpu]
 #
 # Cases: default pose, the main scene's lod_error 4, underground, another area, high above, deep
 # below, a far world origin, 5 cm voxels, a fly run (audited once it settles back at the start), and

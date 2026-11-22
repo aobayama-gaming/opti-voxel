@@ -226,17 +226,14 @@ TEST_CASE("ClimateReport: preview gives a world's maps from its text, the same t
     const ClimateReport::Preview a = ClimateReport::preview(world, "res://climate/", 20.0, 48, true, 0.0, 0.0);
     CHECK(a.error == ov::str());
     CLIMATE_REQUIRE(a.size == 48);
-    CHECK(a.biomes.size() == size_t(48 * 48 * 3));
-    CHECK(a.shaded.size() == size_t(48 * 48 * 3));
     CHECK(a.altitude_m.size() == size_t(48 * 48));
     CHECK(a.fields.size() == size_t(48 * 48) * a.field_names.size());
     CHECK(!a.biome_names.empty());
     CHECK(a.spacing_m * 48.0 > 10000.0);
     CHECK(a.spacing_m * 48.0 < 40000.0);
     const ClimateReport::Preview b = ClimateReport::preview(world, "res://climate/", 20.0, 48, true, 0.0, 0.0);
-    CHECK(a.biomes == b.biomes);
+    CHECK(a.fields == b.fields);
     CHECK(a.relief_m == double(std::abs(*std::max_element(a.altitude_m.begin(), a.altitude_m.end(), [](float p_x, float p_y) { return std::abs(p_x) < std::abs(p_y); }))));
-    CHECK(a.shaded == b.shaded);
     CHECK(a.altitude_m == b.altitude_m);
     MESSAGE("preview: ", a.us_per_point, " us per point, lattice ", a.lattice);
     // Off the surface (the tangent plane): no trace, every altitude 0.
@@ -270,7 +267,6 @@ TEST_CASE("Climate: malformed tables are refused with the reason") {
                 "not an earlier field" },
         { R"({"fields": [{"name": "t"}, {"name": "h", "terms": [{"source": "h", "x": 1}]}], "biomes": [{"name": "a"}]})", "not an earlier field" },
         { R"({"fields": [{"name": "t"}, {"name": "t"}], "biomes": [{"name": "a"}]})", "used twice" },
-        { R"({"fields": [{"name": "ground"}], "biomes": [{"name": "a"}]})", "reserved" },
         { R"({"fields": [{"name": "t", "bands": [{"wavelength_m": 100, "amp": 1}, {"wavelength_m": 110, "amp": 1}]}], "biomes": [{"name": "a"}]})",
                 "listed twice" },
         { R"({"fields": [{"name": "t", "bands": [{"wavelength_m": 100, "amp": 1e13}]}], "biomes": [{"name": "a"}]})", "amplitude" },
@@ -278,11 +274,9 @@ TEST_CASE("Climate: malformed tables are refused with the reason") {
         { R"({"fields": [{"name": "t"}], "biomes": [{"name": "a", "at": {"t": {"min": 1, "max": 0}}}, {"name": "b"}]})", "span must be > 0" },
         { R"({"fields": [{"name": "t"}], "biomes": [{"name": "a", "at": {"t": 1}}, {"name": "b"}]})", "[centre, span]" },
         { R"({"fields": [{"name": "t"}], "biomes": [{"name": "a", "at": {"t": {"min": 0}}}, {"name": "b"}]})", "[centre, span]" },
-        { R"({"fields": [{"name": "t"}], "biomes": [{"name": "a", "where": [{"field": "t", "min": 0, "fade": 1}]}, {"name": "b"}]})", "became 'at'" },
         { R"({"fields": [{"name": "t"}], "biomes": [{"name": "a"}, {"name": "b"}]})", "only the last biome" },
         { R"({"fields": [{"name": "t"}], "biomes": [{"name": "a", "at": {"t": [0, 1]}}]})", "the last biome is the default" },
         { R"({"fields": [{"name": "t"}], "biomes": [{"name": "a", "at": {"u": [0, 1]}}, {"name": "b"}]})", "not a field" },
-        { R"({"biomes": [{"name": "a", "amp": [{"field": "ground", "wavelength_m": 4000, "x": 2}]}]})", "became the biome's 'graph'" },
         { R"({"biomes": [{"name": "a", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 4000, "seed": 1, "amp_m": 1e13}, {"id": "o", "kind": "output", "height": "n"}]}}]})",
                 "the base keeps exact" },
         { R"({"biomes": [{"name": "a", "graph": {"nodes": [{"id": "n", "kind": "note", "wavelength_m": 4000, "amp_m": 1}, {"id": "o", "kind": "output", "height": "n"}]}}]})",
@@ -308,7 +302,7 @@ TEST_CASE("Climate: malformed tables are refused with the reason") {
         { R"({"fields": [{"name": "t", "noise": "cell"}], "biomes": [{"name": "a"}]})", "unknown key 'noise'" },
         { R"({"fields": [{"name": "t", "bands": [{"wavelength_m": 100, "amp": 1, "shape": "ridged"}]}], "biomes": [{"name": "a"}]})", "unknown key 'shape'" },
         { R"({"biomes": [{"name": "a", "terrace": {"step_m": 40}}]})", "unknown key 'terrace'" },
-        { R"({"biomes": [{"name": "a", "curve": [[0, 0], [10, 10]]}]})", "became the biome's 'graph'" },
+        { R"({"biomes": [{"name": "a", "curve": [[0, 0], [10, 10]]}]})", "unknown key 'curve'" },
     };
     for (const Case &c : cases) {
         CAPTURE(c.json);

@@ -24,7 +24,7 @@ const RESTART_AFTER := 0.05
 ## A restart waits for the last one's chunks in view at most this long (seconds): a drag shows each load finished.
 const LOAD_WAIT := 1.0
 ## The game's look: its sky, fog and sun are this scene's.
-const GAME_SCENE := "res://main_scene_5cm.tscn"
+const GAME_SCENE := "res://main_scene.tscn"
 ## The game's fog over views of kilometres instead of metres.
 const FOG_DENSITY := 0.00004
 ## The player: a capsule of a person's height and its radius (metres).
@@ -168,7 +168,7 @@ func _add_game_look() -> void:
 		_viewport.add_child(node)
 
 
-# p_json: the world the 2D view draws (a world file's text, its paths from p_dir). The terrain restarts on it once the
+# p_json: the world the CPU map drew (a world file's text, its paths from p_dir). The terrain restarts on it once the
 # edits pause; p_frame: the camera fitted to p_extent_km round p_centre_m, its target at p_ground_m.
 func show_world(p_json: String, p_dir: String, p_frame: bool, p_extent_km: float, p_centre_m: Vector2, p_ground_m: float) -> void:
 	_json = p_json
@@ -286,7 +286,7 @@ func _notification(p_what: int) -> void:
 		_schedule_restart()
 	else:
 		_restart.stop()
-		_stop_terrain()  # nothing runs behind the 2D view
+		_stop_terrain()  # nothing runs while hidden
 
 
 func _process(p_delta: float) -> void:

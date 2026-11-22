@@ -91,8 +91,6 @@ public:
     int get_switch_lod() const { return switch_lod; }
     // SPHERE: the radius; TORUS: the tube's (LOD0 voxels).
     double get_radius() const { return radius; }
-    // TORUS: the ring's radius (LOD0 voxels).
-    double get_ring() const { return ring; }
 
     Kind kind() const { return base_kind; }
     // Not FLAT: a centre, regions below the switch LOD, a relief from the radius (SDFCascade).

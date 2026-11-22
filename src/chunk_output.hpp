@@ -21,9 +21,8 @@ struct ChunkOutput {
     uint32_t triangle_count = 0; // stats only: real (non-degenerate) triangles
     uint32_t drawn_triangles = 0; // stats only: triangles in the index buffer, padding included
 
-    // Who frees it (null: an empty chunk, nothing to free) and its key there (owner-defined).
+    // Who frees it (null: an empty chunk, nothing to free).
     ChunkReleaser *owner = nullptr;
-    uint64_t handle = 0;
     // GPU direct path: quad range in a pool page (page >= 0).
     int32_t page = -1;
     uint32_t quad_offset = 0;

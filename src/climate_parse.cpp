@@ -393,10 +393,6 @@ private:
     }
 
     void term(const ov::Value &p_d, const ov::str &p_where, int p_field, Field &r_f) {
-        if (p_d["source"].as_str() == "ground") {
-            fail(p_where, "a 'ground' term is gone (the ground depends on the weights, which depend on the fields): a field's terms read earlier fields only.");
-            return;
-        }
         if (!keys(p_d, p_where, { "source", "x" })) {
             return;
         }
@@ -534,14 +530,6 @@ private:
     }
 
     void biome(const ov::Value &p_d, int64_t p_i) {
-        if (p_d.has("where")) {
-            fail(ov::format("biome %d", p_i), "'where' (edges) became 'at': a centre and span per field, e.g. \"at\": { \"temperature\": [0.3, 0.2] }.");
-            return;
-        }
-        if (p_d.has("amp") || p_d.has("curve")) {
-            fail(ov::format("biome %d", p_i), "'amp' and 'curve' became the biome's 'graph': its notes, a mix of them, a curve (climate_parse.cpp).");
-            return;
-        }
         if (!keys(p_d, ov::format("biome %d", p_i), { "name", "at", "graph", "surface", "clouds", "debug_color", "instances", "features" })) {
             return;
         }
@@ -671,8 +659,8 @@ bool name_taken_before(const std::vector<T> &p_list, size_t p_i) {
 // each term on an earlier field with a moderate coefficient.
 ov::str validate_field(const Table &p_table, int p_i) {
     const Field &f = p_table.fields[size_t(p_i)];
-    if (!ov::is_valid_ascii_identifier(f.name) || f.name == "ground") {
-        return ov::format("climate field %d: the name must be an identifier (letters, digits, _), and 'ground' is reserved.", p_i);
+    if (!ov::is_valid_ascii_identifier(f.name)) {
+        return ov::format("climate field %d: the name must be an identifier (letters, digits, _).", p_i);
     }
     const ov::str where = "climate field '" + f.name + ov::str("': ");
     if (name_taken_before(p_table.fields, size_t(p_i))) {

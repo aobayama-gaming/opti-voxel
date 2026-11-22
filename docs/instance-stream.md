@@ -41,8 +41,8 @@
   `MARGIN_CELLS` (`PRUNE_CELLS` + 1) cells and judges its own cells (`MomentLayerParams::judged`): on part layers the
   LOD-0 tiles' records (the whole build's blobs bit for bit, unit test), above them proxies (unsnapped `surface_sites`,
   2 per cell side, the profile's lost moments: mass within 10%). Part layers are those under `Setup::part_cell_sides`
-  source cells: 3 by default (the whole build's blobs), `VoxelTerrain.archetype_stream_part_sides` /
-  `--stream_part_sides=N` for the streamed sources (default 1: proxies from the source cell on; the 2 switched layers:
+  source cells: 3 by default (the whole build's blobs), `STREAM_PART_CELL_SIDES` for the streamed sources (1: proxies
+  from the source cell on; the 2 switched layers:
   mass within 20%, peak within 40%, 45% on a layer losing bark only (layer 4 at 41%: peaks far under the iso), unit test;
   3 = the exact layers). The stream keeps three LRU chains: the evictable
   keys with records (slots, the entries cap `ENTRIES_MAX`), the walks (`WALKS_MAX` 2^20, `Settings::walks`: ~450 B per
@@ -105,7 +105,7 @@ workers busy).
 `FieldGPU` (`VoxelTerrain.walk_gpu`, `--walk_gpu=0|1`, default on): a thread owning a `LocalPointsGPU` (local device +
 `CascadePointsGPU`: any point of any LOD's lattice per item, `SDFCascade::ground_unit` bit for bit, `ground_field` composed on
 the CPU). `SDFTable::start_field_gpu` after configure (the point shader needs the configured terrain), `poll()` attaches it
-once ready (the sources' `ground_batch`, the stream's walk batch `--walk_batch`, 64) and detaches it if a batch fails.
+once ready (the sources' `ground_batch`, the stream's walk batch `SDFTable::WALK_BATCH_GPU`, 64) and detaches it if a batch fails.
 Only the lockstep walks read it; a lone walk (`sites`, `site_tiles`, the proxy region fallback) reads `ground` (a round trip
 per round of a few readings costs more). A submission takes every request queued, its GPU time capped at
 `SUBMIT_GPU_MS` from the µs per point its timestamps measure (the renderer shares the device); the readback rides in the

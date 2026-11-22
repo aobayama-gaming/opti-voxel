@@ -57,6 +57,41 @@ World::~World() {
     stop();
 }
 
+str World::Settings::validate() const {
+    if (terrain_mode != 1 && terrain_mode != 4) {
+        return format("terrain_mode %d: expected 1 (cascade) or 4 (shapes gallery).", terrain_mode);
+    }
+    if (discoverer_mode < 0 || discoverer_mode > 1) {
+        return format("discoverer_mode %d: expected 0 (CPU) or 1 (GPU).", discoverer_mode);
+    }
+    if (!(chunk_param.skirt_depth >= 0.0f)) {
+        return "skirt_depth must not be negative.";
+    }
+    for (const int64_t v : { world_origin_request.x, world_origin_request.y, world_origin_request.z }) {
+        if (v > WorldCoord::MAX_ABS_ORIGIN_VOXEL || v < -WorldCoord::MAX_ABS_ORIGIN_VOXEL) {
+            return "world_origin must be within +-2^60 voxels.";
+        }
+    }
+    if (!(rebase_distance_m >= 0.0f)) {
+        return "rebase_distance_m must be >= 0.";
+    }
+    // The remembered view axis lags the camera's by up to RESCAN_TURN_DEG: a smaller margin would leave the frustum's
+    // edge outside the cone.
+    if (!(lod_view_margin_deg >= ChunkDiscoverer::RESCAN_TURN_DEG && lod_view_margin_deg <= 180.0f)) {
+        return format("lod_view_margin_deg must be in [%d, 180].", int(ChunkDiscoverer::RESCAN_TURN_DEG));
+    }
+    if (std::isnan(lod_view_memory_m)) {
+        return "lod_view_memory_m must be a number.";
+    }
+    if (direct.max_batches_per_frame < 1 || direct.max_batches_per_frame > GPUDirectMesher::MAX_BATCHES_PER_FRAME) {
+        return format("direct batches_per_frame must be in [1, %d].", int(GPUDirectMesher::MAX_BATCHES_PER_FRAME));
+    }
+    if (!(direct.gpu_budget_ms >= 0.0f)) {
+        return "direct gpu_budget_ms must be >= 0 (0: no budget).";
+    }
+    return str();
+}
+
 bool World::fail(const str &p_error) {
     error = p_error;
     OV_ERR_PRINT("World: " + p_error);
@@ -88,6 +123,9 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
     ChunkParam &chunk_param = config.chunk_param;
     OV_ERR_FAIL_COND_V_MSG(started, false, "World: already started.");
     error = str();
+    if (const str err = config.validate(); !err.empty()) {
+        return fail(err);
+    }
     if (!load_world()) {
         return false;
     }
@@ -127,17 +165,12 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
     sdf->set_instances(content.instances);
     sdf->set_species(content.species);
     sdf->set_stream_sources(config.archetype_stream);
-    sdf->set_stream_part_sides(config.archetype_stream_part_sides);
     sdf->set_features(content.features);
     sdf->planet_radius_m = planet_radius_m(config, content);
     sdf->planet_ring_m = content.planet_ring_m;
     sdf->climate_data = content.climate_table; // parsed and checked by configure() (get_world_error)
     sdf->specialize = config.specialize_shaders;
-    sdf->set_instance_band(config.archetype_band && config.terrain_mode != 4); // the gallery: a crease test at every LOD, never eroded
-    sdf->set_moment_blobs(config.archetype_moments);
-    sdf->set_instance_erode(config.archetype_erode);
-    sdf->set_instance_resolve(config.archetype_resolve);
-    sdf->set_walk_batch_gpu(size_t(config.walk_batch));
+    sdf->set_instance_band(config.terrain_mode != 4); // the gallery: a crease test at every LOD, never eroded
     const float min_skirt = sdf->min_skirt_depth(chunk_param, lod_numbers);
     if (chunk_param.skirt_depth < min_skirt) {
         VLOG(1, "World: skirt_depth raised from ", chunk_param.skirt_depth, " to ", min_skirt, " voxels (the terrain's band steps)");
@@ -163,8 +196,6 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
     OV_TRACE("world", "start_discoverer");
     chunk_discoverer = new ChunkDiscoverer();
     chunk_discoverer->set_config(chunk_param, sdf.get());
-    chunk_discoverer->set_cull_mode(ChunkDiscoverer::CullMode(config.discovery_cull_mode));
-    chunk_discoverer->set_cache(config.discovery_cache, config.discovery_verify);
     if (config.discoverer_mode != 0 && points_gpu == nullptr) {
         points_gpu = LocalGpuThread::create();
     }
@@ -186,7 +217,6 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
     {
         OV_TRACE("world", "start_mesher");
         direct_mesher = new GPUDirectMesher();
-        direct_mesher->set_dual_contouring(config.dual_contouring);
         direct_mesher->initialize(sdf.get(), chunk_param, lod_numbers, hosts.device, hosts.pages, config.direct, std::exchange(reused_pages, nullptr));
         direct_mesher->set_debug_view(config.debug_view);
     }
@@ -428,7 +458,7 @@ bool World::debug_audit_discovery() {
     const LODHashSet &scanned = *state.scanned_chunk;
     LODHashSet reference;
     ChunkDiscoverer::ScanCounters counters;
-    chunk_discoverer->scan(scan_view, ChunkDiscoverer::CULL_NONE, reference, counters);
+    chunk_discoverer->scan(scan_view, false, reference, counters);
 
     int64_t scanned_not_in_ref = 0;
     for (const ChunkId &id : scanned) {
@@ -461,7 +491,6 @@ bool World::debug_audit_discovery() {
     discovery_audit.expected = int64_t(culled.size());
     ov::Value &base = discovery_audit.base;
     base["camera_chunk"] = WorldCoord::to_string(scan_view.camera_chunk);
-    base["cull_mode"] = config.discovery_cull_mode;
     base["reference"] = int64_t(reference.size());
     base["reference_nodes_visited"] = counters.nodes_visited;
     base["scanned"] = int64_t(scanned.size());
@@ -762,7 +791,6 @@ ov::Value World::debug_stats() {
     destroy["handoff_frames"] = to_value(vs.handoff_frames);
     d["destroy"] = destroy;
 
-    d["chunk_rids_alive"] = DebugLog::chunk_rids_created.load() - DebugLog::chunk_rids_freed.load();
     d["discoverer"] = chunk_discoverer->get_stats();
     d["mesher"] = direct_mesher->get_stats();
 
@@ -833,8 +861,6 @@ void World::stop(Kept *r_kept) {
         r_kept->pages = kept;
     }
     direct_mesher = nullptr;
-
-    VLOG(1, "World: teardown, chunk instances created=", DebugLog::chunk_rids_created.load(), " freed=", DebugLog::chunk_rids_freed.load());
     state.clear();
 }
 

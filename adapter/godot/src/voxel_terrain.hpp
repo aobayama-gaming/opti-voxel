@@ -63,7 +63,8 @@ private:
     Vector3 _camera_forward() const;
     // What the world gets as the camera's far plane: Camera3D.far, 0 (none) without a camera or the far limit.
     double _camera_far() const;
-    bool _can_set_world_origin(int64_t p_voxel) const;
+    // False (an error) once the world started: p_name is set before the terrain enters the tree.
+    bool _settable(const char *p_name) const;
     // The render origin moved by p_shift metres (World::recenter): the Node3D siblings follow, then origin_shifted.
     void _move_render_origin(const Float3 &p_shift);
     // What follows the render origin outside the meshers: the sea level colours, the VoxelSky siblings' frame.
@@ -131,32 +132,10 @@ public:
     void set_cloud_weather(float p_cover, const Vector3 &p_wind_mps);
     // The direction towards the sun (render space; VoxelSky, from its light): the atmosphere's camera volume.
     void set_sun_direction(const Vector3 &p_towards_sun);
-    // The band rule for archetype instances (Archetype::set_band); false keeps every instance at every LOD
-    // (the reference of the band report, --instance_band=0). Must be set before the node enters the tree.
-    void set_archetype_band(bool p_enabled);
-    bool get_archetype_band() const;
     // The scatter and the forest stream (default on: their keys computed as the chunks ask for them,
     // instance_stream.hpp); false places them whole at configure (--stream=0). Must be set before the node enters the tree.
     void set_archetype_stream(bool p_enabled);
     bool get_archetype_stream() const;
-    // The streamed sources' moment layers read the records while their cell is under this many source cells, above it
-    // proxies (default 1; 3 = the whole build's blobs, ScatterSource::PART_CELL_SIDES; --stream_part_sides). Must be set
-    // before the node enters the tree.
-    void set_archetype_stream_part_sides(int p_sides);
-    int get_archetype_stream_part_sides() const;
-    // The far field of the dropped instances (default on): their moments, per LOD, as blobs the coarse chunks fold into a
-    // surface (moment_layers.hpp; --moments=0 to leave it out). Must be set before the node enters the tree.
-    void set_archetype_moments(bool p_enabled);
-    bool get_archetype_moments() const;
-    // The band rule's erosion rate, cells per LOD (default 1, in (0, 4]): the skirt's depth and the fastest a part
-    // shrinks before its drop (--instance_erode). Must be set before the node enters the tree.
-    void set_archetype_erode(float p_cells);
-    float get_archetype_erode() const;
-    // The band rule's resolution, cells (default 1): a part is kept while its half thickness (its moments) holds this
-    // many cells, and erodes only just before its drop (Archetype::set_band; --instance_resolve). Must be set before
-    // the node enters the tree.
-    void set_archetype_resolve(float p_cells);
-    float get_archetype_resolve() const;
 
     // Screen-space error target of the LOD selection (higher = coarser = fewer chunks/triangles).
     void set_lod_pixel_error(float p_error);
@@ -236,11 +215,6 @@ public:
     // had before any rebase (a float: for reports and replayable poses, not exact far away).
     Vector3 get_render_offset_m() const;
 
-    // Dual contouring of Hermite data (DC-lite): sharp UNION / SUBTRACT creases are
-    // placed on the crease instead of the Surface Nets mass point. Off by default (Surface Nets).
-    void set_dual_contouring(bool p_enable);
-    bool get_dual_contouring() const;
-
     int get_pending_chunk_count() const;
 
     // Per-pass GPU timings in get_debug_stats()["gpu_breakdown"] (needs the viewport to measure its
@@ -278,23 +252,14 @@ public:
     void set_direct_compact_max_extent(float p_chunks);
     float get_direct_compact_max_extent() const;
 
-    // How the discoverer drops LOD tree nodes holding no surface (ChunkDiscoverer::CullMode).
-    void set_discovery_cull_mode(int p_mode);
-    int get_discovery_cull_mode() const;
-    // Remember each LOD tree node's cull verdict across scans (exact: the SDF does not change).
-    void set_discovery_cache(bool p_enable);
-    bool get_discovery_cache() const;
     void set_specialize_shaders(bool p_enable);
     bool get_specialize_shaders() const;
-    // Debug: recompute every cached verdict and report mismatches as errors.
-    void set_discovery_verify(bool p_enable);
-    bool get_discovery_verify() const;
     // Debug: check every scan delta against the full scans and every incremental destroy check against
     // the full recompute (VoxelState::verify_against_full), ERROR on a difference.
     void set_destroy_verify(bool p_enable);
     bool get_destroy_verify() const;
-    // Where the discoverer evaluates the corners of its cull test: 0 CPU, 1 (and -1, auto) GPU (LocalPointsGPU, a
-    // local device on the discoverer thread; CPU with a warning if it can't be created). Both give the same scans.
+    // Where the discoverer evaluates the corners of its cull test: 0 CPU, 1 GPU (the default: LocalPointsGPU, a local
+    // device on the discoverer thread; CPU with a warning if it can't be created). Both give the same scans.
     void set_discoverer_mode(int p_mode);
     int get_discoverer_mode() const;
     // Debug: diff every scan against a fresh CPU scan, ERROR on any difference (--discovery_compare).
@@ -307,9 +272,6 @@ public:
     // Debug: every batch of the GPU's readings read again on the CPU, ERROR on a difference (--walk_verify).
     void set_walk_verify(bool p_enable);
     bool get_walk_verify() const;
-    // The walk keys a drain task walks together with the GPU field (SDFTable::WALK_BATCH_GPU by default).
-    void set_walk_batch(int p_keys);
-    int get_walk_batch() const;
 
     // 0 shaded, 1 normals, 2 lod, 3 page, 4 wireframe, 5 chunk, 6 group, 7 quad index.
     void set_debug_view(int p_view);

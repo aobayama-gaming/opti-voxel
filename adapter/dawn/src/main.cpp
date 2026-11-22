@@ -76,12 +76,6 @@ int main(int argc, char **argv) {
     bool run_viewer = false;
     for (int i = 1; i < argc; i++) {
         std::string value;
-        for (const char *removed : { "--voxel", "--lods", "--trees", "--tree_area", "--climate", "--terrain" }) {
-            if (flag(argv[i], removed, value)) {
-                std::fprintf(stderr, "%s is gone: use --world=PATH (src/world_file.hpp)\n", removed);
-                return 1;
-            }
-        }
         if (flag(argv[i], "--viewer", value)) {
             run_viewer = true;
         } else if (flag(argv[i], "--shot", value)) {

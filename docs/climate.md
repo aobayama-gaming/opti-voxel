@@ -33,10 +33,7 @@ continents) are macro inputs until the planned macro engine computes them.
    shrink the others). The last biome, the default, has no place: `k_d = (1 - sum k)^2` where the kernels sum under 1
    (`Climate::fill`). The weights are `w_b = k_b / S`, `S = sum k + k_d >= 3/4` (`blend_rcp`, `blend_weight`):
    overlapping biomes blend by themselves, no borders to match and no priority. `1 / S` is `det_rsqrt(S)^2` and one
-   Newton step (exact 1 at S = 1: a biome alone at its centre is whole), each weight capped at 1. It replaced edges
-   (min / max with a fade) under priority layering: world.json's edges became places with open sides closed at 0.85
-   and spans x1.1, its biome shares over 1678 km within a point of the edges' (desert 5.7% both, mountain 18.2% for
-   19.4%).
+   Newton step (exact 1 at S = 1: a biome alone at its centre is whole), each weight capped at 1.
 3. **The ground** at a point is `sum_b w_b * out_b`, `out_b` biome b's graph output; each graph reads its own notes:
    - a note `n_k` times its `"amp_m"` (as written, on any base), read at the point moved by its warp: a warp node
      whose input is any node strictly coarser than the note (the gate), read with its notes' seed, seed + 1 and seed + 2
@@ -158,15 +155,11 @@ computes no terrain and has no node kind the engine hasn't.
   `view`, `mixer_version`). A biome's `at` is kept as `[centre, span]`. The world's engine section sets the octaves
   (`EngineInfo.use_world`); a planet's views start on the whole planet. The World mode's fields panel
   (`fields_panel.gd`) edits the fields' bands (each shown with the octave the engine snaps it to), adds and removes
-  fields, and sets the planet's radius (written into the shaders: a recompile). The world autosaves (user://), saves to
-  `climate/worlds/*.world.json`, and *Export* (World menu) writes it over its own file once `ClimateReportNode.check`
+  fields, and sets the planet's radius (written into the shaders: a recompile). The world autosaves (user://), and *Export* (World menu) writes it over its own file once `ClimateReportNode.check`
   (`ClimateReport::check_world`: the whole file, at its engine and over its planet, which refuses a ground under its
   centre the flat world takes) accepts it: the file is the world minus the mixer's keys (a climate file it names untouched;
-  edited fields then go inline). The 2D maps (`ClimateReport::preview`) are drawn over the world's planet too. Numbers keep 7 significant digits; a value fits on one line up to 120
-  characters. A world read (the autosave, a saved world) is migrated to what cascade v2 reads (`World.migrate`, a
-  printed note each): a field's `"source": "ground"` term goes, from the mixer's fields and an inline climate (a
-  climate file the world names is left as it is). An autosave of an older `mixer_version` (3: multifractals without a
-  parent) isn't read: the mixer starts on world.json.
+  edited fields then go inline). The CPU maps (`ClimateReport::preview`) are sampled over the world's planet too. Numbers keep 7 significant digits; a value fits on one line up to 120
+  characters.
 - **The graph is the biome's `graph`** (`graph.gd`), node for node: a link is an input key naming another node's id
   (input port i is the kind's input i, a mix's port i its row i's `in`, one port more a new row), each node one output.
   Linking, unlinking, a row's x, a node's x or Delete (what read it reads its `in`, else nothing) edit the nodes in place;
@@ -195,17 +188,16 @@ computes no terrain and has no node kind the engine hasn't.
   engine, the fields inline; the Biome mode's biome alone as the default) to `ClimateReportNode.preview`
   (`ClimateReport::preview`): the report's own sampler on the CPU, each column traced to its ground as the map's
   lattice Λ_m sees it (`SDFCascade::ground_along(start, m)`: to within 2^m voxels, then the last two distances' linear
-  crossing; the report and the game's sites trace at LOD 0), the shaded relief
-  and the weights' blend plus every field's value at every point (the chart's cloud) and the largest altitude
-  (`relief_m`: the curve editor's input span), or the engine's refusal. A mix row's M and S (mute, solo) are the view's
-  only: the text sent has those rows at volume 0, the file keeps their x. 48 points a side (30-60 ms), then 192 once the edits pause
-  (`SETTLE` 0.35 s; ~1 s on 16 cores: ~0.5 ms of CPU a point, each point walking the cascade on its own, 6 reads), both
-  on a thread: the window never draws a map (at 48 on the main thread a drag ran at 17 fps, the map 30 ms of every
-  frame). A drag's edits draw as often as the thread keeps up (the newest world each time), and the status, the chart's
-  cloud and the 3D view follow each map shown (`EngineView.drawn`). With 3D shown the map's loop runs at
+  crossing; the report and the game's sites trace at LOD 0): every field's value at every point (the chart's cloud),
+  the altitudes (the ground under the camera's target) and the largest (`relief_m`: the curve editor's input span), or
+  the engine's refusal. No image: the view is the 3D terrain (the 2D maps, and their sharp 192-point redraw, are gone).
+  A mix row's M and S (mute, solo) are the view's only: the text sent has those rows at volume 0, the file keeps their
+  x. 48 points a side (30-60 ms), on a thread: the window never draws a map (at 48 on the main thread a drag ran at 17
+  fps, the map 30 ms of every frame). A drag's edits draw as often as the thread keeps up (the newest world each time),
+  and the status, the chart's cloud and the 3D view follow each map shown (`EngineView.drawn`). The map's loop runs at
   `ov::Priority::LOW` (`preview(..., background)`: Godot's low-priority group, on the pool's low-priority share of the
   threads), behind the terrain's: at HIGH the main thread's `GpuTable::build_lists` waited behind the map's rows, up
-  to 40 ms a frame. *3D* (on by default, `terrain_view.gd`) is the game's terrain: a `VoxelTerrain` (GPU
+  to 40 ms a frame. The view (`terrain_view.gd`) is the game's terrain: a `VoxelTerrain` (GPU
   Direct, the game's sky, fog and sun) loading the same text (`set_world_json`, no file). An edit restarts its world in
   place (`VoxelTerrain.restart_world`: a new `ov::World` on the same node, device and page host) 50 ms after it (not
   pushed back by the next edits: maps every ~40 ms kept it from firing), or once the last restart's chunks in view are

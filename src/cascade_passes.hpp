@@ -47,7 +47,6 @@ public:
     void record_all(const ov::ivec2 &p_lods, uint32_t p_count, bool p_fold = false);
 
     uint64_t scratch_bytes() const { return scratch_bytes_total; }
-    uint32_t get_max_chunks() const { return max_chunks; }
     bool is_points() const { return item_size == 1; }
     Buffer get_scratch_a() const { return scratch_a; }
     Buffer get_scratch_b() const { return scratch_b; }

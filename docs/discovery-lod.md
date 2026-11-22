@@ -3,12 +3,11 @@
 Which chunks are scanned, loaded and dropped. Run `tools/discovery_audit.sh` after touching the discoverer or the SDF.
 
 - Discoverer: the cull verdict of a node only depends on its id and the (fixed) SDF, so it is cached
-  across scans (`discovery_cache`, default on); `--discovery_verify=1` recomputes every hit and
-  ERRORs on a mismatch. The walk is breadth first, one wave per LOD: each wave's uncached nodes give
+  across scans (`CullCache`; its `verify`, the unit tests', recomputes every hit and counts the mismatches). The walk is breadth first, one wave per LOD: each wave's uncached nodes give
   their 8 corners, deduplicated on the voxel (~6 nodes share a corner), evaluated in one batch
   (`SDFBase::evaluate_batch`; `SDFCascade` spreads it over the `WorkerThreadPool` with the
   allocation-free `Terrain::point`). `VoxelTerrain.discoverer_mode` / `--discoverer=cpu|gpu` (bench
-  and player): -1 auto (default, the same as 1), 0 CPU, 1 GPU. The GPU path,
+  and player): 0 CPU, 1 GPU (default). The GPU path,
   `LocalPointsGPU` (`src/local_points_gpu.*`, shared with the site walks' `FieldGPU`), runs the cascade passes on point
   items (`CascadePasses::create_points`, `CascadePointsGPU::cull_values`: the unit register read back, metres on the CPU
   with `SDFCascade::to_metres`) on a **local device (`ov::gpu::create_local_device`) on a thread of its own**
@@ -19,7 +18,7 @@ Which chunks are scanned, loaded and dropped. Run `tools/discovery_audit.sh` aft
   makes no device and no pipeline (`gpu_init` 2.1 s per world -> ~2.3 ms, the mixer's 3D view). It does nothing on the
   main RD or the render thread. No local device (headless): one
   warning, CPU. Both paths give the same bits; `--discovery_compare=1` runs a fresh CPU scan for every
-  scan and ERRORs on any difference (its time counts in the discoverer's latency stat): run `discovery_audit.sh -- --terrain=cascade --discovery_compare=1`
+  scan and ERRORs on any difference (its time counts in the discoverer's latency stat): run `discovery_audit.sh -- --discovery_compare=1`
   (and `--world=res://worlds/lods25.world.json`) after touching the discoverer, the cascade passes or `CascadePointsGPU`.
   `stats.json["discoverer"]`: mode, scratch MB, `gpu_init_ms` (device + shader, before the first scan),
   compare counts, first and last scan (scan / cull / walk
@@ -75,12 +74,12 @@ Which chunks are scanned, loaded and dropped. Run `tools/discovery_audit.sh` aft
   the same splits and only loses chunks, like culled ones; the discovery audit rebuilds with the same view. Shadows:
   a caster past the far plane would need to rise far * tan(sun elevation) to reach the shadow map (~56 km at 105 km
   and 28 degrees), so nothing the terrain makes is lost. Measured on the video terrain (world climate, 25 LODs, 5 cm,
-  error 1 | 3), `tools/occlusion_census.py` on the loaded set: every chunk past LOD 15-16 lies beyond the far plane's
+  error 1 | 3), an occlusion census of the loaded set (a tool since removed): every chunk past LOD 15-16 lies beyond the far plane's
   corners at 2-500 m above the ground, a third of the non-empty chunks and a quarter of their quads; on forest5cm
   (15 LODs) ~3%. With the limit (bench, 960x540, on | off): 23-29% fewer chunks loaded, 31-41% fewer non-empty ones,
   20-27% fewer live triangles, 8-17% fewer draw calls in view; the power-of-two step still keeps ~5% of the chunks
   past the corners (a finer step is the follow-up).
-- Occlusion census (`--depth_grab=1 --audit=1`, `tools/occlusion_census.py`, `docs/testing.md`): which loaded
+- Occlusion census (a one-frame depth readback, removed after the measure; `git log -- tools/occlusion_census.py`): which loaded
   chunks one frame's depth hides. At low altitude 15-21% of the quads in front of the camera are hidden (most of
   LODs 6-14 at 2 m: the ground hides the far ground), but a rule that keeps hidden nodes coarse must keep face
   neighbours within one LOD and its coarse mesh hidden, which needs the node's whole 3x3x3 neighbourhood hidden

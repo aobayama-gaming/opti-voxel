@@ -1,4 +1,5 @@
 #include "test_climate_common.hpp"
+#include "test_trees.hpp"
 
 #include "biome_pick.hpp"
 #include "sdf_cascade.hpp"

@@ -10,6 +10,7 @@
 
 #include "archetype_gpu_table.hpp"
 #include "archetype_probes.hpp"
+#include "archetype_table.hpp"
 #include "base_surface.hpp"
 #include "cascade_terrain.hpp"
 #include "chunk_math.hpp"
@@ -898,7 +899,8 @@ ov::str probe_shader(const ProbeNoise &p_noise, const std::vector<Probe> &p_prob
         r_words += probe.words;
     }
     ov::str code = ov::str(SHADER_TEMPLATE);
-    code = ov::replace_all(code, "/*STRUCTS*/", ov::str(GLSL_STRUCT_DEFINITION) + GLSL_FRAME_STRUCTS);
+    // The archetype probes run their programs with literal records (ArchetypeProbes::probe).
+    code = ov::replace_all(code, "/*STRUCTS*/", ov::str(GLSL_STRUCT_DEFINITION) + GLSL_FRAME_STRUCTS + Archetype::GLSL_DEF_RECORD_STRUCT);
     code = ov::replace_all(code, "/*HELPERS*/", ov::str(GLSL_HELPER_FUNCTION) + GPUFrame::glsl_functions() + GPUFrame::glsl_int64() + GLSL_EXACT_NOISE);
     code = ov::replace_all(code, "/*NOISE*/", p_noise.glsl());
     code = ov::replace_all(code, "/*PROBES*/", probes_glsl);

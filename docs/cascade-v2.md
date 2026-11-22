@@ -76,9 +76,8 @@ Consequences that the parser stops refusing:
     turbulence, as today);
   - optional `x`, `y`, `z` ports instead give each axis its own node.
 - **multifractal:** `parent` is any node.
-- **field terms:** the `"source": "ground"` term goes. Only the test tables `plain.json` and `shaped_test.json` use it,
-  `world.json` doesn't. The ground depends on the weights, which depend on the fields, so the term was a cycle broken
-  by a level-above read. A field's terms read earlier fields only.
+- **field terms:** read earlier fields only, never the ground: the ground depends on the weights, which depend on the
+  fields, so a ground term was a cycle broken by a level-above read.
   The graph is acyclic and the parser says where it isn't.
 - **unchanged:** everything else (notes, mixes and rows, shapes, curves, programs' kinds, `at`, biome keys, engine.json,
   climate.json fields).
