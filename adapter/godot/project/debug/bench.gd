@@ -292,15 +292,31 @@ func _run_approach() -> bool:
 	return true
 
 
-## Raise or lower the camera along the terrain's up to p_height metres above the terrain under it (SDF distance,
-## iterated).
+## Raise or lower the camera along the terrain's up to p_height metres above the terrain under it. Only the SDF's sign
+## is trusted: its value is a distance near the ground only ((altitude - h) / |n - grad h|, h's gradient read at the
+## point: tens of metres above a 3D ground it is off by tens of percent either way, and iterating on it left the
+## camera under the sea or inside a 2 km planet). The ground under the camera is bracketed by the sign, then bisected.
 func _place_above_ground(p_height: float) -> void:
-	for i in 32:
-		var d: float = terrain.get_sdf_at(camera.global_position)
-		if absf(d - p_height) < maxf(1.0, p_height * 0.05):
-			break
-		camera.global_position += _up() * (p_height - d)
-	print("BENCH: camera at %s (%.1f m above the terrain)" % [camera.global_position, terrain.get_sdf_at(camera.global_position)])
+	var up := _up()
+	var from := camera.global_position
+	var above := 0.0  # offsets along up: the SDF positive at above, negative at below
+	var step := 1.0
+	while terrain.get_sdf_at(from + up * above) <= 0.0 and step < 1e7:
+		above += step
+		step *= 2.0
+	var below := above - 1.0
+	step = 2.0
+	while terrain.get_sdf_at(from + up * below) > 0.0 and step < 1e7:
+		below = above - step
+		step *= 2.0
+	for i in 40:
+		var mid := 0.5 * (above + below)
+		if terrain.get_sdf_at(from + up * mid) > 0.0:
+			above = mid
+		else:
+			below = mid
+	camera.global_position = from + up * (above + p_height)
+	print("BENCH: camera at %s (%.1f m above the terrain)" % [camera.global_position, p_height])
 
 
 func _on_planet() -> bool:
