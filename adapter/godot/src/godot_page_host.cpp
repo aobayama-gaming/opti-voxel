@@ -5,6 +5,8 @@
 #include "page_format.hpp"
 #include "page_shading_glsl.hpp"
 #include "quad_page_pool.hpp"
+#include "sea.hpp"
+#include "shade_frame_glsl.hpp"
 #include "voxel_sky.hpp"
 
 #include <godot_cpp/classes/image.hpp>
@@ -87,6 +89,8 @@ float shade_voxel_m() {
 // The cloud layer's uniforms and functions (VoxelSky::glsl_clouds, the same text as the sky shader's): the sun's
 // light in light() is cut where a cloud lies between the fragment and the sun; the leaves' wind sway.
 /*GLSL_CLOUDS*/
+// The sea's uniforms and its shore (Sea::glsl_shore: sand and the wet band by altitude; neutral without a sea).
+/*GLSL_SEA_SHORE*/
 
 void vertex() {
     int corner = VERTEX_ID % 4; // base quad corners A, B, C, D
@@ -173,6 +177,7 @@ void fragment() {
     float roughness;
     vec3 emission;
     material_shading(mat_id, ground, p, v_world_normal, up_dir, footprint, flat_w, shade, TIME, wind_sway_m, albedo, roughness, emission);
+    sea_shore(v_height, albedo, roughness);
     if (debug_view == 1) {
         albedo = vec3(0.0);
         emission = v_world_normal * 0.5 + 0.5;
@@ -289,6 +294,53 @@ void light() {
 }
 )gdshader";
 
+// The sea (Sea, sea.hpp): one quad over the whole screen, drawn with the transparent objects (it reads the opaque pass's
+// depth and colour) without a depth test. Its uniforms are the pages' (set_material_param): the decode's origin and voxel
+// (the shading frame), the base, the atmosphere and clouds, the sea's own; the sun's direction is the global atmo_sun_dir.
+// The ray is rebuilt from the depth like the mixer's reach sphere (terrain_view.gd): Godot's reverse z, 0 the far plane
+// (the sky: no scene distance). The sea's colour replaces the scene's where the ray meets water (ALPHA 1), so the water's
+// transmittance is per channel.
+static constexpr const char SEA_SHADER[] = R"gdshader(
+shader_type spatial;
+render_mode unshaded, blend_mix, depth_draw_never, depth_test_disabled, fog_disabled, cull_disabled, shadows_disabled;
+
+uniform sampler2D sea_depth : hint_depth_texture, filter_nearest;
+uniform sampler2D sea_screen : hint_screen_texture, filter_nearest;
+uniform ivec3 origin_voxel_lo = ivec3(0);
+uniform float voxel_size = 0.5;
+// The sky's colour without the atmosphere (VoxelSky::cloud_params: the fog's).
+uniform vec3 sea_sky = vec3(0.45, 0.6, 0.8);
+
+ivec3 shade_origin_voxel() {
+    return origin_voxel_lo;
+}
+
+float shade_voxel_m() {
+    return voxel_size;
+}
+
+/*GLSL_SHADE_FRAME*/
+/*GLSL_CLOUDS*/
+/*GLSL_SEA*/
+
+void vertex() {
+    POSITION = vec4(VERTEX.xy, 1.0, 1.0);
+}
+
+void fragment() {
+    float depth = texture(sea_depth, SCREEN_UV).r;
+    vec4 view = INV_PROJECTION_MATRIX * vec4(SCREEN_UV * 2.0 - 1.0, depth, 1.0);
+    vec3 v = view.xyz / view.w;
+    float dist = length(v);
+    vec3 dir = normalize(mat3(INV_VIEW_MATRIX) * v);
+    float pixel_rad = 2.0 / (PROJECTION_MATRIX[1][1] * VIEWPORT_SIZE.y);
+    vec3 scene = texture(sea_screen, SCREEN_UV).rgb;
+    bool hit;
+    ALBEDO = sea_shade(CAMERA_POSITION_WORLD, dir, depth > 0.0 ? dist : 1e30, scene, pixel_rad, TIME, atmo_sun_dir, atmo_sun_light, sea_sky, hit);
+    ALPHA = hit ? 1.0 : 0.0;
+}
+)gdshader";
+
 GodotPageHost::GodotPageHost(RID p_scenario, RDDevice *p_device) :
         scenario(p_scenario), device(p_device) {
     RenderingServer *rs = RenderingServer::get_singleton();
@@ -317,11 +369,13 @@ GodotPageHost::GodotPageHost(RID p_scenario, RDDevice *p_device) :
             String(PAGE_SHADER)
                     .replace("/*GLSL_PAGE_DECODE*/", godot_str(PageFormat::glsl_decode() + Material::glsl_constants()))
                     .replace("/*GLSL_CLOUDS*/", VoxelSky::glsl_clouds() + VoxelSky::glsl_atmosphere())
-                    .replace("/*GLSL_PAGE_SHADING*/", godot_str(PageShading::glsl())));
+                    .replace("/*GLSL_PAGE_SHADING*/", godot_str(PageShading::glsl()))
+                    .replace("/*GLSL_SEA_SHORE*/", godot_str(Sea::glsl_uniforms() + Sea::glsl_shore())));
 }
 
 void GodotPageHost::destroy() {
     RenderingServer *rs = RenderingServer::get_singleton();
+    set_sea(false);
     rs->free_rid(shader);
     rs->free_rid(base_mesh);
     device->post([this]() { delete this; });
@@ -334,6 +388,57 @@ void GodotPageHost::set_material_param(const StringName &p_name, const Variant &
             RenderingServer::get_singleton()->material_set_param(page.material, p_name, p_value);
         }
     }
+    if (sea.material.is_valid()) {
+        RenderingServer::get_singleton()->material_set_param(sea.material, p_name, p_value);
+    }
+}
+
+void GodotPageHost::set_sea(bool p_on) {
+    RenderingServer *rs = RenderingServer::get_singleton();
+    if (!p_on) {
+        for (const RID &rid : { sea.instance, sea.material, sea.mesh, sea.shader }) {
+            if (rid.is_valid()) {
+                rs->free_rid(rid);
+            }
+        }
+        sea = SeaPass();
+        return;
+    }
+    if (sea.instance.is_valid()) {
+        return;
+    }
+    sea.shader = rs->shader_create();
+    rs->shader_set_code(sea.shader,
+            String(SEA_SHADER)
+                    .replace("/*GLSL_SHADE_FRAME*/", godot_str(ShadeFrame::glsl()))
+                    .replace("/*GLSL_CLOUDS*/", VoxelSky::glsl_clouds() + VoxelSky::glsl_atmosphere())
+                    .replace("/*GLSL_SEA*/", godot_str(Sea::glsl_uniforms() + Sea::glsl_water())));
+    sea.material = rs->material_create();
+    rs->material_set_shader(sea.material, sea.shader);
+    const Array keys = material_params.keys();
+    for (int i = 0; i < keys.size(); i++) {
+        rs->material_set_param(sea.material, keys[i], material_params[keys[i]]);
+    }
+    // One quad; the vertex stage puts it over the whole screen, so it is never culled.
+    PackedVector3Array vertices;
+    vertices.push_back(Vector3(-1, -1, 0));
+    vertices.push_back(Vector3(1, -1, 0));
+    vertices.push_back(Vector3(-1, 1, 0));
+    vertices.push_back(Vector3(1, 1, 0));
+    PackedInt32Array indices;
+    for (int i : { 0, 1, 3, 0, 3, 2 }) {
+        indices.push_back(i);
+    }
+    Array arrays;
+    arrays.resize(Mesh::ARRAY_MAX);
+    arrays[Mesh::ARRAY_VERTEX] = vertices;
+    arrays[Mesh::ARRAY_INDEX] = indices;
+    sea.mesh = rs->mesh_create();
+    rs->mesh_add_surface_from_arrays(sea.mesh, RenderingServer::PRIMITIVE_TRIANGLES, arrays);
+    sea.instance = rs->instance_create2(sea.mesh, scenario);
+    rs->instance_geometry_set_material_override(sea.instance, sea.material);
+    rs->instance_geometry_set_cast_shadows_setting(sea.instance, RenderingServer::SHADOW_CASTING_SETTING_OFF);
+    rs->instance_set_ignore_culling(sea.instance, true);
 }
 
 void GodotPageHost::create_page(int p_page, uint32_t p_rows) {

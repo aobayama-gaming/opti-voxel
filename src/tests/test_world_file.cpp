@@ -210,6 +210,7 @@ TEST_CASE("WorldFile: a planet file's refusals say why") {
     CHECK(ov::contains(parse(R"({"sea": {"level_m": 0, "tide": 1}})", w), "unknown key 'tide'"));
     CHECK(ov::contains(parse(R"({"sea": {"level_m": 0, "water": {"deep": [1, 2]}}})", w), "three numbers"));
     CHECK(ov::contains(parse(R"({"sea": {"level_m": 0, "shore": {"above_m": -1}}})", w), ">= 0"));
+    CHECK(ov::contains(parse(R"({"shape": {"kind": "torus", "radius_m": 2000, "ring_m": 9000}, "sea": {"level_m": 0}})", w), "a sea on a torus"));
     CHECK(ov::contains(parse(R"({"atmosphere": {"density": -1}})", w), "'density' is a number >= 0"));
     CHECK(ov::contains(parse(R"({"climate": {"fields": [{"name": "t"}], "humidity": {"mean": 1}}, "biomes": [{"name": "a"}]})", w), "'humidity' is not a field"));
     CHECK(ov::contains(parse(R"({"climate": {"fields": [{"name": "t"}], "t": {"median": 1}}, "biomes": [{"name": "a"}]})", w), "unknown key 'median'"));

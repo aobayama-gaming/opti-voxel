@@ -24,6 +24,9 @@ public:
 
     // The page shader's other uniforms (VoxelTerrain: sea level, skirt depths, base up, the sky's clouds), on every page.
     void set_material_param(const godot::StringName &p_name, const godot::Variant &p_value);
+    // The sea's full-screen pass (Sea, sea.hpp; godot_page_host.cpp's SEA_SHADER) on or off: made when the world has a
+    // sea, its material taking every set_material_param like the pages'.
+    void set_sea(bool p_on);
 
     void create_page(int p_page, uint32_t p_rows) override;
     void free_page(int p_page) override;
@@ -62,6 +65,13 @@ private:
     std::vector<Page> pages;
     std::vector<PageRT> rt_pages;
     godot::RID rt_palette_texture;
+    struct SeaPass {
+        godot::RID shader;
+        godot::RID material;
+        godot::RID mesh;
+        godot::RID instance;
+    };
+    SeaPass sea; // invalid RIDs while off
 
     ~GodotPageHost() override = default;
 };

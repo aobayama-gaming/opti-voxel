@@ -39,7 +39,8 @@
 // tube (BaseSurface::planet refuses one it can't hold); the old "planet" key is refused (renamed "shape", with a kind).
 // "sea" (none without it): its level_m above the base, what a graph's "sea" node reads and under which (plus the shore's
 // above_m) no tree or rock grows (SDFTable::set_site_floor_m); its water (linear colours, the depth of clear water) and
-// shore (the sand band's depth below and height above the level, its colour) are the sea pass's look. "climate": its
+// shore (the sand band's depth below and height above the level, its colour) are the sea pass's look (Sea, sea.hpp; refused
+// on a torus). "climate": its
 // fields (a list, or a file holding it), and per field name a mean (added) and poles (times the latitude n_y^2: 0 at the
 // equator, 1 at the poles; refused on a flat base and a torus), merged into the fields (climate_parse.cpp); a field name
 // that isn't one is refused. "atmosphere": the air's density (times every scattering and absorption coefficient) and the

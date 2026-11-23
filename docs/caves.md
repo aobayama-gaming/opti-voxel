@@ -129,7 +129,8 @@ worm-like tubes, which is the reason to allow two notes sets per layer later.
    conservative). It is a pure function of the view, so it never changes the terrain's bits.
 5. **Shaping.** Tilted strata (the squash axis from a direction field), depth layers `A cos(2 pi (depth + w(p)) / T)`
    for stacked galleries, two-sheet crossings for tubes, a karst network skeleton (paths as tube instances), water at a
-   water table (`docs/look.md`).
+   water table (`docs/look.md`, "Sea": the sea pass draws one level per world over the base; a water table is a level
+   of its own, under the ground, which that pass doesn't draw).
 
 ## Open decisions (defaults proposed)
 

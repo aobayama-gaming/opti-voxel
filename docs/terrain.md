@@ -117,6 +117,13 @@ One terrain (the cascade), one instance path (its table), one world file. Read b
   `base_altitude`, `base_up`, `base_level_span`, from `BaseSurface::render`'s uniforms in double, `World::base_render`):
   the pages' heights and slopes, the sky's frame, the cloud layer and the atmosphere (`docs/look.md`). A new base kind
   adds its case to those three functions, to `render` and to `curvature_radius_m`, and every render user follows it.
+  `base_level_span_k(p, dir, k, t)` is `base_level_span` below a fixed level whose `k` comes from double on the CPU
+  (`BaseSurface::level_k`, again on every rebase): a sphere's |c|^2 - (R + h)^2 (m^2), so q = |p|^2 - 2 p.c + k keeps
+  its low bits where `base_q`'s h (2 R + h) would lose a metre at Earth's radius; the flat base's level plane in render
+  y. Both share the sphere's roots (`base_sphere_span`) and the plane's (`base_plane_span`). The sea reads it
+  (`docs/look.md`, "Sea"); a torus has no closed form, so it returns false there and the world file refuses a sea on
+  one. `Render::level_span_k` is its float formula on the CPU (`test_sea.cpp`: within 1 mm + 1e-4 of the double roots at
+  Earth's radius and on a 2 km planet, above, below and grazing).
   `TORUS` (`shape.ring_m` with `shape.radius_m` R: a ring of that radius round the y
   axis through the voxel (0, 0, 0), a tube of R, its start over the tube's top at +x) is such a kind: one `shape()` in
   double gives every curved base's altitude, gradient and analytic Hessian (the regions, `up_dir`, `altitude`), its
