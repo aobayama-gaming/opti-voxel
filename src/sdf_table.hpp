@@ -118,6 +118,13 @@ public:
     // (Climate::FeatureShare). They stand in the feature region, a cell's candidate where its biome's entry of its kind
     // and cell keeps it (BiomePick). Set before configure().
     void set_features(const std::vector<Climate::FeatureShare> &p_features) { features = p_features; }
+    // The lowest altitude a tree or a rock may stand at (metres above the base: a world's sea level plus its shore's
+    // above_m; -INFINITY: anywhere). Set before configure().
+    void set_site_floor_m(double p_altitude_m) { site_floor_m = p_altitude_m; }
+    // Whether a tree or a rock may stand on LOD0 voxel p_base (the sources' accept): not in or near a lava lake (in_lake),
+    // not under the site floor. On the CPU after either walk (CellScatter::accept_sites: the GPU walk only reads the
+    // ground), so walk_gpu 0 and 1 keep the same sites.
+    bool site_allowed(const VoxelPos &p_base) const;
     // The materials the records name (TableRecord::material): the page shader's material_tex.
     const Material::Library &get_materials() const override { return materials; }
 
@@ -300,6 +307,7 @@ private:
     std::vector<Climate::FeatureShare> features;
     bool has_features = false; // build_table: the lists name some, their library types added
     std::vector<Biome::LavaPool> lava_pools; // keeps trees and rocks out of the lakes (in_lake)
+    double site_floor_m = -INFINITY; // set_site_floor_m
     Material::Library materials;
     bool instance_band = true; // false: a world's "instance_band" (the shapes gallery), tests
     Archetype::ErodeRule erode_rule; // tests vary it

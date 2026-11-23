@@ -81,6 +81,11 @@ Consequences that the parser stops refusing:
   The graph is acyclic and the parser says where it isn't.
 - **unchanged:** everything else (notes, mixes and rows, shapes, curves, programs' kinds, `at`, biome keys, engine.json,
   climate.json fields).
+- **added since (the planet file):** `POLE`, a field's latitude term (n_y² of a sphere's up, `docs/climate.md`), is the
+  one node with a fixed level that isn't a note's: like `up` it reads the base at the point, but at its own level (the
+  field's, or `Ground::pole_level` if finer), its gradient rescaled by an exact power of 2, so it is the same bits from
+  every LOD. Its level is part of its hash key; fold_lods leaves it alone; its bound is [0, 1] and its step 0. The `sea`
+  node compiles to a constant.
 
 ## Programs
 

@@ -43,8 +43,10 @@ struct AtmosphereMedium {
     // Earth's medium for a base of curvature radius p_radius_m (BaseSurface::curvature_radius_m) under a ground of relief
     // p_relief_m: under Earth's radius every height times R / R_earth (at least RELIEF_TOPS reliefs at the top) and
     // every coefficient over it, the same optical depths (a small planet keeps a blue sky and a limb); p_scale > 0 sets
-    // that factor instead.
-    static AtmosphereMedium for_base(double p_radius_m, double p_relief_m, double p_scale = 0.0);
+    // that factor instead. A planet's air (WorldFile's "atmosphere"): p_density times every coefficient (scattering and
+    // absorption: a thicker or thinner air), p_tint times the Rayleigh scattering per channel; 1 and (1, 1, 1) keep
+    // Earth's bits.
+    static AtmosphereMedium for_base(double p_radius_m, double p_relief_m, double p_scale = 0.0, double p_density = 1.0, const Float3 &p_tint = Float3{ 1.0f, 1.0f, 1.0f });
 
     // The fields as the shaders' uniforms (GLSLUniforms).
     template <class F>
@@ -117,8 +119,9 @@ public:
     using TexturesFn = std::function<void(ov::gpu::Texture p_volume, ov::gpu::Texture p_multiscatter)>;
 
     // p_base's curvature radius and the ground's relief set the medium's scale (AtmosphereMedium::for_base, p_scale), the
-    // curvature the multiple scattering's sphere.
-    void start(ov::gpu::Device *p_device, const BaseSurface &p_base, double p_voxel_m, double p_relief_m, double p_scale, TexturesFn p_textures);
+    // curvature the multiple scattering's sphere; p_density and p_tint the planet's air (for_base).
+    void start(ov::gpu::Device *p_device, const BaseSurface &p_base, double p_voxel_m, double p_relief_m, double p_scale, TexturesFn p_textures, double p_density = 1.0,
+            const Float3 &p_tint = Float3{ 1.0f, 1.0f, 1.0f });
     // This frame's passes, the camera at p_camera_m with the sun towards p_sun (unit) over p_base (World::base_render).
     void frame(const Float3 &p_camera_m, const Float3 &p_sun, const BaseSurface::Render &p_base);
     // Frees its textures and pipelines and deletes itself on the device's thread (after the work posted before).

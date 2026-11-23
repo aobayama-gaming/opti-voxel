@@ -60,6 +60,9 @@ render contract (`BaseSurface::glsl_render`, `docs/terrain.md`), so another base
   ground's relief (`SDFCascade::ground_top_m`: the program's output bound over the base, its highest possible point,
   0 for a ground that never rises above its base) so the terrain stays inside the air: Earth and the flat world keep
   Earth's 100 km, a 2 km planet under `tiny.world.json`'s 819 m gets 3.3 km. `look.atmosphere_scale` sets the factor.
+  A planet file's `"atmosphere": {"density", "tint"}` (`WorldFile::atmosphere_density|tint`) multiplies every
+  coefficient (scattering and absorption: thinner or thicker air, the same colour) by the density and Rayleigh's by the
+  tint too; 1 and white keep the bits.
 - **Passes** (compute on the main device every frame, `device->post` like the mesher; a `atmosphere` GPU timestamp):
   the multiple-scattering table ψ_ms(sun height, altitude), 32 x 32 (Hillaire's: second order with an isotropic phase
   over 64 directions, 1 / (1 - f_ms)), built once on a sphere of the base's curvature radius (Earth's on the flat

@@ -279,13 +279,14 @@ double relief_light(const Sampled &p_s, size_t p_i, int p_m, bool p_gradient) {
     return 0.3 + 0.9 * ov::max(0.0, (nx * -0.577 + ny * 0.577 + nz * -0.577) / ln);
 }
 
-// The relief (RGB): height colours in the relief's light (relief_light).
-ov::bytes shaded_rgb(const Sampled &p_s, int p_n, int p_m, bool p_gradient) {
+// The relief (RGB): height colours in the relief's light (relief_light), the sea's from p_sea (LOD0 voxels above the
+// base: the world's sea level, 0 without a sea) down.
+ov::bytes shaded_rgb(const Sampled &p_s, int p_n, int p_m, bool p_gradient, double p_sea) {
     const int64_t points = int64_t(p_n) * p_n;
     double lo = INFINITY, hi = -INFINITY;
     for (int64_t i = 0; i < points; i++) {
-        lo = ov::min(lo, double(p_s.h[size_t(i)]));
-        hi = ov::max(hi, double(p_s.h[size_t(i)]));
+        lo = ov::min(lo, double(p_s.h[size_t(i)]) - p_sea);
+        hi = ov::max(hi, double(p_s.h[size_t(i)]) - p_sea);
     }
     ov::bytes img;
     img.resize(points * 3);
@@ -303,8 +304,8 @@ ov::bytes shaded_rgb(const Sampled &p_s, int p_n, int p_m, bool p_gradient) {
         return STOPS[k][p_c] + (STOPS[k + 1][p_c] - STOPS[k][p_c]) * (t - k);
     };
     for (int64_t i = 0; i < points; i++) {
-        // Land: its height between 0 (the base, the sea level) and the slice's top; below the base, sea blues.
-        const double hv = double(p_s.h[size_t(i)]);
+        // Land: its height between the sea level and the slice's top; below it, sea blues.
+        const double hv = double(p_s.h[size_t(i)]) - p_sea;
         const double t = hv >= 0.0 ? hv / ov::max(hi, 1e-9) : -hv / ov::min(lo, -1e-9);
         const double light = relief_light(p_s, size_t(i), p_m, p_gradient);
         for (int c = 0; c < 3; c++) {
@@ -315,7 +316,7 @@ ov::bytes shaded_rgb(const Sampled &p_s, int p_n, int p_m, bool p_gradient) {
 }
 
 // The relief maps (shaded by the finite differences, and by the gradient channels) and how far the two disagree.
-ov::str shading_section(const Table &p_table, const Sampled &p_s, int p_n, int p_m, const ov::str &p_dir, ov::Value &r_images) {
+ov::str shading_section(const Table &p_table, const Sampled &p_s, int p_n, int p_m, double p_sea, const ov::str &p_dir, ov::Value &r_images) {
     const int64_t points = int64_t(p_n) * p_n;
     std::vector<double> err(size_t(p_s.nb), 0.0), norm(size_t(p_s.nb), 0.0);
     for (int64_t i = 0; i < points; i++) {
@@ -323,8 +324,8 @@ ov::str shading_section(const Table &p_table, const Sampled &p_s, int p_n, int p
         err[b] += std::fabs(double(p_s.gx[size_t(i)]) - double(p_s.fdx[size_t(i)])) + std::fabs(double(p_s.gz[size_t(i)]) - double(p_s.fdz[size_t(i)]));
         norm[b] += std::fabs(double(p_s.fdx[size_t(i)])) + std::fabs(double(p_s.fdz[size_t(i)]));
     }
-    r_images.push_back(save(p_dir, "ground_shaded.png", p_n, shaded_rgb(p_s, p_n, p_m, false)));
-    r_images.push_back(save(p_dir, "ground_normals.png", p_n, shaded_rgb(p_s, p_n, p_m, true)));
+    r_images.push_back(save(p_dir, "ground_shaded.png", p_n, shaded_rgb(p_s, p_n, p_m, false, p_sea)));
+    r_images.push_back(save(p_dir, "ground_normals.png", p_n, shaded_rgb(p_s, p_n, p_m, true, p_sea)));
     ov::str md = "Gradient channels vs the heights' finite differences (at the column's y, L1 relative error):\n\n| biome | gradient error |\n|---|---|\n";
     for (int b = 0; b < p_s.nb; b++) {
         md += ov::format("| %s | %s |\n", p_table.biomes[size_t(b)].name, norm[size_t(b)] > 0.0 ? ov::num(err[size_t(b)] / norm[size_t(b)], 3) : ov::str("-"));
@@ -490,7 +491,8 @@ ov::Value ClimateReport::run(const ov::str &p_out_dir, const ov::str &p_world_pa
     md += biome_section(table, s, n, p_out_dir, images) + ov::str("\n");
     md += border_section(table, s, n, spacing_m, ground.voxel_size, c) + ov::str("\n");
     md += relief_section(table, s, n, spacing_m, ground.voxel_size, p_out_dir, images) + ov::str("\n");
-    md += shading_section(table, s, n, m, p_out_dir, images) + ov::str("\n");
+    const double sea = world.sea.on ? world.sea.level_m / ground.voxel_size : 0.0; // LOD0 voxels, like the heights
+    md += shading_section(table, s, n, m, sea, p_out_dir, images) + ov::str("\n");
     md += field_section(table, s, n, m, p_out_dir, images);
     md += "\nImages (x right, z down): ";
     for (size_t i = 0; i < images.size(); i++) {

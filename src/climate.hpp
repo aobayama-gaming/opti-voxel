@@ -60,13 +60,16 @@ struct Shape {
 // phi(n), |n| smoothed as a note's shape reads it (Cascade::smooth_abs's value): what the biome mixer plots of a shape.
 double shape_phi(const Shape &p_shape, double p_n);
 
-// A field: its perlin3 bands (octave k on Λ_{k - BAND_SHIFT}, coarsest first, at most one per octave) and its terms on
-// earlier fields.
+// A field: its perlin3 bands (octave k on Λ_{k - BAND_SHIFT}, coarsest first, at most one per octave), its terms on
+// earlier fields, its mean (a constant added) and its poles (times the latitude term n_y^2 of a sphere's up: 0 at the
+// equator, 1 at the poles; the op table's POLE). The seed is the planet's mix of the format's (mix_seed).
 struct Field {
     ov::str name;
     uint32_t seed = 0;
     std::vector<Cascade::Band> bands;
     std::vector<Term> terms;
+    float mean = 0.0f;
+    float poles = 0.0f;
 };
 
 // Where a biome sits on one field: u = (x - centre) * inv_span, its kernel's coordinate (the format's [centre, span],
@@ -187,7 +190,22 @@ struct Ground {
     // The output's low bound above this (LOD0 voxels): minus a curved base's radius (the tube's on a torus), so the
     // ground never reaches the centre; -INFINITY on the flat datum.
     double floor = -INFINITY;
+    // The planet's seed (the world file's "seed"): every note's and field band's seed is mix_seed(its own, this); 0 the
+    // identity.
+    uint32_t seed = 0;
+    // The sea's level above the base (metres, the world file's sea.level_m): what a "sea" node reads; NAN: the world has
+    // no sea (a graph reading one is refused).
+    double sea_level_m = NAN;
+    // The level a field's POLE term is computed on at the finest (BaseSurface::pole_lod: where the sphere's radius form
+    // is exact); -1: the base has no poles (flat, torus), a field's "poles" is refused.
+    int pole_level = -1;
 };
+
+// A seed mixed with the planet's (Ground::seed): p_seed itself for planet 0 (every world without a seed keeps its
+// bits), else a hash of both (ExactNoise::hash3), so one note stays one note across biomes and a planet another.
+uint32_t mix_seed(uint32_t p_seed, uint32_t p_planet);
+// Salt of mix_seed's hash.
+inline constexpr uint32_t PLANET_SEED_SALT = 0x5EEDu;
 
 // A note node as the format reads it: one octave k, its seed, its amplitude (metres) and its stretch along the base's up.
 struct NoteNode {

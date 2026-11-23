@@ -51,6 +51,10 @@ public:
     double planet_radius_m = 0.0;
     // > 0 with a planet: a torus instead, a ring of this radius (metres) round y, its tube planet_radius_m.
     double planet_ring_m = 0.0;
+    // Set before configure(): the planet's seed (Climate::Ground::seed: every note and field band mixed with it; 0 the
+    // identity) and its sea level (metres above the base; NAN: no sea, a "sea" node refused).
+    uint32_t planet_seed = 0;
+    double sea_level_m = NAN;
 
     // A note's or a field's coarsest octave at p_lod_count LODs (the cascade's top lattice's).
     static int top_octave(int p_lod_count) { return p_lod_count + 4; }
@@ -133,11 +137,14 @@ public:
     // species, or edit (SDFTable::set_edits). Then there is no program, no table and no skirts: nothing may sample it
     // (World::start, ClimateReport, CascadeCheck refuse it).
     const ov::str &get_world_error() const { return world_error; }
-    // Configured on p_world's planet, climate, species, instances (streamed), features and their region, band rule, edits,
-    // voxel size and LOD count (r_param.voxel_size set): get_world_error.
-    const ov::str &configure_world(const WorldFile &p_world, ChunkParam &r_param) {
+    // p_world's shape, seed, sea, climate, species, instances (streamed), features and their region, band rule and edits,
+    // for the next configure() (World::start sets these, then its own overrides: the start's edits, the stream sources).
+    void set_world(const WorldFile &p_world) {
         planet_radius_m = p_world.planet_radius_m;
         planet_ring_m = p_world.planet_ring_m;
+        planet_seed = p_world.seed;
+        sea_level_m = p_world.sea.on ? p_world.sea.level_m : NAN;
+        set_site_floor_m(p_world.sea.on ? p_world.sea.level_m + p_world.sea.shore_above_m : -INFINITY);
         climate_data = p_world.climate_table;
         set_species(p_world.species);
         set_instances(p_world.instances);
@@ -145,6 +152,10 @@ public:
         set_feature_region(p_world.feature_region);
         set_instance_band(p_world.instance_band);
         set_edits(p_world.edits);
+    }
+    // Configured on p_world (set_world), its voxel size and LOD count (r_param.voxel_size set): get_world_error.
+    const ov::str &configure_world(const WorldFile &p_world, ChunkParam &r_param) {
+        set_world(p_world);
         r_param.voxel_size = float(p_world.voxel_m);
         configure(r_param, p_world.lods);
         return world_error;
@@ -193,12 +204,15 @@ uint cascade_ground_material(float pick) {
         }
     }
     // What a climate table is compiled for (Terrain::compile), after configure(): the voxel, the LOD count's octaves, the
-    // base's limits (a curved base's centre under the ground).
+    // base's limits (a curved base's centre under the ground) and poles, the planet's seed and sea level.
     Climate::Ground climate_ground() const {
         Climate::Ground g;
         g.voxel_size = double(voxel_size);
         g.k_max = k_max;
         g.floor = base.curved() ? -base.get_radius() : -INFINITY;
+        g.seed = planet_seed;
+        g.sea_level_m = sea_level_m;
+        g.pole_level = base.pole_lod();
         return g;
     }
     float skirt_depth_m(int p_lod) const override { return skirt_depth_table[p_lod]; }
@@ -373,7 +387,7 @@ uint cascade_ground_material(float pick) {
         const ov::str regions = base.curved() ? BaseRegions::glsl(base) : ov::str();
         // A stretched note reads base_stretched (flat base only: attach_climate refuses one on a curved base).
         const ov::str stretch = base.curved() ? ov::str(STRETCH_STUBS) : base.glsl_stretch();
-        ov::str code = base.glsl() + stretch + regions + CascadeTerrain::GLSL_HEIGHT_SDF + R"glsl(
+        ov::str code = base.glsl() + base.glsl_pole() + stretch + regions + CascadeTerrain::GLSL_HEIGHT_SDF + R"glsl(
 // CascadeTerrain::height_sdf over the base (SDFCascade::unit). c0 = (value, d/dx, d/dy, d/dz) on Λ_lod at p.
 vec4 cascade_terrain_unit(vec4 c0, WorldPos p, int lod) {
     return height_sdf(c0, base_at(p, lod), lod);

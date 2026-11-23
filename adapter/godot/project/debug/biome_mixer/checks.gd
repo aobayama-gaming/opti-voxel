@@ -86,7 +86,7 @@ static func whole(p_world: Dictionary, p_km: float = 200.0) -> Dictionary:
 
 # p_world with one biome more, the last (the default): a graph of every kind of node the engine has, wired as it reads
 # them (notes, one warped by a coarser one, one by a warp's x, y, z ports, shapes, a multifractal of a shaped parent, a
-# mix, then every other op, a curve, the output).
+# mix, then every other op, the sea's level (a sea added to the world), a curve, the output).
 static func every_kind(p_world: Dictionary) -> Dictionary:
 	var w: Dictionary = p_world.duplicate(true)
 	var g := {"nodes": []}
@@ -106,9 +106,12 @@ static func every_kind(p_world: Dictionary) -> Dictionary:
 	var fd: String = add.call("field", {})
 	# A cave's form: smin of the ground and up minus a depth.
 	var cave: String = add.call("subtract", {"a": add.call("up", {}), "b": c})
+	# An ocean floor's: the sea's level (the world then has a sea).
+	var sea: String = add.call("sea", {})
+	w.sea = {"level_m": 0.0}
 	var last := mix
 	for op in ["add", "subtract", "multiply", "min", "max", "smin", "smax"]:
-		var b := fd if op == "multiply" else cave if op == "smin" else c
+		var b := fd if op == "multiply" else cave if op == "smin" else sea if op == "max" else c
 		last = add.call(op, {"a": last, "b": b, "k_m": 5.0} if op.begins_with("s") and op != "subtract" else {"a": last, "b": b})
 	var cv: String = add.call("curve", {"in": last, "points": Kinds.identity_curve(500.0)})
 	add.call("output", {"height": cv})
@@ -199,7 +202,7 @@ static func planet() -> Dictionary:
 	deep.biomes[0].graph = {"nodes": [{"id": "c", "kind": "constant", "value_m": -2500.0}, {"id": "out", "kind": "output", "height": "c"}]}
 	r.refusal = World.check(deep)
 	var flat: Dictionary = deep.duplicate(true)
-	flat.erase("planet")
+	flat.shape = {"kind": "flat"}
 	r.flat = World.check(flat)
 	r.ok = r.world.ok and r.field_edit and r.refusal.contains("past the planet's centre") and r.flat == ""
 	return r

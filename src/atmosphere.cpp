@@ -420,18 +420,19 @@ double Atmosphere::horizon_m(double p_altitude_m, double p_radius_m) {
     return std::sqrt(a * (2.0 * p_radius_m + a));
 }
 
-AtmosphereMedium AtmosphereMedium::for_base(double p_radius_m, double p_relief_m, double p_scale) {
+AtmosphereMedium AtmosphereMedium::for_base(double p_radius_m, double p_relief_m, double p_scale, double p_density, const Float3 &p_tint) {
     const double tops = RELIEF_TOPS * p_relief_m / double(AtmosphereMedium().top_m);
     const double s = p_scale > 0.0 ? p_scale : ov::min(1.0, ov::max(p_radius_m / EARTH_RADIUS_M, tops));
     AtmosphereMedium m;
     const float h = float(s);
     const float k = float(1.0 / s);
-    m.rayleigh = Float3{ m.rayleigh.x * k, m.rayleigh.y * k, m.rayleigh.z * k };
+    const float d = float(p_density); // 1: x * 1 is x, Earth's bits
+    m.rayleigh = Float3{ m.rayleigh.x * k * d * p_tint.x, m.rayleigh.y * k * d * p_tint.y, m.rayleigh.z * k * d * p_tint.z };
     m.rayleigh_height_m *= h;
-    m.mie *= k;
-    m.mie_absorption *= k;
+    m.mie = m.mie * k * d;
+    m.mie_absorption = m.mie_absorption * k * d;
     m.mie_height_m *= h;
-    m.ozone = Float3{ m.ozone.x * k, m.ozone.y * k, m.ozone.z * k };
+    m.ozone = Float3{ m.ozone.x * k * d, m.ozone.y * k * d, m.ozone.z * k * d };
     m.ozone_centre_m *= h;
     m.ozone_width_m *= h;
     m.top_m *= h;
@@ -488,11 +489,12 @@ double Atmosphere::ms_radius_m(const BaseSurface &p_base, double p_voxel_m) {
     return std::isfinite(radius) ? radius : AtmosphereMedium::EARTH_RADIUS_M;
 }
 
-void Atmosphere::start(ov::gpu::Device *p_device, const BaseSurface &p_base, double p_voxel_m, double p_relief_m, double p_scale, TexturesFn p_textures) {
+void Atmosphere::start(ov::gpu::Device *p_device, const BaseSurface &p_base, double p_voxel_m, double p_relief_m, double p_scale, TexturesFn p_textures, double p_density,
+        const Float3 &p_tint) {
     device = p_device;
     textures_fn = std::move(p_textures);
     curvature_m = ms_radius_m(p_base, p_voxel_m);
-    constants.medium = AtmosphereMedium::for_base(p_base.curvature_radius_m(p_voxel_m), p_relief_m, p_scale);
+    constants.medium = AtmosphereMedium::for_base(p_base.curvature_radius_m(p_voxel_m), p_relief_m, p_scale, p_density, p_tint);
     // Constant for a world: no camera term.
     constants.max_path_m = make_frame(constants.medium, curvature_m, Float3(), Float3(), BaseSurface::Render()).max_path_m;
     multiscatter_dirty = true;

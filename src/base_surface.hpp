@@ -127,6 +127,21 @@ public:
     static ExactNoise::Float4 curvature_form(const VoxelPos &p_voxel, int p_lod, const Region &p_region);
     ExactNoise::Float4 radius_form(const VoxelPos &p_voxel, int p_lod) const;
 
+    // The latitude of a SPHERE (the climate's "poles", the op table's POLE): t = n_y^2 of its up n = v / |v| (+y the
+    // pole), 0 at the equator, 1 at the poles, from the radius form's v at LOD p_lod (RADIUS_LIMIT, det_rsqrt), with its
+    // gradient 2 n_y (e_y - n_y n) / |v| per lattice spacing of Λ_p_m (times 2^(p_m - p_lod), exact): a pure function of
+    // the voxel and p_lod, no region. Multiplies and adds only; t capped at 1 (rounding). 0 on another base (FLAT: no
+    // poles; TORUS: TODO, its latitude is the tube's angle, whose gradient needs its own formula; the world file refuses
+    // poles on both). GLSL: glsl_pole's base_pole.
+    ExactNoise::Float4 pole_form(const VoxelPos &p_voxel, int p_lod, int p_m) const;
+    // The finest LOD whose radius form is unsaturated within the planet's diameter from its centre (every axis of
+    // (p - centre) >> L within RADIUS_LIMIT): where POLE is computed at the finest. -1 on a base without poles (FLAT,
+    // TORUS: pole_form).
+    int pole_lod() const;
+    // `vec4 base_pole(WorldPos p, int lod, int m)`: pole_form op for op (a zero on a base without poles). After the int64
+    // helpers and GLSL_EXACT_NOISE (det_rsqrt); apart from glsl(), whose text a probe set splices for several bases.
+    ov::str glsl_pole() const;
+
     // A stretched octave (the climate's "stretch_y", Band::stretch) reads its noise at p' = p - (1 - 2^-j) d_base(p) n(p):
     // its wavelength along the base's up 2^j times the tangential ones, whatever the base. FLAT: datum + (y - datum) / 2^j,
     // exact (the floor to the voxel, the remainder plus the fraction times 2^-j to the fraction, carried at 1). SPHERE: the

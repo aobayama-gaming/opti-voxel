@@ -538,8 +538,8 @@ CellScatter SDFTable::scene_source(uint32_t p_salt, int64_t p_side) const {
         ground_field_batch(p_voxels, p_lods, p_count, r_out);
     };
     s.up = [this](const VoxelPos &p_v) { return up_at(p_v); };
-    if (!lava_pools.empty()) {
-        s.accept = [this](const VoxelPos &p_v) { return !in_lake(p_v); };
+    if (!lava_pools.empty() || site_floor_m > -INFINITY) {
+        s.accept = [this](const VoxelPos &p_v) { return site_allowed(p_v); };
     }
     return s;
 }
@@ -927,6 +927,12 @@ ScatterSource::Setup SDFTable::source_setup(const Source &p_source, uint32_t p_i
 
 bool SDFTable::in_lake(const VoxelPos &p_voxel) const {
     return std::any_of(lava_pools.begin(), lava_pools.end(), [&](const Biome::LavaPool &p_pool) { return p_pool.near(p_voxel); });
+}
+
+bool SDFTable::site_allowed(const VoxelPos &p_base) const {
+    // The altitude in double from the int64 voxel: the same answer from any walk and any thread.
+    const bool under_sea = site_floor_m > -INFINITY && get_base().altitude(p_base) * double(param.voxel_size) < site_floor_m;
+    return !under_sea && !in_lake(p_base);
 }
 
 bool SDFTable::admit_records(std::vector<TableRecord> &r_records, const char *p_what) {

@@ -706,3 +706,85 @@ TEST_CASE("Terrain: the pruned program gives the unpruned bits, and prunes") {
     MESSAGE("runs with a biome off their whole box: ", pruned_runs);
     CHECK(pruned_runs > 0);
 }
+
+// BaseSurface::pole_form (the op POLE): n_y^2 of a sphere's up, 0 on its equator and 1 at its poles, its gradient the
+// analytic one (central differences in double), per spacing of the asked lattice.
+TEST_CASE("BaseSurface: a sphere's latitude is n_y^2, its gradient the analytic one") {
+    const BaseSurface sphere = BaseSurface::planet(2000.0, 0.05); // 40000 voxels
+    const int64_t r = 40000;
+    CHECK(sphere.pole_lod() == 0); // 80000 voxels across, under RADIUS_LIMIT
+    CHECK(BaseSurface::planet(6371000.0, 0.05).pole_lod() == 4); // 2.5e8 voxels across: 16 per step
+    CHECK(BaseSurface::flat(0).pole_lod() == -1);
+    CHECK(BaseSurface::planet(2000.0, 0.05, 9000.0).pole_lod() == -1); // a torus: TODO
+    CHECK(sphere.pole_form(VoxelPos(r, 0, 0), 0, 0).w == 0.0f);
+    CHECK(sphere.pole_form(VoxelPos(0, 0, -r), 3, 3).w == 0.0f);
+    CHECK(double(sphere.pole_form(VoxelPos(0, r, 0), 0, 0).w) == doctest::Approx(1.0).epsilon(1e-6));
+    CHECK(double(sphere.pole_form(VoxelPos(0, -r, 0), 0, 0).w) == doctest::Approx(1.0).epsilon(1e-6));
+    CHECK(sphere.pole_form(VoxelPos(0, r, 0), 0, 0).w <= 1.0f);
+    for (const VoxelPos &p : { VoxelPos(20000, 25000, 9000), VoxelPos(-31000, 12000, -21000), VoxelPos(4000, -38000, 7000) }) {
+        for (const int lod : { 0, 3 }) {
+            const Float4 g = sphere.pole_form(p, lod, lod);
+            const int64_t h = 64;
+            const VoxelPos axes[3] = { VoxelPos(h, 0, 0), VoxelPos(0, h, 0), VoxelPos(0, 0, h) };
+            const float grad[3] = { g.x, g.y, g.z };
+            for (int a = 0; a < 3; a++) {
+                CAPTURE(a);
+                const double d = (double(sphere.pole_form(p + axes[a], lod, lod).w) - double(sphere.pole_form(p - axes[a], lod, lod).w)) / double(2 * h);
+                CHECK(double(grad[a]) == doctest::Approx(d * std::ldexp(1.0, lod)).epsilon(2e-3)); // per spacing of Λ_lod
+            }
+        }
+    }
+}
+
+namespace {
+
+// One field t of p_band (a band entry, or none) and "poles": 1, one biome: compiled for a sphere's ground whose POLE is
+// exact from LOD p_pole_level, run over that sphere.
+ov::str compile_poles(const ov::str &p_band, int p_pole_level, LevelProgram &r_prog) {
+    Climate::Ground g = ground();
+    g.pole_level = p_pole_level;
+    Climate::Table table;
+    const ov::str err = compile(json(R"({"fields": [{"name": "t", "bands": [)" + p_band + R"(], "poles": 1}], "biomes": [{"name": "b"}]})"), g, Mode::SPECIALISED, table, r_prog);
+    r_prog.base = BaseSurface::planet(2000.0, g.voxel_size);
+    return err;
+}
+
+} // namespace
+
+// POLE's level: the field's, or coarser where the base's radius form is exact (Ground::pole_level), never NO_LEVEL;
+// there it reads the base on its own level, so a point of that level gets the same bits from every LOD (its gradient
+// rescaled exactly), and a base without poles refuses it.
+TEST_CASE("Terrain: POLE sits on a fixed level and gives a point the same bits from every LOD") {
+    LevelProgram prog;
+    Climate::Table table;
+    CHECK(ov::contains(compile(json(R"({"fields": [{"name": "t", "poles": 1}], "biomes": [{"name": "b"}]})"), ground(), Mode::SPECIALISED, table, prog), "'poles' needs"));
+    CHECK_OR_RETURN(compile_poles(R"({"wavelength_m": 51.2, "amp": 1})", 3, prog) == ov::str()); // the band on level 7
+    int pole = -1;
+    for (size_t i = 0; i < prog.nodes.size(); i++) {
+        pole = prog.nodes[i].op == Op::POLE ? int(i) : pole;
+    }
+    CLIMATE_REQUIRE(pole >= 0);
+    CHECK(prog.nodes[size_t(pole)].level == 7);
+    CHECK_OR_RETURN(compile_poles("", 3, prog) == ov::str()); // no band: the base's level
+    const int field = prog.fields[0];
+    CLIMATE_REQUIRE(prog.nodes[size_t(field)].op == Op::POLE);
+    CHECK(prog.nodes[size_t(field)].level == 3);
+    CHECK(prog.top == 3);
+    const BaseSurface &base = prog.base;
+    for (const VoxelPos &v : { VoxelPos(0, 40000, 0), VoxelPos(20032, 25024, 8960), VoxelPos(-30976, 12032, -21056), VoxelPos(39936, 0, 64) }) {
+        CAPTURE(v.x);
+        Float4 at3;
+        point_nodes(prog, Vector3i64(v.x >> 3, v.y >> 3, v.z >> 3), 3, &field, 1, &at3);
+        CHECK(ExactNoise::same_bits(at3, Cascade::dflush(base.pole_form(v, 3, 3))));
+        for (int lod = 0; lod <= 6; lod++) {
+            CAPTURE(lod);
+            Float4 x;
+            point_nodes(prog, Vector3i64(v.x >> lod, v.y >> lod, v.z >> lod), lod, &field, 1, &x);
+            const float s = ExactNoise::exact_pow2(lod - 3);
+            CHECK(float_bits(x.w) == float_bits(at3.w));
+            CHECK(float_bits(x.x) == float_bits(Cascade::flush_value(at3.x * s)));
+            CHECK(float_bits(x.y) == float_bits(Cascade::flush_value(at3.y * s)));
+            CHECK(float_bits(x.z) == float_bits(Cascade::flush_value(at3.z * s)));
+        }
+    }
+}

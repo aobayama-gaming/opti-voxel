@@ -148,17 +148,12 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
     }
     world_origin_chunk = chunk_param.origin_chunk;
 
-    sdf->set_feature_region(content.feature_region);
-    sdf->set_instances(content.instances);
-    sdf->set_species(content.species);
+    sdf->set_world(content); // the climate parsed and checked by configure() (get_world_error)
     sdf->set_stream_sources(config.archetype_stream);
-    sdf->set_features(content.features);
-    sdf->planet_radius_m = content.planet_radius_m;
-    sdf->planet_ring_m = content.planet_ring_m;
-    sdf->climate_data = content.climate_table; // parsed and checked by configure() (get_world_error)
     sdf->specialize = config.specialize_shaders;
-    sdf->set_instance_band(content.instance_band);
-    sdf->set_edits(has_start_edits ? start_edits : content.edits); // replayed by configure() (an edit refused: get_world_error)
+    if (has_start_edits) {
+        sdf->set_edits(start_edits); // replayed by configure() (an edit refused: get_world_error)
+    }
     const float min_skirt = sdf->min_skirt_depth(chunk_param, lod_numbers);
     if (chunk_param.skirt_depth < min_skirt) {
         VLOG(1, "World: skirt_depth raised from ", chunk_param.skirt_depth, " to ", min_skirt, " voxels (the terrain's band steps)");
@@ -213,7 +208,7 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
     if (content.atmosphere && hosts.atmosphere_textures) {
         atmosphere = new Atmosphere();
         atmosphere->start(hosts.device, sdf->get_base(), double(chunk_param.voxel_size), sdf->ground_top_m(), content.atmosphere_scale,
-                hosts.atmosphere_textures);
+                hosts.atmosphere_textures, content.atmosphere_density, content.atmosphere_tint);
         if (content.clouds && hosts.cloud_textures) {
             clouds = new Clouds();
             const Climate::Table *climate = sdf->get_climate();

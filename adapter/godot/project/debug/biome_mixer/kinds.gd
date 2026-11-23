@@ -37,6 +37,7 @@ const KINDS := {
 		"ranges": {"x": [0.0, 4.0, 0.01]},
 	},
 	"up": {"title": "Up", "hint": "The sample's height above the base, in metres: a cave is a smooth min of the mix and up minus the cave's notes.", "ranges": {}},
+	"sea": {"title": "Sea level", "hint": "The world's sea level, in metres above the base (its \"sea\" level_m; refused in a world without a sea): an ocean floor is the sea minus a depth plus notes.", "ranges": {}},
 	"constant": {"title": "Constant", "hint": "A height in metres.", "ranges": {"value_m": [-2000.0, 2000.0, 0.1]}},
 	"field": {"title": "Field", "hint": "A climate field's value at the sample (temperature, humidity, ...).", "ranges": {}},
 	"add": {"title": "Add", "hint": "a + b.", "ranges": {}},

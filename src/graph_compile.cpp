@@ -40,8 +40,9 @@ public:
     bool is_constant(int p_id, float p_v) const { return node(p_id).op == Op::CONST && node(p_id).k[0] == p_v; }
 
     int add(Node p_n) {
-        p_n.level = p_n.op == Op::NOTE ? p_n.band.k - ExactNoise::BAND_SHIFT : NO_LEVEL;
-        bool constant = p_n.op != Op::NOTE && p_n.op != Op::CONST && p_n.op != Op::UP && p_n.op != Op::PICK && !p_n.in.empty();
+        // A POLE comes with its level (field_nodes): fixed, the same bits at every LOD.
+        p_n.level = p_n.op == Op::NOTE ? p_n.band.k - ExactNoise::BAND_SHIFT : (p_n.op == Op::POLE ? p_n.level : NO_LEVEL);
+        bool constant = p_n.op != Op::NOTE && p_n.op != Op::CONST && p_n.op != Op::UP && p_n.op != Op::PICK && p_n.op != Op::POLE && !p_n.in.empty();
         std::vector<Float4> in;
         for (const int i : p_n.in) {
             p_n.level = p_n.op == Op::NOTE ? p_n.level : ov::min(p_n.level, node(i).level);
@@ -56,7 +57,8 @@ public:
         if (constant) {
             return this->constant(eval_node(prog, p_n, in.data(), OpPoint()).w);
         }
-        std::vector<int64_t> key = { int64_t(p_n.op), p_n.curve, p_n.band.k, p_n.band.seed, p_n.band.offset.x, p_n.band.offset.y, p_n.band.offset.z, p_n.band.stretch };
+        std::vector<int64_t> key = { int64_t(p_n.op), p_n.curve, p_n.band.k, p_n.band.seed, p_n.band.offset.x, p_n.band.offset.y, p_n.band.offset.z, p_n.band.stretch,
+            p_n.op == Op::POLE ? p_n.level : 0 };
         key.insert(key.end(), p_n.in.begin(), p_n.in.end());
         key.push_back(-1);
         for (const float k : p_n.k) {
@@ -243,7 +245,8 @@ private:
         if (!take(Climate::parse_note(p_n, ground, at(p_n), nn)) || !note_plays(nn, ground)) {
             return;
         }
-        Cascade::Band band = ExactNoise::make_octave(nn.seed + p_seed, uint32_t(nn.k), nn.k, 1.0f);
+        // The note's seed mixed with the planet's, then + 0, 1, 2 for a warp's three reads.
+        Cascade::Band band = ExactNoise::make_octave(Climate::mix_seed(nn.seed, ground.seed) + p_seed, uint32_t(nn.k), nn.k, 1.0f);
         band.stretch = nn.stretch; // within its octave's (the parser: k - BAND_SHIFT at most)
         std::vector<int> disp;
         if (p_n.has("warp")) {
@@ -415,6 +418,13 @@ private:
         if (kind == "up") {
             return g.op(Op::UP, {});
         }
+        if (kind == "sea") {
+            if (std::isnan(ground.sea_level_m)) {
+                fail(at(p_n), "the world has no sea (its \"sea\": { \"level_m\" } is what this node reads).");
+                return -1;
+            }
+            return g.constant(float(ground.sea_level_m / ground.voxel_size));
+        }
         if (kind == "field") {
             const int f = table.field_index(p_n["field"].as_str());
             if (f < 0) {
@@ -431,8 +441,11 @@ private:
     }
 };
 
-// Each field's node: the LIN of its bands (unit notes times their amplitudes) and its terms on earlier fields.
-std::vector<int> field_nodes(Graph &r_g, const Climate::Table &p_table) {
+// Each field's node: the LIN of its bands (unit notes times their amplitudes), its terms on earlier fields, its mean and
+// its poles times POLE. The mean and the poles only when not 0: the generic text keeps a zero term (its program would
+// change). POLE's level: the field's (its finest band or term), or coarser where the base's radius form is exact there
+// (Ground::pole_level), never NO_LEVEL (each LOD would compute it on its own lattice).
+std::vector<int> field_nodes(Graph &r_g, const Climate::Table &p_table, const Ground &p_ground) {
     std::vector<int> fields;
     for (const Climate::Field &f : p_table.fields) {
         std::vector<Term> terms;
@@ -441,6 +454,19 @@ std::vector<int> field_nodes(Graph &r_g, const Climate::Table &p_table) {
         }
         for (const Climate::Term &t : f.terms) {
             terms.emplace_back(fields[size_t(t.source)], t.coef);
+        }
+        if (f.mean != 0.0f) {
+            terms.emplace_back(r_g.constant(f.mean), 1.0f);
+        }
+        if (f.poles != 0.0f) {
+            int level = NO_LEVEL;
+            for (const Term &t : terms) {
+                level = ov::min(level, r_g.node(t.first).level);
+            }
+            Node pole;
+            pole.op = Op::POLE;
+            pole.level = level == NO_LEVEL ? p_ground.pole_level : ov::max(level, p_ground.pole_level);
+            terms.emplace_back(r_g.add(pole), f.poles);
         }
         fields.push_back(r_g.lin(terms));
     }
@@ -675,7 +701,7 @@ ov::str compile(const ov::Value &p_data, const Climate::Ground &p_ground, Mode p
     }
     Graph g;
     g.specialise = p_mode == Mode::SPECIALISED;
-    const std::vector<int> fields = field_nodes(g, r_table);
+    const std::vector<int> fields = field_nodes(g, r_table, p_ground);
     std::vector<int> out;
     for (size_t b = 0; b < r_table.biomes.size(); b++) {
         Reader reader(g, p_ground, r_table, fields, graphs[b], "biome '" + r_table.biomes[b].name + ov::str("' graph"));

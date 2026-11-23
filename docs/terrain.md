@@ -5,9 +5,15 @@ One terrain (the cascade), one instance path (its table), one world file. Read b
 - **A run loads a world.** Every terrain setting is data: `World::Settings::world_path` (`VoxelTerrain.world_path`, `--world=PATH`
   on bench, player, Dawn and the tools; the web's `?world=`) names a world file (`WorldFile`, format in `src/world_file.hpp`). Its
   `engine` (a path or inline: `voxel_m`, `lods`, the master variables) and `climate` (a path or inline: the fields, none for no
-  fields) sit beside `planet`, `look`, `instances` (they grow over the whole ground, streamed), `species` (a path or the list),
+  fields; a planet file adds per-field offsets beside them, `"temperature": {"mean", "poles"}`) sit beside `seed` (a
+  whole number mixed into every note and field seed, 0 the identity: `docs/climate.md`), `shape` (`{"kind": "flat" |
+  "sphere" | "torus", "radius_m", "ring_m"}`; the old `planet` key is refused with its rename), `sea` (`{"level_m",
+  "water": {deep, shallow, clarity_m}, "shore": {below_m, above_m, sand}}`: the `sea` node's level, no trees or rocks
+  under it plus `above_m`, `docs/trees.md`), `atmosphere` (`{density, tint}`, `docs/look.md`), `look`, `instances` (they grow over the whole ground, streamed), `species` (a path or the list),
   `features` and `feature_region` (the square they stand in until they stream: `SDFTable::set_feature_region`; a world
-  whose lists name features needs one), `biomes` (a path or the list), `instance_band` (false: every instance whole at every LOD) and `edits` (a path or inline: the edits file
+  whose lists name features needs one), `biomes` (a path or the list; a list's entries are biome objects or paths to
+  single-biome files, `biomes/*.biome.json`, read relative to the file naming them; the one default biome, without
+  `at`, may stand anywhere and is moved last, two are refused; `worlds/ocean_test.planet.json` is the fixture), `instance_band` (false: every instance whole at every LOD) and `edits` (a path or inline: the edits file
   below); every key is optional to the file (the cascade refuses no `biomes`), and an empty `world_path` is `WorldFile::DEFAULT_PATH`
   (`worlds/default.world.json`). A variant is another file: `adapter/godot/project/worlds/` holds the presets' and the
   tools' (`default`, `cm`, `lods25`, `biomes`, `forest5cm`, `earth`, `earth25`, `tiny`, `tiny_biomes`, `shapes`), `climate/world.json`
@@ -82,7 +88,7 @@ One terrain (the cascade), one instance path (its table), one world file. Read b
   the LOD, read by `CascadeTerrain::height_sdf` (t = n - grad h, distance (altitude - h) / |t|, GLSL
   `GLSL_HEIGHT_SDF`). `FLAT` (the world today) is the saturated int64 datum difference with up (-0, 1, -0), so
   the default terrain keeps its bits (pinned in `test_sdf_cascade.cpp`): the only code that knows about y.
-  `SPHERE` (the world file's `planet.radius_m`: centred on the voxel
+  `SPHERE` (the world file's `shape` `{"kind": "sphere", "radius_m"}`: centred on the voxel
   (0, 0, 0), its +y pole at y = R, standing for the flat datum in the default world origin request ((0, 0, 0); any other
   is absolute) and in the hosts' scenes (`World::scene_shift`); `BaseSurface::planet` takes the switch LOD
   `BaseSurface::SWITCH_MARGIN` (2) over the radius form's float bound: 12 at Earth / 5 cm, 16 for Jupiter, 1 for a 2 km planet, 0
@@ -111,7 +117,7 @@ One terrain (the cascade), one instance path (its table), one world file. Read b
   `base_altitude`, `base_up`, `base_level_span`, from `BaseSurface::render`'s uniforms in double, `World::base_render`):
   the pages' heights and slopes, the sky's frame, the cloud layer and the atmosphere (`docs/look.md`). A new base kind
   adds its case to those three functions, to `render` and to `curvature_radius_m`, and every render user follows it.
-  `TORUS` (`planet.ring_m` with `planet.radius_m` R: a ring of that radius round the y
+  `TORUS` (`shape.ring_m` with `shape.radius_m` R: a ring of that radius round the y
   axis through the voxel (0, 0, 0), a tube of R, its start over the tube's top at +x) is such a kind: one `shape()` in
   double gives every curved base's altitude, gradient and analytic Hessian (the regions, `up_dir`, `altitude`), its
   radius form is |(|v.xz| - ring, v.y)| - tube with both lengths through `det_rsqrt`, the switch LOD from the outer
