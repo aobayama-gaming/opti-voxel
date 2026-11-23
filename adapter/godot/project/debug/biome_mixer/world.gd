@@ -39,6 +39,7 @@ static func read(p_path: String, p_file: String = "") -> Dictionary:
 	w.path = String(w.get("path", p_file if p_file != "" else p_path))
 	if not w.get("sources") is Dictionary:
 		w.sources = {}
+	_shape_from_planet(w)
 	var named := _read_biomes(w)
 	if named.is_empty():
 		return {}
@@ -67,6 +68,23 @@ static func read(p_path: String, p_file: String = "") -> Dictionary:
 	w.current = clampi(int(w.get("current", 0)), 0, n - 1)
 	w.mode = String(w.get("mode", "biome"))
 	return w
+
+
+# A world saved before "shape" (an autosave, a copy: "planet": {radius_m, ring_m}, which the engine now refuses) in
+# r_world's "shape": a torus with a ring, a sphere with a radius, else flat.
+static func _shape_from_planet(r_world: Dictionary) -> void:
+	if not r_world.get("planet") is Dictionary:
+		return
+	var p: Dictionary = r_world.planet
+	r_world.erase("planet")
+	var radius := float(p.get("radius_m", 0.0))
+	var ring := float(p.get("ring_m", 0.0))
+	if radius <= 0.0:
+		r_world.shape = {"kind": "flat"}
+	elif ring > 0.0:
+		r_world.shape = {"kind": "torus", "radius_m": radius, "ring_m": ring}
+	else:
+		r_world.shape = {"kind": "sphere", "radius_m": radius}
 
 
 # p_world's biomes as [biome, the name of the file it came from ("" inline)]: a list file's read (its name in
