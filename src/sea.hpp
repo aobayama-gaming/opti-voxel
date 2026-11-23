@@ -25,6 +25,11 @@ public:
     static constexpr int WAVES = 5;
     static constexpr float WAVE_LONGEST_M = 24.0f;
     static constexpr float WAVE_RATIO = 0.57f;
+    // The first heading (radians from the tangent t1) and the step between headings (the golden angle, 2.39996 rad),
+    // and the gravity of the deep-water dispersion (omega^2 = g k).
+    static constexpr float WAVE_HEADING0 = 0.7f;
+    static constexpr float WAVE_HEADING_STEP = 2.39996f;
+    static constexpr float WAVE_G = 9.81f;
     static constexpr float WAVE_SLOPE = 0.5f;
     static constexpr float WAVE_FADE_PX = 4.0f;
     // The glint's least GGX roughness (alpha), the water's reflectance at normal incidence.

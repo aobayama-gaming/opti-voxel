@@ -238,7 +238,7 @@ ground. The look is core (`src/sea.*`, `Sea`): its GLSL (`glsl_water`, `glsl_sho
   plane, the sky) and colour (`hint_screen_texture`) and replaces the colour where its ray meets water (`ALPHA` 1), so the
   transmittance is per channel. Its material takes every page uniform (`set_material_param`: the decode's origin and
   voxel, the base, the atmosphere and clouds, the sea), so the mixer's 3D view shows it too.
-  `VoxelTerrain.get_sea_depth_at(pos)` (`World::sea_height_at`: the base's altitude in double minus the level, NAN
+  `VoxelTerrain.get_sea_height_at(pos)` (`World::sea_height_at`: the base's altitude in double minus the level, NAN
   without a sea): the player's HUD says "under water".
 - **Limits:** Dawn draws no sea yet (flat only there, no depth binding, a display-encoded target); waves are in the
   normals only (no displacement: the silhouette against the sky stays a smooth level; near-field swell is the next

@@ -315,8 +315,11 @@ func _place_above_ground(p_height: float) -> void:
 			above = mid
 		else:
 			below = mid
-	camera.global_position = from + up * (above + p_height)
-	print("BENCH: camera at %s (%.1f m above the terrain)" % [camera.global_position, p_height])
+	# Over a sea, p_height above its surface: a bench pose is a view of the world, never one from under the water.
+	var sea := terrain.get_sea_height_at(from + up * above)
+	var under := -sea if not is_nan(sea) and sea < 0.0 else 0.0
+	camera.global_position = from + up * (above + under + p_height)
+	print("BENCH: camera at %s (%.1f m above the %s)" % [camera.global_position, p_height, "sea" if under > 0.0 else "terrain"])
 
 
 func _on_planet() -> bool:

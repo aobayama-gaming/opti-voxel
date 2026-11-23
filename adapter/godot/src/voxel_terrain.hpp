@@ -192,7 +192,7 @@ public:
     double get_sdf_at(const Vector3 &p_render_pos) const;
     // The height of a render-space position above the world's sea (metres, World::sea_height_at): negative under water,
     // NAN without a sea or before the world starts.
-    double get_sea_depth_at(const Vector3 &p_render_pos) const;
+    double get_sea_height_at(const Vector3 &p_render_pos) const;
     // The render-space point (u, v) metres along the base's reference tangent plane (BaseSurface::tangent_point; flat: x,
     // z from the world's (0, 0) column at the datum): the player's --spawn and the climate report's coordinates.
     Vector3 get_tangent_position(const Vector2 &p_tangent_m) const;

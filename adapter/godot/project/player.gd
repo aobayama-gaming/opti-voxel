@@ -382,7 +382,7 @@ last edit %d chunks, apply %.2f ms" % [
 		int(ms.get("remesh_queue", 0)), int(ms.get("remesh_pops", 0)), int(ms.get("remesh_stale_dropped", 0)),
 		int(edits.get("remesh_last", 0)), apply_ms]
 	# The camera against the world's sea (its height above the level, NAN without one).
-	var sea: float = terrain.get_sea_depth_at(camera.global_position)
+	var sea: float = terrain.get_sea_height_at(camera.global_position)
 	if not is_nan(sea):
 		hud.text += ("\nunder water, %.1f m deep" % -sea) if sea < 0.0 else ("\nsea level %.1f m below" % sea)
 

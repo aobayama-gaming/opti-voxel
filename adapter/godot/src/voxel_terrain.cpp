@@ -59,7 +59,7 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_load_radius"), &VoxelTerrain::get_load_radius);
     ClassDB::bind_method(D_METHOD("get_half_chunk_voxels"), &VoxelTerrain::get_half_chunk_voxels);
     ClassDB::bind_method(D_METHOD("get_sdf_at", "render_pos"), &VoxelTerrain::get_sdf_at);
-    ClassDB::bind_method(D_METHOD("get_sea_depth_at", "render_pos"), &VoxelTerrain::get_sea_depth_at);
+    ClassDB::bind_method(D_METHOD("get_sea_height_at", "render_pos"), &VoxelTerrain::get_sea_height_at);
     ClassDB::bind_method(D_METHOD("get_tangent_position", "tangent_m"), &VoxelTerrain::get_tangent_position);
     ClassDB::bind_method(D_METHOD("get_up_at", "render_pos"), &VoxelTerrain::get_up_at);
     ClassDB::bind_method(D_METHOD("get_scene_shift"), &VoxelTerrain::get_scene_shift);
@@ -561,7 +561,7 @@ double VoxelTerrain::get_sdf_at(const Vector3 &p_render_pos) const {
     return world->sdf_at(pos);
 }
 
-double VoxelTerrain::get_sea_depth_at(const Vector3 &p_render_pos) const {
+double VoxelTerrain::get_sea_height_at(const Vector3 &p_render_pos) const {
     const double pos[3] = { double(p_render_pos.x), double(p_render_pos.y), double(p_render_pos.z) };
     return world->sea_height_at(pos);
 }

@@ -19,7 +19,7 @@ void sea_shore(float h, inout vec3 albedo, inout float roughness) {
     float lo = max(sea_shore_below_m * $SHORE_EDGE, $EDGE_MIN_M);
     float hi = max(sea_shore_above_m * $SHORE_EDGE, $EDGE_MIN_M);
     float sand = smoothstep(-sea_shore_below_m - lo, -sea_shore_below_m, a) * (1.0 - smoothstep(sea_shore_above_m - hi, sea_shore_above_m, a));
-    float wet = 1.0 - smoothstep(0.0, $WET_M, a);
+    float wet = (1.0 - smoothstep(0.0, $WET_M, a)) * smoothstep(-$WET_M, 0.0, a);
     albedo = mix(albedo, sea_sand, sand) * mix(1.0, $WET_DARKEN, wet);
     roughness = mix(roughness, $WET_ROUGH, wet);
 }
@@ -27,8 +27,6 @@ void sea_shore(float h, inout vec3 albedo, inout float roughness) {
 
 // The water: its waves, light and the pass's colour (sea_shade).
 constexpr const char GLSL_WATER[] = R"glsl(
-const float SEA_PI = 3.14159265;
-
 // The water's extinction per metre and channel: a column of sea_clarity_m metres passes sea_shallow.
 vec3 sea_extinction() {
     return -log(clamp(sea_shallow, vec3(1e-3), vec3(1.0))) / sea_clarity_m;
@@ -53,10 +51,10 @@ vec3 sea_wave_normal(vec3 p, vec3 up, float footprint, float time, out float r_v
     float len = $LONGEST;
     float slope = $SLOPE / float($WAVES);
     for (int i = 0; i < $WAVES; i++) {
-        float heading = 0.7 + 2.39996 * float(i);
-        vec3 k = shade_wave((t1 * cos(heading) + t2 * sin(heading)) * (2.0 * SEA_PI / len), period_m);
+        float heading = $HEADING0 + $HEADING_STEP * float(i);
+        vec3 k = shade_wave((t1 * cos(heading) + t2 * sin(heading)) * (2.0 * ATMO_PI / len), period_m);
         float kl = length(k);
-        float phase = dot(k, s) - sqrt(9.81 * kl) * time;
+        float phase = dot(k, s) - sqrt($G * kl) * time;
         float keep = smoothstep(0.5 * $FADE, $FADE, len / max(footprint, 1e-6));
         n -= (k / kl) * (slope * keep * cos(phase)) + up * (0.5 * slope * keep * sin(phase));
         r_var += (1.0 - keep) * 0.5 * slope * slope;
@@ -75,7 +73,7 @@ float sea_ggx(vec3 n, vec3 v, vec3 l, float alpha) {
     float a2 = alpha * alpha;
     float d = nh * nh * (a2 - 1.0) + 1.0;
     float vis = 0.5 / (nl * sqrt(nv * nv * (1.0 - a2) + a2) + nv * sqrt(nl * nl * (1.0 - a2) + a2) + 1e-6);
-    return a2 / (SEA_PI * d * d) * vis * sea_fresnel(max(dot(v, h), 0.0)) * nl;
+    return a2 / (ATMO_PI * d * d) * vis * sea_fresnel(max(dot(v, h), 0.0)) * nl;
 }
 
 // The sky's light from dir seen from the camera: the atmosphere's radiance (no sun disk: the glint is the sun) with its
@@ -134,7 +132,7 @@ float sea_foam_noise(vec3 p, float time) {
 vec3 sea_under(vec3 camera, float dist, vec3 scene, vec3 ext, vec3 sun_dir, vec3 sun_light, vec3 sky_rgb) {
     vec3 up = base_up(camera);
     vec3 down = exp(-ext * max(sea_level_m - base_altitude(camera), 0.0));
-    vec3 light = (sea_sun_at(camera, sun_dir, sun_light) * max(dot(up, sun_dir), 0.0) / SEA_PI + sea_sky_light(camera, up, sun_dir, sun_light, sky_rgb)) * down;
+    vec3 light = (sea_sun_at(camera, sun_dir, sun_light) * max(dot(up, sun_dir), 0.0) / ATMO_PI + sea_sky_light(camera, up, sun_dir, sun_light, sky_rgb)) * down;
     vec3 tw = exp(-ext * dist);
     return scene * tw + sea_deep * (1.0 - tw) * light;
 }
@@ -154,7 +152,7 @@ vec3 sea_above(vec3 camera, vec3 dir, vec2 t, float scene_dist, vec3 scene, vec3
     vec3 r = reflect(dir, n);
     r = normalize(r - up * (2.0 * min(dot(r, up), 0.0))); // never below the horizon
     vec3 sun = sea_sun_at(p, sun_dir, sun_light);
-    vec3 lit = sun * max(dot(up, sun_dir), 0.0) / SEA_PI + sea_sky_light(camera, up, sun_dir, sun_light, sky_rgb);
+    vec3 lit = sun * max(dot(up, sun_dir), 0.0) / ATMO_PI + sea_sky_light(camera, up, sun_dir, sun_light, sky_rgb);
     float thick = min(scene_dist, t.y) - t.x;
     vec3 tw = exp(-ext * thick);
     float alpha = sqrt($RMIN * $RMIN + 2.0 * slope_var);
@@ -233,7 +231,7 @@ ov::str Sea::glsl_shore() {
 
 ov::str Sea::glsl_water() {
     return ov::replace_all(ov::str(GLSL_WATER),
-            { { "$WAVES", ov::itos(WAVES) }, { "$LONGEST", glsl_f(WAVE_LONGEST_M) }, { "$RATIO", glsl_f(WAVE_RATIO) },
+            { { "$WAVES", ov::itos(WAVES) }, { "$HEADING0", glsl_f(WAVE_HEADING0) }, { "$HEADING_STEP", glsl_f(WAVE_HEADING_STEP) }, { "$G", glsl_f(WAVE_G) }, { "$LONGEST", glsl_f(WAVE_LONGEST_M) }, { "$RATIO", glsl_f(WAVE_RATIO) },
                     { "$SLOPE", glsl_f(WAVE_SLOPE) }, { "$FADE", glsl_f(WAVE_FADE_PX) }, { "$RMIN", glsl_f(ROUGHNESS_MIN) },
                     { "$F0", glsl_f(F0) }, { "$FOAM_DEPTH", glsl_f(FOAM_M) }, { "$FOAM_SCALE", glsl_f(FOAM_SCALE_M) },
                     { "$FOAM_SPEED", glsl_f(FOAM_SPEED) }, { "$FOAM_ALBEDO", glsl_f(FOAM_ALBEDO) } });

@@ -126,7 +126,7 @@ TEST_CASE("BaseSurface: level_k at level 0 is the base's K") {
     CHECK(std::isnan(BaseSurface::torus(VoxelPos(), 120000.0, 40000.0, 1).level_k(origin, VS, 0.0)));
 }
 
-// The player's sea depth (VoxelTerrain.get_sea_depth_at): the height above the level, its sign under water, on both bases.
+// The sea height (VoxelTerrain.get_sea_height_at): the height above the level, its sign under water, on both bases.
 TEST_CASE("Sea: height_at is the base altitude minus the level, negative under water") {
     const BaseSurface flat = BaseSurface::flat(6000);
     WorldPos p;
