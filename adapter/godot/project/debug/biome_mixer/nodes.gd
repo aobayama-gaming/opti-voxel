@@ -96,6 +96,8 @@ static func build(p_node: Dictionary, p_ctx: Object) -> GraphNode:
 	elif p_node.kind == "output":
 		for key in ["flat", "steep"]:
 			gn.add_child(_surface_row(key, p_ctx))
+		for k in ClassDB.class_call_static("ClimateReportNode", "weather_keys"):
+			gn.add_child(_weather_row(k, p_ctx))
 	if not absent.is_empty():
 		var add := MenuButton.new()
 		add.text = "+ parameter"
@@ -228,6 +230,21 @@ static func _surface_row(p_key: String, p_ctx: Object) -> Control:
 	cp.custom_minimum_size = Vector2(70, 24)
 	cp.color_changed.connect(func(c: Color) -> void: p_ctx.set_surface(p_key, "#" + c.to_html(false)))
 	row.add_child(cp)
+	return row
+
+
+# How the biome pushes the weather, key p_key (the engine's: name, min, max, default; the biome's "weather", not the
+# graph's).
+static func _weather_row(p_key: Dictionary, p_ctx: Object) -> Control:
+	var row := HBoxContainer.new()
+	var label := _label("weather " + String(p_key.name))
+	label.tooltip_text = "The biome's push on the simulated weather (docs/weather.md \"Forcing\"), the engine's range"
+	row.add_child(label)
+	var value := float(p_ctx.model.get("weather", {}).get(p_key.name, p_key.default))
+	var r := [float(p_key.min), float(p_key.max), (float(p_key.max) - float(p_key.min)) / 100.0]
+	var slider := _slider(value, r, func(v: float) -> void: p_ctx.set_weather(String(p_key.name), v))
+	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(slider)
 	return row
 
 

@@ -7,7 +7,7 @@ the sea and rain). It never feeds the SDF: the terrain stays a function of the a
 
 Status: the grid (`src/weather_grid.*`), the simulation (`src/weather_sim.*`), its worker in `World`
 (`src/weather.*`) with a report (`tools/weather_report.sh`), and the clouds drawn from it (`docs/look.md` "Weather") are
-in. The mixer's weather editing is the next step (the plan at the end). Planets only: the weather is simulated over a sphere, never over a
+in, and the mixer edits a biome's weather and plays a world's as a time-lapse. Later steps at the end. Planets only: the weather is simulated over a sphere, never over a
 flat shape or a torus (decided with the user, 2026-11-24: the engine is for planets).
 
 ## Grid
@@ -103,15 +103,28 @@ equirectangular with the +y pole at the top, and `report.md`. The test biomes of
 weather block (the ocean moist, smooth and stormy; the land drier, warmer, rougher): clouds over the ocean, sheared into
 bands by the prevailing winds, one storm in ten minutes, a few percent of the planet raining.
 
+## Mixer
+The biome mixer (`debug/biome_mixer/`) edits a biome's weather and shows a world's.
+- **A biome's push:** its output node carries one slider per key of the `"weather"` block (`_weather_row` in
+  `nodes.gd`). The keys, ranges and defaults are the engine's (`Climate::WEATHER_KEYS`, which the parser reads too,
+  through `ClimateReportNode.weather_keys`); `set_weather` writes the biome's block.
+- **The time-lapse** (the toolbar's "Weather", `weather_lapse.gd`): the engine runs the mixer's world on the CPU on a
+  thread (`ClimateReportNode.weather_frames`, `WeatherReport::frames`: the report's maps as images, from the world's text)
+  and maps the whole planet each game minute for 20 minutes; a slider steps through them, the cover and rain or the
+  wind. On `ocean_test`, about 12 s of CPU (12,000 ticks at ~1 ms). A world without weather says why.
+- **Checked:** the mixer's headless check sets a weather key through the mixer and finds it in the file the engine
+  accepts; unit tests run `WeatherReport::frames` from a world's text (sizes, the minute's time, no weather refused)
+  and parse every key at its bounds and refuse it past them.
+
 ## Plan
 Agreed with the user (2026-11-24). Stacked PRs, `feature/weather-*`:
 1. **Grid** (#178): the cube sphere, its halo and sampling, the GLSL lookup.
 2. **Simulation** (#179): `WeatherSim`, a biome's `"weather"` block and the planet file's.
 3. **Worker** (#180): `Weather` in `World`, its queries and stats, the report.
-4. **Clouds:** the clouds read cover and type from the weather texture (two states blended), their noises drift with
+4. **Clouds** (#181): the clouds read cover and type from the weather texture (two states blended), their noises drift with
    the wind at the camera, the leaves' sway reads it too; `CloudClimate`, a biome's `"clouds"` block, the flat 2D cloud
    layer and the clouds over a flat shape or a torus are removed (one path: the simulation's).
-5. **Mixer:** a biome's weather edited in the mixer, a time-lapse weather map in World mode.
+5. **Mixer:** a biome's weather edited in the mixer, a time-lapse of the world's weather.
 
 Later: curl-noise gusts, the FFT sea reading the wind (U10, fetch, swell), rain and ground wetness, saving the weather,
 the GPU if the CPU tick is too slow.

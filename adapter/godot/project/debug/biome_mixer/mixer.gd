@@ -35,6 +35,7 @@ const World := preload("res://debug/biome_mixer/world.gd")
 const WorldPanel := preload("res://debug/biome_mixer/world_panel.gd")
 const FieldsPanel := preload("res://debug/biome_mixer/fields_panel.gd")
 const Checks := preload("res://debug/biome_mixer/checks.gd")
+const WeatherLapse := preload("res://debug/biome_mixer/weather_lapse.gd")
 
 const WORLD := EngineInfo.WORLD
 const STEP_S := 1.5  # --steps: each value held this long (a restart and its load, with room)
@@ -64,6 +65,7 @@ var world_panel := WorldPanel.new()
 var fields_panel := FieldsPanel.new()
 var biome_pick := OptionButton.new()
 var mode_pick := OptionButton.new()
+var weather_lapse := WeatherLapse.new()
 
 
 func _ready() -> void:
@@ -253,6 +255,13 @@ func set_surface(p_key: String, p_hex: String) -> void:
 	if not model.has("surface"):
 		model.surface = {}
 	model.surface[p_key] = p_hex
+	queue_recompile()
+
+
+func set_weather(p_key: String, p_value: float) -> void:
+	if not model.has("weather"):
+		model.weather = {}
+	model.weather[p_key] = snappedf(p_value, 0.001)
 	queue_recompile()
 
 
@@ -512,6 +521,15 @@ func _build_ui() -> void:
 	var worlds := _menu("World", [], func(_i: int) -> void: pass)
 	worlds.about_to_popup.connect(_fill_worlds.bind(worlds))
 	bar.add_child(worlds)
+	var weather := Button.new()
+	weather.text = "Weather"
+	weather.tooltip_text = "The world's weather over 20 game minutes, mapped each minute (the engine, CPU; planets only)"
+	weather.pressed.connect(func() -> void:
+		if weather_lapse.get_parent() == null:
+			add_child(weather_lapse)
+		weather_lapse.popup_centered()
+		weather_lapse.run(JSON.stringify(World.preview_file(world, -1)), String(world.path).get_base_dir()))
+	bar.add_child(weather)
 	var kinds: Array = EngineInfo.kinds.map(func(k): return String(k.kind))
 	bar.add_child(_menu("Add node", kinds.map(func(k): return Kinds.title(k)), func(i: int) -> void:
 		add_node(kinds[i], (graph.scroll_offset + graph.size * 0.4) / graph.zoom)))

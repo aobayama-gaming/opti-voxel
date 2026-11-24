@@ -127,7 +127,7 @@ static func every_kind(p_world: Dictionary) -> Dictionary:
 
 # Edits on world.json's biomes, each still drawn by the engine: the mountain's first mix row out (one row less, its note
 # stays), a shape node out (what read it reads its note), a loop linked and refused by the engine then taken out, a
-# muted row heard at volume 0.
+# muted row heard at volume 0, a weather key set.
 static func edits(p_mixer: Object) -> Dictionary:
 	var w := World.read(EngineInfo.WORLD)
 	var i: int = w.biomes.map(func(b): return b.name).find("warped")
@@ -160,7 +160,11 @@ static func edits(p_mixer: Object) -> Dictionary:
 	var hn: Dictionary = Graph.node(heard.biomes[0].graph, mix)
 	r.muted = float(hn.rows[0].get("x", 1.0)) == 0.0 and float(Graph.rows(Graph.node(g, mix))[0].get("x", 1.0)) != 0.0
 	p_mixer.row_flags.clear()
-	r.ok = r.row and r.node and r.loop_refused and r.drawn and r.muted
+	# A weather key set through the mixer's row: in the biome's "weather" block, the file the engine takes.
+	p_mixer.set_weather("moisture", 1.25)
+	var sent: Dictionary = World.preview_file(w, i)
+	r.weather = float(sent.biomes[0].get("weather", {}).get("moisture", -1.0)) == 1.25 and World.check(w) == ""
+	r.ok = r.row and r.node and r.loop_refused and r.drawn and r.muted and r.weather
 	return r
 
 

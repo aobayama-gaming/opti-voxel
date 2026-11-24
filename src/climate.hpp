@@ -137,6 +137,23 @@ struct BiomeWeather {
     float storms = 0.0f;
 };
 
+// The "weather" block's keys: each one's range and member (the parser's, and the mixer's rows through
+// ClimateReportNode.weather_keys; the default is BiomeWeather's).
+struct WeatherKey {
+    const char *name;
+    float min;
+    float max;
+    float BiomeWeather::*member;
+};
+inline constexpr WeatherKey WEATHER_KEYS[] = {
+    { "wind", 0.0f, 10.0f, &BiomeWeather::wind },
+    { "drag", 0.0f, 100.0f, &BiomeWeather::drag },
+    { "heat", -1.0f, 1.0f, &BiomeWeather::heat },
+    { "moisture", 0.0f, 2.0f, &BiomeWeather::moisture },
+    { "gust", 0.0f, 10.0f, &BiomeWeather::gust },
+    { "storms", 0.0f, 1000.0f, &BiomeWeather::storms },
+};
+
 // A species a biome grows (its "instances", or the world's for a biome that lists none): a name of the world's species,
 // one site per cell of cell_m metres (a kind's entries of one cell are one source: SDFTable), and an integer share among
 // the biome's entries of that source (BiomePick).

@@ -9,10 +9,13 @@
 
 #include "ov/json.hpp"
 
+#include <godot_cpp/classes/image.hpp>
 #include <godot_cpp/core/class_db.hpp>
+#include <godot_cpp/variant/packed_byte_array.hpp>
 #include <godot_cpp/variant/packed_float32_array.hpp>
 #include <godot_cpp/variant/packed_string_array.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <utility>
 
@@ -21,6 +24,8 @@ void ClimateReportNode::_bind_methods() {
             &ClimateReportNode::run);
     ClassDB::bind_static_method("ClimateReportNode", D_METHOD("check", "json", "dir"), &ClimateReportNode::check);
     ClassDB::bind_static_method("ClimateReportNode", D_METHOD("weather", "out_dir", "world_path", "minutes", "width"), &ClimateReportNode::weather);
+    ClassDB::bind_static_method("ClimateReportNode", D_METHOD("weather_frames", "json", "dir", "minutes", "width"), &ClimateReportNode::weather_frames);
+    ClassDB::bind_static_method("ClimateReportNode", D_METHOD("weather_keys"), &ClimateReportNode::weather_keys);
     ClassDB::bind_static_method("ClimateReportNode", D_METHOD("curve", "points", "xs", "voxel_m"), &ClimateReportNode::curve);
     ClassDB::bind_static_method("ClimateReportNode", D_METHOD("graph_kinds"), &ClimateReportNode::graph_kinds);
     ClassDB::bind_static_method("ClimateReportNode", D_METHOD("shape", "node", "ns"), &ClimateReportNode::shape);
@@ -42,6 +47,51 @@ Dictionary ClimateReportNode::weather(const String &p_out_dir, const String &p_w
         minutes.push_back(double(p_minutes[i]));
     }
     return godot_dict(WeatherReport::run(ov_str(p_out_dir), ov_str(p_world_path), minutes, p_width));
+}
+
+// An RGB8 image of p_w x p_h from p_rgb.
+static Ref<Image> rgb_image(int p_w, int p_h, const std::vector<uint8_t> &p_rgb) {
+    PackedByteArray bytes;
+    bytes.resize(int64_t(p_rgb.size()));
+    std::copy(p_rgb.begin(), p_rgb.end(), bytes.ptrw());
+    return Image::create_from_data(p_w, p_h, false, Image::FORMAT_RGB8, bytes);
+}
+
+Dictionary ClimateReportNode::weather_frames(const String &p_json, const String &p_dir, const PackedFloat32Array &p_minutes, int p_width) {
+    std::vector<double> minutes;
+    for (int64_t i = 0; i < p_minutes.size(); i++) {
+        minutes.push_back(double(p_minutes[i]));
+    }
+    const WeatherReport::Frames f = WeatherReport::frames(ov_str(p_json), ov_str(p_dir), minutes, p_width);
+    Dictionary d;
+    d["error"] = godot_str(f.error);
+    Array frames;
+    for (const WeatherReport::Frame &frame : f.frames) {
+        Dictionary fd = godot_dict(frame.numbers);
+        fd["minutes"] = frame.minutes;
+        fd["cover"] = rgb_image(f.width, f.height, frame.cover_rgb);
+        fd["wind"] = rgb_image(f.width, f.height, frame.wind_rgb);
+        frames.push_back(fd);
+    }
+    d["frames"] = frames;
+    if (f.error.empty()) {
+        d["stats"] = godot_dict(f.stats);
+    }
+    return d;
+}
+
+Array ClimateReportNode::weather_keys() {
+    Array out;
+    const Climate::BiomeWeather neutral;
+    for (const Climate::WeatherKey &k : Climate::WEATHER_KEYS) {
+        Dictionary d;
+        d["name"] = String(k.name);
+        d["min"] = k.min;
+        d["max"] = k.max;
+        d["default"] = neutral.*k.member;
+        out.push_back(d);
+    }
+    return out;
 }
 
 String ClimateReportNode::check(const String &p_json, const String &p_dir) {
