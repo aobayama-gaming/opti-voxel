@@ -5,8 +5,9 @@ rain. It is not the climate. The climate (`docs/climate.md`) is a fixed function
 and shapes the ground; the weather is simulated, forced by the climate, and read by what is drawn (clouds, leaves, later
 the sea and rain). It never feeds the SDF: the terrain stays a function of the absolute position.
 
-Status: the grid (`src/weather_grid.*`) and the simulation (`src/weather_sim.*`) are in. Its worker and the clouds
-reading it are the next steps (the plan at the end). Planets only: the weather is simulated over a sphere, never over a
+Status: the grid (`src/weather_grid.*`), the simulation (`src/weather_sim.*`) and its worker in `World`
+(`src/weather.*`) are in, with a report (`tools/weather_report.sh`). The clouds reading it are the next step (the plan at
+the end). Planets only: the weather is simulated over a sphere, never over a
 flat shape or a torus (decided with the user, 2026-11-24: the engine is for planets).
 
 ## Grid
@@ -78,13 +79,35 @@ sampled once when the weather starts (the climate never changes); the weather ne
 `storm_m` (0: a quarter of the radius), `spin_up_s` (game seconds simulated before the first frame, 60). At
 `time_scale` 1 and the default prevailing wind a 2 km planet's weather crosses its half circumference in ~10 minutes.
 
+## Worker
+`Weather` (`src/weather.*`, engine-free): the simulation on a worker of its own (`ov::executor().start_worker`,
+"weather"), owned by `World` when the world file's weather is on. It needs no GPU: it runs headless too.
+- **Start:** the worker's first step builds the forcing (each cell's `forcing_at` at its ground point, the climate read at
+  the level whose cells are about the grid's, `parallel_for` at LOW priority) and runs the spin-up. On `ocean_test`: 98 ms.
+- **The clock:** `World::frame` calls `update(now)`: the real time since the last frame (0.25 s at most) times `tick_hz`,
+  from the first state on. The worker runs one tick (`time_scale / tick_hz` game seconds) per step while ticks are due;
+  more than `MAX_BEHIND` (20) behind, the excess is dropped (the weather slows, it never runs away).
+- **States:** each tick publishes `LOOK` floats per padded cell (wind, cover, type, rain, temperature, vapour); `update`
+  collects the latest and keeps the previous one. The frame shows the time one tick behind the clock: `blend()` is where
+  it stands between the two (the clouds' texture blend, next step).
+- **Queries:** `World::weather_at(render position)` (the base's up there, sampled on the latest state), Godot's
+  `VoxelTerrain.get_weather_at` (a Dictionary), the player's HUD line (wind, cover, rain); `debug_stats()["weather"]`
+  (ticks, game seconds, storms, dropped and behind ticks, the tick's and the forcing's times, Omega, the substep).
+- **Cost:** in Godot (its pool runs the rows), a tick at N = 64 takes 1.0 ms on average, 3.6 ms at most, on the worker.
+
+## Report
+`tools/weather_report.sh` (`WeatherReport`, CPU only, headless): the world's weather on a clock of its own, each tick
+waited for, mapped at game minutes after the spin-up: `cover_<min>.png` (cover grey, rain blue) and `wind_<min>.png` (the
+way the wind blows as a hue: east red, north yellow-green, west cyan, south violet; its speed as the brightness),
+equirectangular with the +y pole at the top, and `report.md`. The test biomes of `ocean_test.planet.json` carry a
+weather block (the ocean moist, smooth and stormy; the land drier, warmer, rougher): clouds over the ocean, sheared into
+bands by the prevailing winds, one storm in ten minutes, a few percent of the planet raining.
+
 ## Plan
 Agreed with the user (2026-11-24). Stacked PRs, `feature/weather-*`:
 1. **Grid** (#178): the cube sphere, its halo and sampling, the GLSL lookup.
-2. **Simulation:** `WeatherSim`, a biome's `"weather"` block and the planet file's.
-3. **Worker:** `Weather`, an `ov::WorkerLoop` on a fixed tick (~10 Hz) catching up with the clock, two snapshots handed to
-   the frame thread; `World::weather_at`, stats, trace, a HUD line, and `tools/weather_report.sh` (headless maps of
-   cover, wind and rain over time, the tick's cost). Parallelised (`parallel_for` over rows) only if the tick bottlenecks.
+2. **Simulation** (#179): `WeatherSim`, a biome's `"weather"` block and the planet file's.
+3. **Worker:** `Weather` in `World`, its queries and stats, the report.
 4. **Clouds:** the clouds read cover and type from the weather texture (two states blended), their noise drifts with the
    wind at the camera, the leaves' sway and the 2D cloud layer read the local wind; `CloudClimate`, a biome's
    `"clouds"` block and the clouds over a flat shape or a torus are removed (one path: the simulation's).

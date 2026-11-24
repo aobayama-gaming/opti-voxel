@@ -16,6 +16,10 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
   fps and the p50 / p95 / max of the frame, the recompile, the restart (its frame copy alone: `hold_ms`) and the load
   after each restart; with `--shot=PATH` it saves a window shot a second (left out of the frame times) and the engine
   trace (`PATH_trace.json`, `src/trace.hpp`: `restart_world`, `restart_stop` / `_load` / `_start`, `start_mesher` ...).
+- `tools/weather_report.sh [--no-build] [--world=PATH] [--minutes=0,1,10] [--width=512]` (`WeatherReport`, headless, CPU
+  only, seconds; default `res://worlds/ocean_test.planet.json`): a world's weather run on its own clock and mapped at game
+  minutes after its spin-up (`cover_<min>.png`, `wind_<min>.png`, equirectangular), `report.md` with the storms, the
+  mean cover, the largest wind, the share raining and the forcing's and tick's times (`docs/weather.md` "Report").
 - `tools/climate_report.sh [--no-build] [--world=PATH] [--extent_km=KM] [--size=N] [--surface=0|1] [--lattice=M]`
   (`ClimateReport`, headless, CPU only, seconds): a climate table sampled on one lattice over the base's tangent plane, each point traced down to its ground
   surface along the base's up (`--surface=0`: the plane itself, kilometres off the ground at 25 LODs; on a planet the slice

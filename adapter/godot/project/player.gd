@@ -385,6 +385,12 @@ last edit %d chunks, apply %.2f ms" % [
 	var sea: float = terrain.get_sea_height_at(camera.global_position)
 	if not is_nan(sea):
 		hud.text += ("\nunder water, %.1f m deep" % -sea) if sea < 0.0 else ("\nsea level %.1f m below" % sea)
+	# The weather where the camera is (docs/weather.md): the wind's speed, the cover, the rain.
+	var weather: Dictionary = terrain.get_weather_at(camera.global_position)
+	if not weather.is_empty():
+		var wind: Vector3 = weather["wind"]
+		hud.text += "\nwind %.1f m/s, cover %d%%, %s" % [wind.length(), int(100.0 * float(weather["cover"])),
+			"rain %.2f" % float(weather["rain"]) if float(weather["rain"]) > 0.0 else "dry"]
 
 func _process(delta: float) -> void:
 	_update_dig(delta)

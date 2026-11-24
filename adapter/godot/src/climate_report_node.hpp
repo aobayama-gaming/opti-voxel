@@ -22,6 +22,9 @@ public:
     // ClimateReport::check_world: "" if the world file's text (sections relative to p_dir) is accepted at its own engine
     // and over its own base, else why not (static: ClassDB.class_call_static).
     static String check(const String &p_json, const String &p_dir);
+    // The weather report (WeatherReport::run, tools/weather_report.sh): a world's weather run on the CPU, mapped at the game
+    // minutes asked for into p_out_dir.
+    static Dictionary weather(const String &p_out_dir, const String &p_world_path, const PackedFloat32Array &p_minutes, int p_width);
     // ClimateReport::preview of a world file's text (its relative paths from p_dir), static: { error, size, lattice,
     // spacing_m, us_per_point, relief_m, biomes: Image, shaded: Image (RGB8), altitude_m: PackedFloat32Array, fields:
     // PackedFloat32Array (point-major), field_names, biome_names } (the biome mixer's maps). p_background: its loop at

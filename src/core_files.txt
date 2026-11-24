@@ -171,3 +171,7 @@ src/weather_grid.hpp
 src/weather_grid.cpp
 src/weather_sim.hpp
 src/weather_sim.cpp
+src/weather.hpp
+src/weather.cpp
+src/weather_report.hpp
+src/weather_report.cpp
