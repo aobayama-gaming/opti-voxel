@@ -123,14 +123,6 @@ struct Surface {
     float roughness = 1.0f;
 };
 
-// The clouds over a biome ("clouds"; CloudClimate): the sky's cover there and the cloud type (Schneider's: stratus 0,
-// stratocumulus 0.5, cumulus 1), both in [0, 1]. Unset: the sky's cover and the weather noise's type.
-struct BiomeClouds {
-    bool set = false;
-    float cover = 0.0f;
-    float type = 0.0f;
-};
-
 // How a biome pushes the weather ("weather"; WeatherSim, docs/weather.md "Forcing"): the cells over it blend their biomes
 // values by weight. wind: times the planet's prevailing wind there; drag: the ground's drag on the air (forest high, sea
 // and ice low); heat: the temperature the air relaxes to, in [-1, 1] (hot: a thermal low drawing the air in); moisture:
@@ -181,7 +173,6 @@ struct Biome {
     std::vector<FeatureShare> features;
     bool features_listed = false;
     Surface surface;
-    BiomeClouds clouds;
     BiomeWeather weather;
     uint32_t debug_color = 0; // 0xRRGGBB, reports and debug views
 };

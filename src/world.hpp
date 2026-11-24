@@ -127,10 +127,10 @@ public:
     void set_sun(const Float3 &p_towards_sun) { sun = p_towards_sun; }
     // The atmosphere (null: off, or before start).
     const Atmosphere *get_atmosphere() const { return atmosphere; }
-    // The clouds (null: off, or before start), and their weather: the cover in [0, 1] and the wind (render metres per
-    // second), from the next frame on.
+    // The clouds (null: off, no weather, or before start): their cover, type and drift are the weather's.
     const Clouds *get_clouds() const { return clouds; }
-    void set_cloud_weather(float p_cover, const Float3 &p_wind_mps);
+    // The weather's wind at the camera (render metres per second, tangent; 0 without weather), as of the last frame.
+    const Float3 &camera_wind() const { return wind_at_camera; }
 
     SDFCascade &terrain() { return *sdf; }
     const SDFCascade &terrain() const { return *sdf; }
@@ -237,8 +237,7 @@ private:
     Atmosphere *atmosphere = nullptr; // deletes itself on the device's thread (destroy)
     std::unique_ptr<Weather> weather; // its worker ticks the weather (WorldFile::Weather on)
     Clouds *clouds = nullptr; // the same; reads the atmosphere's textures, so goes first
-    float cloud_cover = 0.5f;
-    Float3 cloud_wind;
+    Float3 wind_at_camera;
     Float3 sun{ 0.0f, 1.0f, 0.0f };
     PageAuditor *auditor = nullptr;
     ov::Value audit = ov::Value::object();

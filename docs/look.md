@@ -6,25 +6,22 @@ The shared environment and the page shader's surface detail.
   a sun at 28 degrees (warm, `light_angular_distance` 0.53 so the sky draws its disk), exponential fog with aerial
   perspective (`fog_aerial_perspective` 0.8: the fog takes the sky's colour in that direction, `fog_density` 0.00025: a
   quarter at 1 km), SSAO / SSIL, the grading LUT. `VoxelSky` (`src/voxel_sky.*`, a sibling of the terrain and the
-  WorldEnvironment) installs the sky shader at ready: Godot's PhysicalSkyMaterial (MIT) with a **cloud layer** over it, a
-  layer `cloud_height_m` above the base (a plane on the flat world, a shell on a planet; read on three planes blended by
-  the up so it has no seam, a plane with no weight skipped) reading `cloud_texture` (`adapter/godot/project/clouds.png`, `tools/make_clouds.py`: tileable spectral
-  noise, rank-normalised so `cloud_cover` is the fraction covered) once per `cloud_scale_m`, carried by `cloud_wind`. The
-  page shader splices the same GLSL (`VoxelSky::glsl_clouds`: uniforms, the base's `base_up` / `base_altitude` /
-  `base_level_span` (core, `BaseSurface::glsl_render`), `cloud_hit` / `cloud_texel` / `cloud_density`) and
-  its `light()` (Lambert, no specular: every material has roughness 1) cuts the sun by `cloud_shadow` where the
-  fragment's ray to the sun crosses a cloud, so a shadow lies under its cloud. `VoxelSky` hands the terrain the
-  uniforms through `VoxelTerrain.set_page_params(Dictionary)` (kept until the pool exists); a scene without a VoxelSky
-  keeps the defaults (no texture = black = no clouds, `cloud_shadow` 0). **Surface detail**, all procedural, world-space
+  WorldEnvironment) installs the sky shader at ready: the atmosphere's sky, or without one Godot's PhysicalSkyMaterial
+  (MIT), with the volumetric clouds over either (below: the weather's, planets only; the flat 2D cloud layer is gone).
+  The page shader splices the same GLSL (`VoxelSky::glsl_clouds`: the base's `base_up` / `base_altitude` /
+  `base_level_span` (core, `BaseSurface::glsl_render`) and `wind_sway`); its `light()` (Lambert, no specular: every
+  material has roughness 1) takes the sun through the clouds' shadow map. `VoxelSky` hands the terrain `wind_sway_m`
+  through `VoxelTerrain.set_page_params(Dictionary)` (kept until the pool exists). **Surface detail**, all procedural, world-space
   value noise (the same at every LOD): `ground_detail` on the procedural ground and `PATTERN_GROUND` (a tint over ~20 m,
   patches of ~2 m, a grain of 6 cm that fades past 2 pixels per feature), `PATTERN_LEAVES` on the leaves (clumps of
   0.5 m from dark to yellowish green, 8 cm leaves, darker undersides). **Wind** (`VoxelSky.wind_sway_m`, 3 cm; 0 =
-  still): the vertex stage moves leaf corners by `wind_sway` (a gust wave riding `cloud_wind` plus a finer wobble, a
+  still): the vertex stage moves leaf corners by `wind_sway` (a gust wave riding the global `weather_wind`, the weather's
+  wind at the camera that `VoxelTerrain` sets each frame from `World::camera_wind` (0 without weather), plus a finer wobble, a
   pure function of the position and TIME: shared corners agree, the mesh stays watertight) up to LOD 2, where each
   tree corner pays a palette and a material fetch, and the leaf pattern's noise drifts (a shimmer). Bark stays still:
   the pages carry no per-tree pivot to bend a trunk around. Cost unmeasured. **Shading frame** (`src/shade_frame_glsl.hpp`):
   every pattern of the position (the value noises, the bark's height, the lava and wind waves, the contour lines, the
-  cloud tiles) is read at the render position plus the render origin's voxel modulo a period of the pattern
+  clouds' noises) is read at the render position plus the render origin's voxel modulo a period of the pattern
   (`shade_point`: a power of two of voxels holding at least 64 of its largest features, `shade_period_vox`) with its
   frequencies snapped to whole cycles per period (`shade_cells`, `shade_wave`; `value_noise` wraps its lattice): two
   render origins read points a whole number of periods apart, so a rebase changes nothing on screen and the floats stay
@@ -97,18 +94,18 @@ render contract (`BaseSurface::glsl_render`, `docs/terrain.md`), so another base
 
 ## Volumetric clouds
 
-Volumetric clouds (`src/clouds.*`, `ov::Clouds`, owned by `World` with the atmosphere; `look.clouds`, on by default;
-without them, or without the atmosphere, the cloud layer above). `World` starts the atmosphere and the clouds only for a
-host that binds their textures (`Hosts::atmosphere_textures`, `Hosts::cloud_textures`): the Dawn viewer runs neither yet.
+Volumetric clouds (`src/clouds.*`, `ov::Clouds`, owned by `World` with the atmosphere and the weather; `look.clouds`, on
+by default). They are the weather's (`docs/weather.md`): a world without it (a flat world, a torus, `"weather": {"on":
+false}`) has no clouds. `World` starts the atmosphere and the clouds only for a host that binds their textures (`Hosts::atmosphere_textures`, `Hosts::cloud_textures`): the Dawn viewer runs neither yet.
 They are made from the base's shape like the atmosphere: a layer
 between two altitudes above the base (`base_altitude`; a ray's part in it from `base_level_span`), every noise read at
-the 3D point in the shading frame (no 2D weather map, which a curved base would tear), so another base kind gets clouds
-that follow it (the climate's map below is 3D for the same reason).
+the 3D point in the shading frame (no 2D weather map, which a curved base would tear).
 - **Density:** Schneider's (Horizon Zero Dawn's Nubis, SIGGRAPH 2015 / 2017; ported from clayjohn's
   godot-volumetric-cloud-demo, MIT): a 128^3 Perlin-Worley shape noise (R; G B A Worley fbms) and a 32^3 Worley detail
   noise, 3D RGBA16F textures made once by a compute pass, read through the device's linear sampler (hardware
-  trilinear). The cover and the cloud type come from the shape noise read at a weather scale (its R past a threshold
-  set by `VoxelSky.cloud_cover`, measured on the noise so the cover is about the fraction of sky covered); the type
+  trilinear). The cover and the cloud type come from the weather (below), shaped by the shape noise read at a weather
+  scale (its R past a threshold set by the cover, measured on the noise so the cover is about the fraction of sky
+  covered); the type
   blends Schneider's stratus / stratocumulus / cumulus height gradients; the detail erodes the base (billows below,
   wisps above). Periods (Earth): shape ~12 km, detail ~1.5 km, weather ~48 km, each a power of two of voxels (the
   shading frame). On their own the whole field repeated every weather period (on the flat world at 5 cm: the same clouds
@@ -122,30 +119,16 @@ that follow it (the climate's map below is 3D for the same reason).
   unrelated fields at that cover), for +0.17 ms of cloud passes (1280x720, the video preset; measured before the passes
   skipped the weather outside the layer). A warp read from the shape noise itself sheared the clouds into streaks (its
   fine octaves: gradients ~1.5). The wind's offset wraps at the warp's period.
-- **Climate** (`src/cloud_climate.*`, a biome's `"clouds": {"cover", "type"}` in the climate table, `docs/climate.md`):
-  the weather follows the biomes, as Nubis' weather map does (coverage and type; ISCCP's climatology for the values:
-  little cloud over deserts, most in the convective tropics and storm tracks). `World` hands the clouds the climate
-  (`Clouds::set_climate`) when some biome sets its clouds; a worker of its own (`CloudClimate::Stream`,
-  `ov::executor().start_worker`, one build at a time: as a LOW pool task the first map waited 29 s behind the million
-  trees' load, on the worker it lands in the first frames) evaluates it on a 64^3 lattice of cells round the camera (`CloudClimate::Map`, cells of
-  2^`climate_cell_shift` voxels, ~8 km on Earth: 6.55 km at 5 cm, the map 419 km), only the cells within 2 cells of the
-  layer, each from the biome weights at the corner of the base cell under its centre (`CloudClimate::at`:
-  `Terrain::point_nodes` of the program's weight nodes on the cell's lattice; one sample per base cell, which
-  a column's cells share; ~140 us a sample, ~0.6 s for the first flat map, ~80 ms a re-centre, the base cells it already
-  had reused), uploaded as a 3D RGBA16F texture once built (Dawn's `update_texture` now writes 3D textures whole, and its
-  `create_texture_3d` makes a 3D texture at any depth). A texel is linear in the weights (sum w cover, sum w type, sum w
-  over the biomes with clouds), so the trilinear read blends biomes over a cell or two; `cloud_weather` takes the cover
-  from it (the sky's `cloud_cover` for the weight no biome sets) and the type round the biomes' (the noise's offset from
-  0.5 moves it towards 0 or 1 by up to 0.4 of the way, `TYPE_SPREAD`, so it stays in [0, 1]). The map is centred on the
-  base point under the camera (the layer stays in it from any height) and re-centres when that is 8 cells from its
-  centre; a camera outside the live map (a teleport, before its build lands) reads none; the hand-off is a
-  `Trace::flow` ("climate_map": asked in `climate_update`, built in `climate_build`, uploaded in `climate_upload`); the texture starts at 0 (one texel without a climate), which reads as the sky's
-  cover and the noise's type, so the passes have no climate-less branch. `world.json` sets
-  every biome's: the deserts and dunes 0.04-0.08 cumulus, the mangrove 0.75-0.8 towering cumulus,
-  the warm dry cliffs 0.55-0.65 stratus decks, the islands 0.4-0.45 trade cumulus, the valley 0.65-0.7 stratocumulus,
-  the caldera 0.3-0.35, the mountains 0.6. Measured (1280x720, steady atmosphere + clouds p50, 2 interleaved runs, the
-  video's spawn on the mangrove / desert border vs the same table without clouds): from 12 km 3.18 -> 2.71 ms, on the
-  ground ~2.8 -> ~2.6 ms (less cloud over the desert; the map's fetch doesn't show).
+- **Weather** (`Weather`, `docs/weather.md`): the simulation's cover and type over the whole planet. When a tick
+  lands (`World::frame`: `Weather::update`), `Clouds::set_weather` uploads its last two states as one 3D RGBA16F
+  texture of the cube-sphere grid, (N + 2) x (N + 2) x 6 (the halo included; RG the previous state's cover and type, BA
+  the latest's: 0.3 MB at N = 64), and keeps the largest cover of the two (`cloud_cover_max`: the passes skip where it
+  is 0, as before the first state lands). `cloud_weather` reads it along the base's up at the point (`weather_uvw`,
+  `WeatherGrid::glsl_lookup`; the face's texels at their centre, so the linear sampler never blends two faces; the halo
+  makes the bilinear read cross a seam), blends the two states by `Weather::blend` (where the frame stands between
+  them: the cover moves smoothly between ticks) and moves the type round the weather's (the noise's offset from 0.5
+  moves it towards 0 or 1 by up to 0.4 of the way, `TYPE_SPREAD`, so it stays in [0, 1]). The noises drift with the
+  weather's wind at the camera times its time scale (`World::camera_wind`: the pattern moves with the cells' cover).
 - **Layer** (`CloudLayer::for_base`): Earth's 1.5 to 4 km, extinction 0.04 /m at density 1 (Hillaire 2016's cumulus
   range is 0.05 to 0.12), albedo 0.99; under Earth's radius scaled like the atmosphere (lengths times s, extinction over
   s, s at least `RELIEF_BOTTOMS` reliefs over Earth's bottom), then lifted, its thickness kept, until its bottom is
@@ -178,24 +161,16 @@ that follow it (the climate's map below is 3D for the same reason).
   shadow map; the page shader puts the clouds in front of a fragment over its `FOG` (combined: T = T_air T_clouds,
   S = S_air T_clouds + S_clouds) and its `light()` takes the sun through the shadow map. The grid's and the shadow map's
   textures reach the materials like the atmosphere's (`VoxelTerrain::_rt_share_textures`); the shadow map's frame is
-  four global uniforms per frame (`cloud_shadow_origin_m`, `_u`, `_v`, `_extent_m`). `VoxelSky` hands the terrain the
-  cover and the wind (`cloud_wind`, metres per second along render x and z: on a planet the noise drifts through the
-  shell) every frame.
+  four global uniforms per frame (`cloud_shadow_origin_m`, `_u`, `_v`, `_extent_m`).
 - **Checked:** unit tests (the layer's scale and lift, the periods, the substitution, the block, the shadow map's
-  frame; the biomes' clouds parsed and refused, the texel's blend, the map's cells, samples and re-centring, the world
-  climate's cover 0.04 to 0.8 along 2000 km); origin parity with the climate's clouds in view (34 rebases, 0.02% of
-  pixels differ); `GPUDeviceCheck` covers the 3D textures and the sampler; screenshots from the forest floor, Earth's pole,
+  frame; the passes read the weather texture, every placeholder substituted); before the weather: origin parity
+  with the clouds in view (34 rebases, 0.02% of pixels differ); `GPUDeviceCheck` covers the 3D textures and the sampler; screenshots from the forest floor, Earth's pole,
   inside the flat world's layer, Earth from 100 km and the 2 km planet from the ground and from 4 km out.
-- **Limits:** the climate map covers 419 km round its centre (5 cm): clouds past ~160 km read its edge cells, which
-  depend on where it was last centred (a camera that came back from elsewhere can see a different far horizon); a
-  biome's cover replaces the sky's `cloud_cover` over it (the slider moves only the biomes without clouds); the climate
-  is the base point's at the cell's lattice, low-passed at ~6.5 km (a biome smaller than that blends into its
-  neighbours); the layer's altitudes are the same everywhere (a cumulonimbus is a cumulus, not a taller layer); each
-  sample replays the cascade from its top alone (one `Terrain::run` over the base cells would share the coarse levels);
-  on an inline executor (threads=no) a build runs in `pump()`, a 0.6 s frame (the Dawn viewer runs no clouds yet). The field still repeats every warp period, at most 2^23 voxels (`ShadeFrame::MAX_SHIFT`: 419 km at
+- **Limits:** the weather's cells (~49 m on the 2 km planet at N = 64) low-pass the cover; the noises drift with
+  the wind at the camera, not each cell's; the layer's altitudes are the same everywhere (a cumulonimbus is a cumulus,
+  not a taller layer); no clouds on a flat world or a torus (no weather there). The field still repeats every warp period, at most 2^23 voxels (`ShadeFrame::MAX_SHIFT`: 419 km at
   5 cm; a tile index from the origin's high bits could hash each tile instead); the light march reuses its start
-  point's warp (as it does the weather); the plain cloud layer (`VoxelSky`'s `clouds.png`, without the volumetric
-  clouds) still tiles every `cloud_scale_m`; the grid's 0.23 degrees show as jagged edges on a small planet seen whole; the reach is a horizon on the
+  point's warp (as it does the weather); the grid's 0.23 degrees show as jagged edges on a small planet seen whole; the reach is a horizon on the
   base's curvature sphere, so a torus seen from space has clouds on its near side only; a cloud in front of terrain is
   composited by its front and mean distances, so a hill reaching into one would be cut by texels (the layer is lifted
   over the world's largest relief instead, so no cloud wraps a peak); the wind is a render-space vector, so on a planet

@@ -13,17 +13,16 @@
 
 using namespace godot;
 
-// The sky and its cloud layer. A sibling of the VoxelTerrain, the WorldEnvironment and the DirectionalLight3D (the sun):
-// on ready it installs a sky shader on the environment's Sky: the terrain's atmosphere (Atmosphere::glsl_lookup) when it
-// has one, else Godot's PhysicalSkyMaterial (MIT), with a cloud layer over either. It hands the terrain's page shader
-// the same cloud parameters, so the clouds' shadows on the ground lie under the clouds in the sky: both read
-// `cloud_texture` through the one GLSL of `glsl_clouds()` (uv from the world point, density from the cover), at the same
-// height, drifting with the same wind; and each frame the sun's light and direction for the atmosphere.
+// The sky. A sibling of the VoxelTerrain, the WorldEnvironment and the DirectionalLight3D (the sun): on ready it
+// installs a sky shader on the environment's Sky: the terrain's atmosphere (Atmosphere::glsl_lookup) when it has one,
+// else Godot's PhysicalSkyMaterial (MIT), with the terrain's volumetric clouds over either (the weather's: planets
+// only). It hands the terrain's page shader the leaves' sway (`glsl_clouds()`, both shaders); each frame the sun's light
+// and direction for the atmosphere.
 class VoxelSky : public Node {
     GDCLASS(VoxelSky, Node)
 
 public:
-    // The GLSL both shaders splice in: the cloud uniforms and `cloud_uv` / `cloud_density` / `cloud_hit`.
+    // The GLSL both shaders splice in: the base's uniforms and functions, the weather's wind and `wind_sway`.
     static String glsl_clouds();
     // The atmosphere's uniforms and the core's lookups (Atmosphere::glsl_lookup), after glsl_clouds in both shaders.
     static String glsl_atmosphere();
@@ -35,18 +34,6 @@ public:
     // atmo_sun_dir until a sun sets it (towards the sun, unit).
     static inline const Vector3 DEFAULT_SUN_DIR = Vector3(0.3f, 0.8f, 0.5f).normalized();
 
-    void set_cloud_texture(const Ref<Texture2D> &p_texture);
-    Ref<Texture2D> get_cloud_texture() const;
-    void set_cloud_height_m(float p_m);
-    float get_cloud_height_m() const;
-    void set_cloud_scale_m(float p_m);
-    float get_cloud_scale_m() const;
-    void set_cloud_cover(float p_cover);
-    float get_cloud_cover() const;
-    void set_cloud_wind(const Vector2 &p_mps);
-    Vector2 get_cloud_wind() const;
-    void set_cloud_shadow(float p_strength);
-    float get_cloud_shadow() const;
     void set_wind_sway_m(float p_metres);
     float get_wind_sway_m() const;
 
@@ -75,12 +62,6 @@ private:
     void _push(const Dictionary &p_params); // to the sky material and the terrain siblings' page shader
     void _quiet_fog();
 
-    Ref<Texture2D> cloud_texture;
-    float cloud_height_m = 1500.0f; // metres above the base
-    float cloud_scale_m = 6000.0f; // metres per texture tile
-    float cloud_cover = 0.4f; // fraction of the sky covered
-    Vector2 cloud_wind = Vector2(9.0f, 3.0f); // m/s
-    float cloud_shadow = 0.7f; // how much of the sun a cloud takes from the ground, 0 = no shadows
     float wind_sway_m = 0.03f; // the leaves' sway amplitude (the page shader's wind_sway), 0 = still
 
     Vector3i origin_voxel_lo; // set_render_frame's
