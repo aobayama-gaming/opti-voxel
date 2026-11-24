@@ -173,6 +173,196 @@ ov::str parse_edit(const ov::Value &p_d, size_t p_index, SDFTable::Edit &r_edit)
     return ov::str();
 }
 
+// p_d[p_key] (absent: r_out untouched) as three numbers, r_error set if it isn't.
+void colour(const ov::Value &p_d, const char *p_key, const char *p_where, Float3 &r_out, ov::str &r_error) {
+    float c[3];
+    if (!r_error.empty() || !p_d.has(p_key)) {
+        return;
+    }
+    if (!float_list(p_d[p_key], 3, 3, c)) {
+        r_error = "world: " + ov::str(p_where) + ": '" + p_key + ov::str("' is [r, g, b], three numbers.");
+        return;
+    }
+    r_out = Float3{ c[0], c[1], c[2] };
+}
+
+// "shape" into r_world's planet: the kind agreeing with its radius and ring, BaseSurface::planet's limits.
+ov::str parse_shape(const ov::Value &p_data, WorldFile &r_world) {
+    if (p_data.has("planet")) {
+        return "world: 'planet' is now 'shape': { \"kind\": \"flat\" | \"sphere\" | \"torus\", \"radius_m\", \"ring_m\" } (rename it and give its kind).";
+    }
+    ov::str err;
+    const ov::Value shape = section(p_data, "shape", { "kind", "radius_m", "ring_m" }, err);
+    ov::Value sizes = shape;
+    sizes.erase("kind");
+    err = err.empty() ? not_a_number(sizes, "shape") : err;
+    if (!err.empty() || !p_data.has("shape")) {
+        return err;
+    }
+    const ov::str kind = shape["kind"].as_str();
+    const double radius = shape.get("radius_m", 0.0).as_double(), ring = shape.get("ring_m", 0.0).as_double();
+    if (!(radius >= 0.0 && std::isfinite(radius)) || !(ring >= 0.0 && std::isfinite(ring))) {
+        return "world: shape: radius_m and ring_m must be finite and >= 0.";
+    }
+    const bool agrees = (kind == "flat" && radius == 0.0 && ring == 0.0) || (kind == "sphere" && radius > 0.0 && ring == 0.0) || (kind == "torus" && radius > 0.0 && ring > 0.0);
+    if (!agrees) {
+        return "world: shape: 'kind' is flat (no radius_m, no ring_m), sphere (a radius_m, no ring_m) or torus (radius_m its tube, ring_m its ring).";
+    }
+    if (radius > 0.0) {
+        ov::str refusal;
+        BaseSurface::planet(radius, r_world.voxel_m, ring, &refusal);
+        if (!refusal.empty()) {
+            return "world: shape: " + refusal;
+        }
+    }
+    r_world.planet_radius_m = radius;
+    r_world.planet_ring_m = ring;
+    return ov::str();
+}
+
+// "seed" into r_world: a whole number in [0, 2^32).
+ov::str parse_seed(const ov::Value &p_data, WorldFile &r_world) {
+    const double s = p_data.get("seed", 0.0).as_double();
+    if (!p_data.get("seed", 0.0).is_number() || !(s >= 0.0 && s < 4294967296.0 && s == std::floor(s))) {
+        return "world: 'seed' is a whole number in [0, 2^32).";
+    }
+    r_world.seed = uint32_t(s);
+    return ov::str();
+}
+
+// "sea" into r_world.sea (on): its level, water and shore.
+ov::str parse_sea(const ov::Value &p_data, WorldFile &r_world) {
+    ov::str err;
+    const ov::Value sea = section(p_data, "sea", { "level_m", "water", "shore" }, err);
+    const ov::Value water = section(sea, "water", { "deep", "shallow", "clarity_m" }, err);
+    const ov::Value shore = section(sea, "shore", { "below_m", "above_m", "sand" }, err);
+    if (!err.empty() || !p_data.has("sea")) {
+        return err;
+    }
+    ov::Value level = sea, clarity = water, band = shore; // their numbers alone
+    level.erase("water");
+    level.erase("shore");
+    clarity.erase("deep");
+    clarity.erase("shallow");
+    band.erase("sand");
+    err = !sea.has("level_m") ? ov::str("world: sea: 'level_m' is required (the sea's altitude above the base).") : not_a_number(level, "sea");
+    err = err.empty() ? not_a_number(clarity, "sea water") : err;
+    err = err.empty() ? not_a_number(band, "sea shore") : err;
+    if (!err.empty()) {
+        return err;
+    }
+    WorldFile::Sea s;
+    s.on = true;
+    s.level_m = sea["level_m"].as_double();
+    s.clarity_m = water.get("clarity_m", s.clarity_m).as_double();
+    s.shore_below_m = shore.get("below_m", s.shore_below_m).as_double();
+    s.shore_above_m = shore.get("above_m", s.shore_above_m).as_double();
+    if (!std::isfinite(s.level_m) || !(s.clarity_m > 0.0 && std::isfinite(s.clarity_m)) || !(s.shore_below_m >= 0.0 && s.shore_above_m >= 0.0 && std::isfinite(s.shore_below_m + s.shore_above_m))) {
+        return "world: sea: level_m is finite, clarity_m > 0, the shore's below_m and above_m >= 0.";
+    }
+    colour(water, "deep", "sea water", s.deep, err);
+    colour(water, "shallow", "sea water", s.shallow, err);
+    colour(shore, "sand", "sea shore", s.sand, err);
+    r_world.sea = s;
+    return err;
+}
+
+// "atmosphere" into r_world: the air's density and its Rayleigh tint.
+ov::str parse_air(const ov::Value &p_data, WorldFile &r_world) {
+    ov::str err;
+    const ov::Value air = section(p_data, "atmosphere", { "density", "tint" }, err);
+    if (err.empty() && air.has("density") && !(air["density"].is_number() && air["density"].as_double() >= 0.0 && std::isfinite(air["density"].as_double()))) {
+        err = "world: atmosphere: 'density' is a number >= 0.";
+    }
+    r_world.atmosphere_density = air.get("density", r_world.atmosphere_density).as_double();
+    colour(air, "tint", "atmosphere", r_world.atmosphere_tint, err);
+    return err;
+}
+
+// The climate's per-field offsets (every key of p_climate but "fields") merged into r_fields' objects: { "mean",
+// "poles" }, numbers; a name that isn't a field's, or poles on a base without poles, refused.
+ov::str field_offsets(const ov::Value &p_climate, const WorldFile &p_world, ov::Value &r_fields) {
+    for (const std::pair<ov::str, ov::Value> &entry : p_climate.entries()) {
+        if (entry.first == "fields" || entry.first == "comment") {
+            continue;
+        }
+        const ov::str where = "climate: '" + entry.first + ov::str("'");
+        size_t f = 0;
+        while (f < r_fields.size() && r_fields[f]["name"].as_str() != entry.first) {
+            f++;
+        }
+        if (f == r_fields.size()) {
+            return "world: " + where + " is not a field (a key of 'climate' besides 'fields' names one: { \"mean\", \"poles\" }).";
+        }
+        const ov::Value &o = entry.second;
+        ov::str err = o.is_object() ? unknown_key(o, where.c_str(), { "mean", "poles" }) : "world: " + where + ": not an object.";
+        err = err.empty() ? not_a_number(o, where.c_str()) : err;
+        if (err.empty() && o.get("poles", 0.0).as_double() != 0.0 && p_world.planet_ring_m > 0.0) {
+            // TODO: a torus's latitude is its tube's angle; its gradient needs a formula of its own (BaseSurface::pole_form).
+            err = "world: " + where + ": poles on a torus aren't written yet (its latitude is the tube's angle).";
+        } else if (err.empty() && o.get("poles", 0.0).as_double() != 0.0 && !(p_world.planet_radius_m > 0.0)) {
+            err = "world: " + where + ": poles need a planet (the flat base has none).";
+        }
+        if (!err.empty()) {
+            return err;
+        }
+        for (const char *key : { "mean", "poles" }) {
+            if (o.has(key)) {
+                r_fields.at(f)[key] = o[key];
+            }
+        }
+    }
+    return ov::str();
+}
+
+// The climate's fields (a list, or the file holding it, relative to p_dir) with their offsets (field_offsets).
+ov::str climate_fields(const ov::Value &p_climate, const ov::str &p_dir, const WorldFile &p_world, ov::Value &r_fields) {
+    r_fields = ov::Value::array();
+    ov::str err = list_or_file(p_climate, "fields", p_dir, r_fields);
+    if (r_fields.is_nil()) {
+        r_fields = ov::Value::array();
+    }
+    return err.empty() ? field_offsets(p_climate, p_world, r_fields) : err;
+}
+
+// p_list's strings read as single-biome files (relative to p_dir), its default biome (no "at") moved last: two refused.
+ov::str biome_files(const ov::str &p_dir, ov::Value &r_list) {
+    ov::Value out = ov::Value::array(), last;
+    for (const ov::Value &v : r_list.elements()) {
+        ov::Value b = v;
+        if (v.is_string()) {
+            const ov::str err = read_object(resolve(p_dir, v.as_str()), b);
+            if (!err.empty()) {
+                return err;
+            }
+        }
+        if (b.is_object() && !b.has("at")) {
+            if (!last.is_nil()) {
+                return "world: biomes: two default biomes (no 'at'), '" + last["name"].as_str() + "' and '" + b["name"].as_str() + "': one fills what the others leave.";
+            }
+            last = b;
+            continue;
+        }
+        out.push_back(b);
+    }
+    if (!last.is_nil()) {
+        out.push_back(last);
+    }
+    r_list = out;
+    return ov::str();
+}
+
+// "biomes" (a list, or the file holding it) with its biome files read (biome_files), in r_list; nil if absent.
+ov::str biome_list(const ov::Value &p_data, const ov::str &p_dir, ov::Value &r_list) {
+    ov::str err = list_or_file(p_data, "biomes", p_dir, r_list);
+    if (err.empty() && !r_list.is_nil()) {
+        // A list file's biome files are relative to it.
+        const ov::Value &v = p_data["biomes"];
+        err = biome_files(v.is_string() ? dir_of(resolve(p_dir, v.as_str())) : p_dir, r_list);
+    }
+    return err;
+}
+
 } // namespace
 
 ov::str WorldFile::parse_edits(const ov::Value &p_data, std::vector<SDFTable::Edit> &r_edits) {
@@ -248,27 +438,31 @@ ov::str WorldFile::save_edits(const ov::str &p_path, const std::vector<SDFTable:
     return ov::str();
 }
 
-ov::str WorldFile::parse(const ov::Value &p_data, const ov::str &p_dir, WorldFile &r_world) {
-    ov::str err = unknown_key(p_data, "file", { "engine", "climate", "planet", "look", "instances", "features", "feature_region", "species", "biomes", "instance_band", "edits" });
+namespace {
+
+// "engine" (an object or its file) into r_world: the voxel and the LOD count.
+ov::str parse_engine(const ov::Value &p_data, const ov::str &p_dir, WorldFile &r_world) {
+    ov::Value engine;
+    ov::str err = object_or_file(p_data, "engine", p_dir, engine);
+    err = err.empty() ? unknown_key(engine, "engine", { "voxel_m", "lods" }) : err;
+    err = err.empty() ? not_a_number(engine, "engine") : err;
     if (!err.empty()) {
         return err;
     }
-    ov::Value engine, climate;
-    err = object_or_file(p_data, "engine", p_dir, engine);
-    if (err.empty()) {
-        err = object_or_file(p_data, "climate", p_dir, climate);
+    r_world.voxel_m = engine.get("voxel_m", r_world.voxel_m).as_double();
+    r_world.lods = int(engine.get("lods", r_world.lods).as_int());
+    if (!(r_world.voxel_m > 0.0)) {
+        return "world: engine: voxel_m must be positive.";
     }
-    if (err.empty()) {
-        err = unknown_key(engine, "engine", { "voxel_m", "lods" });
+    if (r_world.lods < 1 || r_world.lods > ChunkMath::MAX_LOD_NUMBERS) {
+        return ov::format("world: engine: lods must be in [1, %d].", ChunkMath::MAX_LOD_NUMBERS);
     }
-    if (err.empty()) {
-        err = unknown_key(climate, "climate", { "fields" });
-    }
-    if (!err.empty()) {
-        return err;
-    }
-    WorldFile w;
-    const ov::Value planet = section(p_data, "planet", { "radius_m", "ring_m" }, err);
+    return ov::str();
+}
+
+// "look" and "feature_region" into r_world.
+ov::str parse_look(const ov::Value &p_data, WorldFile &r_world) {
+    ov::str err;
     const ov::Value look = section(p_data, "look", { "atmosphere", "atmosphere_scale", "clouds" }, err);
     ov::Value region = section(p_data, "feature_region", { "side_m", "centre_m" }, err);
     const ov::Value centre = region.get("centre_m", ov::Value::array());
@@ -276,35 +470,11 @@ ov::str WorldFile::parse(const ov::Value &p_data, const ov::str &p_dir, WorldFil
         err = "world: feature_region: centre_m is [x, z] in metres.";
     }
     region.erase("centre_m");
-    for (const auto &part : { std::pair<const char *, ov::Value>{ "engine", engine }, { "planet", planet }, { "feature_region", region } }) {
-        err = err.empty() ? not_a_number(part.second, part.first) : err;
-    }
+    err = err.empty() ? not_a_number(region, "feature_region") : err;
     if (!err.empty()) {
         return err;
     }
-    w.voxel_m = engine.get("voxel_m", w.voxel_m).as_double();
-    w.lods = int(engine.get("lods", w.lods).as_int());
-    if (!(w.voxel_m > 0.0)) {
-        return "world: engine: voxel_m must be positive.";
-    }
-    if (w.lods < 1 || w.lods > ChunkMath::MAX_LOD_NUMBERS) {
-        return ov::format("world: engine: lods must be in [1, %d].", ChunkMath::MAX_LOD_NUMBERS);
-    }
-    w.planet_radius_m = planet.get("radius_m", w.planet_radius_m).as_double();
-    w.planet_ring_m = planet.get("ring_m", w.planet_ring_m).as_double();
-    if (!(w.planet_radius_m >= 0.0 && std::isfinite(w.planet_radius_m)) || !(w.planet_ring_m >= 0.0 && std::isfinite(w.planet_ring_m))) {
-        return "world: planet: radius_m and ring_m must be finite and >= 0.";
-    }
-    if (w.planet_ring_m > 0.0 && !(w.planet_radius_m > 0.0)) {
-        return "world: planet: ring_m needs radius_m (the torus's tube).";
-    }
-    if (w.planet_radius_m > 0.0) {
-        ov::str refusal;
-        BaseSurface::planet(w.planet_radius_m, w.voxel_m, w.planet_ring_m, &refusal);
-        if (!refusal.empty()) {
-            return "world: planet: " + refusal;
-        }
-    }
+    WorldFile &w = r_world;
     w.atmosphere = look.get("atmosphere", w.atmosphere).as_bool();
     w.atmosphere_scale = look.get("atmosphere_scale", w.atmosphere_scale).as_double();
     w.clouds = look.get("clouds", w.clouds).as_bool();
@@ -316,6 +486,13 @@ ov::str WorldFile::parse(const ov::Value &p_data, const ov::str &p_dir, WorldFil
     if (!(w.feature_region.side_m >= 0.0 && std::isfinite(w.feature_region.side_m))) {
         return "world: feature_region: side_m must be >= 0.";
     }
+    return ov::str();
+}
+
+// "instances", "features", "species", "instance_band" and "edits" into r_world.
+ov::str parse_contents(const ov::Value &p_data, const ov::str &p_dir, WorldFile &r_world) {
+    WorldFile &w = r_world;
+    ov::str err;
     if (p_data.has("instances")) {
         err = Climate::parse_instances(p_data["instances"], "instances", w.instances);
         if (!err.empty()) {
@@ -328,13 +505,12 @@ ov::str WorldFile::parse(const ov::Value &p_data, const ov::str &p_dir, WorldFil
             return "world: " + err;
         }
     }
-    ov::Value species, biomes;
+    ov::Value species;
     err = list_or_file(p_data, "species", p_dir, species);
     if (err.empty() && !species.is_nil()) {
         err = Archetype::parse_species(species, w.species);
         err = err.empty() ? err : "world: " + err;
     }
-    err = err.empty() ? list_or_file(p_data, "biomes", p_dir, biomes) : err;
     if (!err.empty()) {
         return err;
     }
@@ -347,18 +523,47 @@ ov::str WorldFile::parse(const ov::Value &p_data, const ov::str &p_dir, WorldFil
     if (p_data.has("edits")) {
         ov::Value edits;
         err = object_or_file(p_data, "edits", p_dir, edits);
-        err = err.empty() ? parse_edits(edits, w.edits) : err;
-        if (!err.empty()) {
-            return err;
-        }
+        err = err.empty() ? WorldFile::parse_edits(edits, w.edits) : err;
     }
-    // Biomes without a climate: no fields.
-    if (p_data.has("climate") || p_data.has("biomes")) {
-        w.climate_table["fields"] = climate.get("fields", ov::Value::array());
-        w.climate_table["biomes"] = biomes.is_nil() ? ov::Value::array() : biomes;
+    return err;
+}
+
+// "climate" (an object or its file: its fields, a list or their file, and its per-field offsets) and "biomes" (a list or
+// their file, each a biome or its file) into r_world's climate table (biomes without a climate: no fields), after the
+// shape (the offsets' poles need one).
+ov::str parse_climate(const ov::Value &p_data, const ov::str &p_dir, WorldFile &r_world) {
+    ov::Value climate, fields, biomes;
+    ov::str err = object_or_file(p_data, "climate", p_dir, climate);
+    // A climate file's fields file is relative to it.
+    const ov::str climate_dir = p_data["climate"].is_string() ? dir_of(resolve(p_dir, p_data["climate"].as_str())) : p_dir;
+    err = err.empty() ? climate_fields(climate, climate_dir, r_world, fields) : err;
+    err = err.empty() ? biome_list(p_data, p_dir, biomes) : err;
+    if (err.empty() && (p_data.has("climate") || p_data.has("biomes"))) {
+        r_world.climate_table["fields"] = fields;
+        r_world.climate_table["biomes"] = biomes.is_nil() ? ov::Value::array() : biomes;
     }
-    r_world = w;
-    return ov::str();
+    return err;
+}
+
+} // namespace
+
+ov::str WorldFile::parse(const ov::Value &p_data, const ov::str &p_dir, WorldFile &r_world) {
+    // "planet" is known only to be refused with its new name (parse_shape).
+    ov::str err = unknown_key(p_data, "file",
+            { "engine", "seed", "shape", "planet", "sea", "climate", "atmosphere", "look", "instances", "features", "feature_region", "species", "biomes", "instance_band", "edits" });
+    WorldFile w;
+    err = err.empty() ? parse_engine(p_data, p_dir, w) : err;
+    err = err.empty() ? parse_shape(p_data, w) : err;
+    err = err.empty() ? parse_seed(p_data, w) : err;
+    err = err.empty() ? parse_sea(p_data, w) : err;
+    err = err.empty() ? parse_air(p_data, w) : err;
+    err = err.empty() ? parse_look(p_data, w) : err;
+    err = err.empty() ? parse_contents(p_data, p_dir, w) : err;
+    err = err.empty() ? parse_climate(p_data, p_dir, w) : err;
+    if (err.empty()) {
+        r_world = w;
+    }
+    return err;
 }
 
 ov::str WorldFile::parse_object(const ov::str &p_text, const ov::str &p_name, ov::Value &r_data) {

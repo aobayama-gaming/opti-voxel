@@ -190,6 +190,9 @@ void value_bound(const LevelProgram &p_prog, const Blend &p_blend, size_t p_i, d
         case Op::PICK:
             r_hi = double(p_prog.biomes - 1);
             break;
+        case Op::POLE:
+            r_hi = 1.0; // n_y^2, capped at 1
+            break;
         case Op::COUNT:
             break;
     }
@@ -235,6 +238,7 @@ double step(const LevelProgram &p_prog, const std::vector<double> &p_d, size_t p
         case Op::CONST:
         case Op::UP:
         case Op::PICK:
+        case Op::POLE: // the same bits at every LOD (BaseSurface::pole_form on its own level)
         case Op::COUNT:
             break;
     }

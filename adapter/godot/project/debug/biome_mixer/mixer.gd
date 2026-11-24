@@ -23,7 +23,8 @@ extends Control
 ##                      PATH (and the view alone to PATH_view.png), quit
 ##   --check            headless self-test (checks.gd); prints MIXER: {json} and quits 0 if ok
 ## The World menu exports the world over the file it came from (res://climate/world.json, the game's, by default; the
-## engine checks it first, at the world's own engine and over its own planet).
+## engine checks it first, at the world's own engine and over its own planet), makes a new planet (the same world, a new
+## random seed) and freezes it (one file next to it, <name>.frozen.world.json: every biome, the climate, every section inline).
 
 const EngineInfo := preload("res://debug/biome_mixer/engine_info.gd")
 const Graph := preload("res://debug/biome_mixer/graph.gd")
@@ -436,6 +437,26 @@ func _export_world() -> void:
 	status.text = World.write(world).message
 
 
+# The world with a new random seed (its biomes' notes and fields mixed with it): another planet from the same file.
+func _new_planet() -> void:
+	world.seed = 1 + randi() % 0xFFFFFFFF
+	fields_panel.set_world(world)
+	refit = true
+	queue_recompile()
+	status.text = "New planet: seed %d (export to keep it)." % world.seed
+
+
+# Where "Freeze" writes: next to the opened file, <name>.frozen.world.json.
+func _frozen_path() -> String:
+	var path := String(world.get("path", WORLD))
+	var stem := path.get_file()
+	for ext in [".world.json", ".planet.json", ".json"]:
+		if stem.ends_with(ext):
+			stem = stem.trim_suffix(ext)
+			break
+	return path.get_base_dir().path_join(stem + ".frozen.world.json")
+
+
 # The chart's cloud: the world's fields on its two axes at the view's points (the engine's samples).
 func resample(p_fit: bool) -> void:
 	if not world_mode():
@@ -579,7 +600,7 @@ func _menu(p_text: String, p_items: Array, p_pressed: Callable) -> MenuButton:
 	return m
 
 
-# The World menu: this world's file again or world.json; export this one over its file.
+# The World menu: this world's file again or world.json; export this one over its file; a new seed; freeze it.
 func _fill_worlds(p_menu: MenuButton) -> void:
 	var popup := p_menu.get_popup()
 	popup.clear()
@@ -589,6 +610,8 @@ func _fill_worlds(p_menu: MenuButton) -> void:
 	var actions := [
 		["Reload %s" % path, func() -> void: set_world(World.read(path), true)],
 		["Export this world to %s%s" % [path, " (the game's)" if path == WORLD else ""], _export_world],
+		["New planet (this one with a new seed)", _new_planet],
+		["Freeze to %s (one file, everything inline)" % _frozen_path(), func() -> void: status.text = World.write(world, _frozen_path(), true).message],
 	]
 	if path != WORLD:
 		actions.append(["Open %s (the game's)" % WORLD, func() -> void: set_world(World.read(WORLD), true)])

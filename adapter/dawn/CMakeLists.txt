@@ -63,10 +63,11 @@ if(EMSCRIPTEN)
     # the workers are started with the page (a pthread only starts once the main thread yields): the pool's (one per core but
     # the main thread's, at least one) and the viewer's two long-lived workers (discoverer, field); one more starts late. Only a cross-origin isolated page (web/serve.py's headers)
     # gets SharedArrayBuffer. FS: a --shot's PNG is read back from the page (Module.FS.readFile); the Godot project's
-    # climate and worlds folders are preloaded at /climate and /worlds (ov_dawn.data: ?world=res://climate/world.json), its grade at /grade_lut.rgb.
+    # climate, worlds and biomes folders are preloaded at /climate, /worlds and /biomes (ov_dawn.data: ?world=res://climate/world.json), its grade at /grade_lut.rgb.
     target_compile_definitions(ov_dawn PRIVATE OV_RES_DIR="/")
     target_link_options(ov_dawn PRIVATE "SHELL:--preload-file ${OV_ROOT}/adapter/godot/project/climate@/climate"
             "SHELL:--preload-file ${OV_ROOT}/adapter/godot/project/worlds@/worlds"
+            "SHELL:--preload-file ${OV_ROOT}/adapter/godot/project/biomes@/biomes"
             "SHELL:--preload-file ${OV_ROOT}/adapter/godot/project/grade_lut.rgb@/grade_lut.rgb" "--use-port=${OV_EMDAWNWEBGPU_PORT}" -pthread -sJSPI -Wno-experimental
             -Wno-pthreads-mem-growth "-sPTHREAD_POOL_SIZE=navigator.hardwareConcurrency+2" -sALLOW_MEMORY_GROWTH -sMAXIMUM_MEMORY=4GB
             -sSTACK_SIZE=8MB -sENVIRONMENT=web,worker -sEXIT_RUNTIME=0 -sEXPORTED_RUNTIME_METHODS=FS "--shell-file=${CMAKE_CURRENT_SOURCE_DIR}/web/shell.html")

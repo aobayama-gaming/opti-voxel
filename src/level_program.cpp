@@ -65,6 +65,12 @@ Float4 up(const LevelProgram &p_prog, const OpPoint &p_at) {
     return Climate::up_value(p_prog.base.at(VoxelPos(p_at.p.x * s, p_at.p.y * s, p_at.p.z * s), p_at.m), p_at.m);
 }
 
+// POLE at the point: the base's latitude from its radius form on the node's level, its gradient per spacing of Λ_m.
+Float4 pole(const LevelProgram &p_prog, const Node &p_node, const OpPoint &p_at) {
+    const int64_t s = int64_t(1) << p_at.m;
+    return dflush(p_prog.base.pole_form(VoxelPos(p_at.p.x * s, p_at.p.y * s, p_at.p.z * s), p_node.level, p_at.m));
+}
+
 Float4 pick(const Node &p_node, const Float4 *p_in, const OpPoint &p_at) {
     return Float4{ 0.0f, 0.0f, 0.0f, float(Climate::pick_of(int(p_node.in.size()), p_in, p_at.p, p_at.m)) };
 }
@@ -90,6 +96,7 @@ const OpDef OPS[] = {
     { Op::RCP, "rcp", 1, OV_OP(return Climate::blend_rcp(p_in[0]);), "cl_rcp($0)" },
     { Op::NORM, "norm", 2, OV_OP(return Climate::blend_weight(p_in[0], p_in[1]);), "tp_norm($0, $1)" },
     { Op::PICK, "pick", -1, OV_OP(return pick(p_node, p_in, p_at);), "vec4(0.0, 0.0, 0.0, tp_pick($all, #n, @p))" },
+    { Op::POLE, "pole", 0, OV_OP(return pole(p_prog, p_node, p_at);), "cl_flush(base_pole(@p, @level, @m))" },
 };
 static_assert(sizeof(OPS) / sizeof(OPS[0]) == size_t(Op::COUNT), "one op table entry per Op");
 
@@ -349,7 +356,7 @@ void fold_lods(LevelProgram &r_prog) {
         Float4 v = ZERO;
         if (node.op == Op::NOTE) {
             lod = node.level + 1; // absent on a coarser run, whatever its warp
-        } else if (node.op == Op::UP || node.op == Op::PICK) {
+        } else if (node.op == Op::UP || node.op == Op::PICK || node.op == Op::POLE) {
             continue; // of the point
         } else {
             int zero = NO_LEVEL; // a product's: from where one factor is the constant 0

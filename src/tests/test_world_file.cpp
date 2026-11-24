@@ -31,7 +31,7 @@ TEST_CASE("WorldFile: every key is optional and defaults to the engine's default
 
 TEST_CASE("WorldFile: inline sections reach their fields") {
     WorldFile w;
-    CHECK(parse(R"({"engine": {"voxel_m": 0.05, "lods": 25}, "planet": {"radius_m": 2000, "ring_m": 9000},
+    CHECK(parse(R"({"engine": {"voxel_m": 0.05, "lods": 25}, "shape": {"kind": "torus", "radius_m": 2000, "ring_m": 9000},
         "look": {"atmosphere": false, "atmosphere_scale": 2, "clouds": false}, "feature_region": {"side_m": 8, "centre_m": [3, -4]},
         "instances": [{"species": "conifer", "cell_m": 5}, {"species": "boulder", "cell_m": 40, "share": 3}], "features": [{"kind": "lava_lake", "cell_m": 640, "chance": 0.6, "radius_m": [18, 45]}]})",
                   w) == ov::str());
@@ -96,7 +96,7 @@ TEST_CASE("WorldFile: a refused file leaves the world untouched and says why") {
     CHECK(ov::contains(parse(R"({"features": [{"kind": "lava_lake", "cell_m": 640, "radius_m": [5, 2]}]})", w), "0 < lo <= hi"));
     CHECK(ov::contains(parse(R"({"features": [{"kind": "lava_lake", "cell_m": 640, "chance": 2, "radius_m": [1, 2]}]})", w), "in [0, 1]"));
     CHECK(ov::contains(parse(R"({"features": {"radius_km": 2}})", w), "a list of features"));
-    CHECK(ov::contains(parse(R"({"planet": 5})", w), "not an object"));
+    CHECK(ov::contains(parse(R"({"shape": 5})", w), "not an object"));
     CHECK(ov::contains(parse(R"({"engine": 5})", w), "not a path or an object"));
     CHECK(ov::contains(parse(R"({"engine": {"voxel_m": 0}})", w), "positive"));
     CHECK(ov::contains(parse(R"({"biomes": 5})", w), "not a path or a list"));
@@ -105,12 +105,12 @@ TEST_CASE("WorldFile: a refused file leaves the world untouched and says why") {
     CHECK(ov::contains(parse(R"({"species": "res://worlds/nowhere.json"})", w), "cannot read"));
     CHECK(ov::contains(parse(R"({"engine": {"lods": 32}})", w), "lods must be"));
     CHECK(ov::contains(parse(R"({"engine": {"lods": 0}})", w), "lods must be"));
-    CHECK(ov::contains(parse(R"({"planet": {"radius_m": "6371000"}})", w), "not a number"));
-    CHECK(ov::contains(parse(R"({"planet": {"ring_m": 9000}})", w), "ring_m needs radius_m")); // was a flat world
-    CHECK(ov::contains(parse(R"({"planet": {"radius_m": -2000}})", w), "must be finite and >= 0"));
-    CHECK(ov::contains(parse(R"({"planet": {"radius_m": 1e999}})", w), "must be finite and >= 0"));
-    CHECK(ov::contains(parse(R"({"planet": {"radius_m": 2000, "ring_m": 2000}})", w), "ring must be at least")); // was a flat world
-    CHECK(ov::contains(parse(R"({"planet": {"radius_m": 1e20}})", w), "the radius must be in"));
+    CHECK(ov::contains(parse(R"({"shape": {"kind": "sphere", "radius_m": "6371000"}})", w), "not a number"));
+    CHECK(ov::contains(parse(R"({"shape": {"kind": "torus", "ring_m": 9000}})", w), "'kind' is flat")); // was a flat world
+    CHECK(ov::contains(parse(R"({"shape": {"kind": "sphere", "radius_m": -2000}})", w), "must be finite and >= 0"));
+    CHECK(ov::contains(parse(R"({"shape": {"kind": "sphere", "radius_m": 1e999}})", w), "must be finite and >= 0"));
+    CHECK(ov::contains(parse(R"({"shape": {"kind": "torus", "radius_m": 2000, "ring_m": 2000}})", w), "ring must be at least")); // was a flat world
+    CHECK(ov::contains(parse(R"({"shape": {"kind": "sphere", "radius_m": 1e20}})", w), "the radius must be in"));
     CHECK(ov::contains(WorldFile::load("res://worlds/does_not_exist.json", w), "cannot read"));
     CHECK(w.lods == 3);
 }
@@ -145,7 +145,7 @@ TEST_CASE("WorldFile: the project's worlds load and configure as themselves, no 
     for (const char *path : { "res://worlds/default.world.json", "res://worlds/cm.world.json", "res://worlds/lods25.world.json", "res://worlds/biomes.world.json",
                  "res://worlds/forest5cm.world.json",
                  "res://worlds/earth.world.json", "res://worlds/earth25.world.json", "res://worlds/tiny.world.json", "res://worlds/tiny_biomes.world.json",
-                 "res://worlds/shapes.world.json",
+                 "res://worlds/shapes.world.json", "res://worlds/ocean_test.planet.json",
                  "res://climate/world.json", "res://climate/example.json",
                  "res://climate/plain.json", "res://climate/shaped_test.json", "res://climate/fieldless_test.json", "res://climate/eight_biomes_test.json",
                  "res://climate/notes_test.json", "res://climate/programs_test.json", "res://climate/graph_test.json", "res://climate/caves_test.json" }) {
@@ -156,6 +156,122 @@ TEST_CASE("WorldFile: the project's worlds load and configure as themselves, no 
         ChunkParam param;
         CHECK(sdf.configure_world(w, param) == ov::str());
     }
+}
+
+// A planet file's keys: its seed, its shape, its sea, its climate offsets merged into the fields, its air.
+TEST_CASE("WorldFile: a planet file's seed, shape, sea, climate offsets and air") {
+    WorldFile w;
+    CHECK(parse(R"({"engine": {"voxel_m": 0.05}, "seed": 48211, "shape": {"kind": "sphere", "radius_m": 2000},
+        "sea": {"level_m": -4, "water": {"deep": [0, 0.1, 0.2], "clarity_m": 8}, "shore": {"above_m": 1.5, "sand": [1, 0.9, 0.8]}},
+        "climate": {"fields": [{"name": "temperature"}, {"name": "humidity"}], "temperature": {"mean": 0.4, "poles": -0.9}, "humidity": {"mean": -0.3}},
+        "atmosphere": {"density": 0.5, "tint": [1, 0.8, 0.6]}, "biomes": [{"name": "a"}]})",
+                  w) == ov::str());
+    CHECK(w.seed == 48211u);
+    CHECK(w.planet_radius_m == 2000.0);
+    CHECK(w.planet_ring_m == 0.0);
+    CHECK(w.sea.on);
+    CHECK(w.sea.level_m == -4.0);
+    CHECK(w.sea.deep == Float3{ 0.0f, 0.1f, 0.2f });
+    CHECK(w.sea.shallow == WorldFile::Sea().shallow); // its default
+    CHECK(w.sea.clarity_m == 8.0);
+    CHECK(w.sea.shore_below_m == 2.0);
+    CHECK(w.sea.shore_above_m == 1.5);
+    CHECK(w.sea.sand == Float3{ 1.0f, 0.9f, 0.8f });
+    CHECK(w.atmosphere_density == 0.5);
+    CHECK(w.atmosphere_tint == Float3{ 1.0f, 0.8f, 0.6f });
+    const ov::Value &fields = w.climate_table["fields"];
+    CLIMATE_REQUIRE(fields.size() == 2);
+    CHECK(fields[size_t(0)]["mean"].as_double() == 0.4);
+    CHECK(fields[size_t(0)]["poles"].as_double() == -0.9);
+    CHECK(fields[size_t(1)]["mean"].as_double() == -0.3);
+    CHECK(!fields[size_t(1)].has("poles"));
+    // Without the keys: seed 0 (the identity), no sea, Earth's air.
+    CHECK(parse("{}", w) == ov::str());
+    CHECK(w.seed == 0u);
+    CHECK(!w.sea.on);
+    CHECK(w.atmosphere_density == 1.0);
+    CHECK(w.atmosphere_tint == Float3{ 1.0f, 1.0f, 1.0f });
+    // A flat shape is the default datum; the old climate file object (its fields only) still reads.
+    CHECK(parse(R"({"shape": {"kind": "flat"}, "climate": {"fields": [{"name": "t"}]}, "biomes": [{"name": "a"}]})", w) == ov::str());
+    CHECK(w.planet_radius_m == 0.0);
+    CHECK(w.climate_table["fields"].size() == 1);
+}
+
+TEST_CASE("WorldFile: a planet file's refusals say why") {
+    WorldFile w;
+    w.lods = 3;
+    CHECK(ov::contains(parse(R"({"planet": {"radius_m": 2000}})", w), "'planet' is now 'shape'"));
+    CHECK(ov::contains(parse(R"({"shape": {"radius_m": 2000}})", w), "'kind' is flat")); // no kind
+    CHECK(ov::contains(parse(R"({"shape": {"kind": "flat", "radius_m": 2000}})", w), "'kind' is flat"));
+    CHECK(ov::contains(parse(R"({"shape": {"kind": "sphere", "radius_m": 2000, "ring_m": 9000}})", w), "'kind' is flat"));
+    CHECK(ov::contains(parse(R"({"seed": -1})", w), "'seed' is a whole number"));
+    CHECK(ov::contains(parse(R"({"seed": 1.5})", w), "'seed' is a whole number"));
+    CHECK(ov::contains(parse(R"({"sea": {"water": {}}})", w), "'level_m' is required"));
+    CHECK(ov::contains(parse(R"({"sea": {"level_m": 0, "tide": 1}})", w), "unknown key 'tide'"));
+    CHECK(ov::contains(parse(R"({"sea": {"level_m": 0, "water": {"deep": [1, 2]}}})", w), "three numbers"));
+    CHECK(ov::contains(parse(R"({"sea": {"level_m": 0, "shore": {"above_m": -1}}})", w), ">= 0"));
+    CHECK(ov::contains(parse(R"({"atmosphere": {"density": -1}})", w), "'density' is a number >= 0"));
+    CHECK(ov::contains(parse(R"({"climate": {"fields": [{"name": "t"}], "humidity": {"mean": 1}}, "biomes": [{"name": "a"}]})", w), "'humidity' is not a field"));
+    CHECK(ov::contains(parse(R"({"climate": {"fields": [{"name": "t"}], "t": {"median": 1}}, "biomes": [{"name": "a"}]})", w), "unknown key 'median'"));
+    CHECK(ov::contains(parse(R"({"climate": {"fields": [{"name": "t"}], "t": {"poles": 1}}, "biomes": [{"name": "a"}]})", w), "poles need a planet"));
+    CHECK(ov::contains(parse(R"({"shape": {"kind": "torus", "radius_m": 2000, "ring_m": 9000}, "climate": {"fields": [{"name": "t"}], "t": {"poles": 1}}, "biomes": [{"name": "a"}]})", w),
+            "poles on a torus"));
+    CHECK(ov::contains(parse(R"({"biomes": [{"name": "a"}, {"name": "b"}]})", w), "two default biomes"));
+    CHECK(ov::contains(parse(R"({"biomes": ["res://biomes/nowhere.biome.json"]})", w), "cannot read"));
+    CHECK(w.lods == 3); // untouched
+    // A graph reading the sea in a world without one: the compiler's refusal (configure's world error).
+    CHECK(parse(R"({"biomes": [{"name": "a", "graph": {"nodes": [{"id": "s", "kind": "sea"}, {"id": "o", "kind": "output", "height": "s"}]}}]})", w) == ov::str());
+    SDFCascade sdf;
+    ChunkParam param;
+    CHECK(ov::contains(sdf.configure_world(w, param), "the world has no sea"));
+}
+
+// "biomes" as a list of biome files (and objects), the default one moved last: the test planet.
+TEST_CASE("WorldFile: biomes from single-biome files, the default moved last") {
+    WorldFile w;
+    CHECK(WorldFile::load("res://worlds/ocean_test.planet.json", w) == ov::str());
+    const ov::Value &biomes = w.climate_table["biomes"];
+    CLIMATE_REQUIRE(biomes.size() == 3);
+    CHECK(biomes[size_t(0)]["name"].as_str() == "ocean");
+    CHECK(biomes[size_t(1)]["name"].as_str() == "land");
+    CHECK(biomes[size_t(2)]["name"].as_str() == "rest"); // listed first, the default
+    CHECK(!biomes[size_t(2)].has("at"));
+    CHECK(w.seed == 48211u);
+    CHECK(w.sea.on);
+    SDFCascade sdf;
+    ChunkParam param;
+    CHECK(sdf.configure_world(w, param) == ov::str());
+    CHECK(sdf.climate_ground().seed == 48211u);
+    CHECK(sdf.climate_ground().sea_level_m == 0.0);
+    CHECK(sdf.climate_ground().pole_level >= 0);
+    CLIMATE_REQUIRE(sdf.get_climate() != nullptr);
+    CHECK(sdf.get_climate()->fields[0].poles == -0.9f);
+    CHECK(sdf.get_climate()->fields[0].mean == 0.2f);
+}
+
+// No tree or rock under the sea: a site's base below the sea level plus the shore's above_m is refused, on the CPU
+// after either walk (SDFTable::site_allowed), so walk_gpu 0 and 1 keep the same sites.
+TEST_CASE("SDFTable: no site under the sea and its shore") {
+    WorldFile w;
+    CHECK(WorldFile::load("res://worlds/ocean_test.planet.json", w) == ov::str());
+    SDFCascade sdf;
+    ChunkParam param;
+    CHECK(sdf.configure_world(w, param) == ov::str());
+    const BaseSurface &base = sdf.get_base();
+    CLIMATE_REQUIRE(base.curved());
+    const int64_t pole = std::llround(w.planet_radius_m / w.voxel_m); // the +y pole's voxel (the centre at 0)
+    CHECK(w.sea.shore_above_m == 3.0); // 60 voxels of 5 cm
+    CHECK(!sdf.site_allowed(VoxelPos(0, pole - 200, 0))); // under the sea
+    CHECK(!sdf.site_allowed(VoxelPos(0, pole, 0))); // at the level
+    CHECK(!sdf.site_allowed(VoxelPos(0, pole + 50, 0))); // on the shore's band (2.5 m)
+    CHECK(sdf.site_allowed(VoxelPos(0, pole + 70, 0))); // 3.5 m
+    CHECK(sdf.site_allowed(VoxelPos(0, pole + 2000, 0)));
+    // The same world without a sea: everywhere.
+    w.sea = WorldFile::Sea();
+    w.climate_table["biomes"].at(0).erase("graph"); // the ocean's graph reads the sea
+    SDFCascade dry;
+    CHECK(dry.configure_world(w, param) == ov::str());
+    CHECK(dry.site_allowed(VoxelPos(0, pole - 200, 0)));
 }
 
 namespace {

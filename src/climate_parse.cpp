@@ -20,12 +20,15 @@ namespace Climate {
 //   { "fields": [ field... ], "biomes": [ biome..., default biome ] }
 //   field:  { "name": "temperature", "seed": 7 (optional, else a hash of the name),
 //             "bands": [ { "wavelength_m": 5000, "amp": 1 } | { "from_m": 1600, "to_m": 210000, "amp": 1, "persistence": 1 (optional) } ],
-//             "terms": [ { "source": "<earlier field>", "x": 0.5 } ] }
+//             "terms": [ { "source": "<earlier field>", "x": 0.5 } ], "mean": 0.4 (optional), "poles": -0.9 (optional) }
 //     A range is every octave from from_m to to_m that the ground has (its octaves depend on the LOD count: the
 //     table covers the whole spectrum at any count), amp at to_m (the coarsest) times persistence per finer octave.
 //     Octave k's seed and lattice are make_octave(field seed, k): editing one band leaves the others' unchanged.
 //     A term adds x times an earlier field's value (the ground can't be one: it depends on the weights, which depend on
-//     the fields).
+//     the fields). "mean" adds a constant; "poles" times the latitude n_y^2 of a sphere's up (0 at the equator, 1 at its
+//     poles; refused on a base without poles: the flat world, a torus). A planet file sets both per field (WorldFile).
+//     Every seed (a field's, a note's) is mixed with the planet's (Ground::seed, mix_seed): another planet, other noises
+//     from the same table.
 //   biome:  { "name": "volcanic",
 //             "at": { "temperature": [0.5, 0.3] (centre, span), "humidity": { "min": 0.1, "max": 0.5 } },
 //             "graph": { "nodes": [ node... ] },
@@ -71,6 +74,8 @@ namespace Climate {
 //              cubic, constant past the ends).
 //     "up":    the sample's height above the base (metres as LOD0 voxels): a cave is "smin" (k_m) of the mix and
 //              up - C, C a carve density (> 0 in the air it adds, its band's tent built from the depth mix - up).
+//     "sea":   the world's sea level (its "sea" level_m, as LOD0 voxels), a constant: an ocean floor is "sea" minus a
+//              depth plus notes. Refused in a world without a sea.
 //     "constant" (value_m), "field" (a field's value), "add", "subtract", "multiply", "min", "max" (a, b), "smin", "smax"
 //              (a, b, k_m).
 //     "output": "height": any node.
@@ -95,6 +100,7 @@ const std::vector<GraphKind> &graph_kinds() {
         { "smax", { "a", "b" }, { { "k_m", "number", true, NAN, "" } } },
         { "curve", { "in" }, { { "points", "points", true, NAN, "" } } },
         { "up", {}, {} },
+        { "sea", {}, {} },
         { "output", { "height" }, {} },
     };
     return KINDS;
@@ -115,6 +121,10 @@ uint32_t name_hash(const ov::str &p_name) {
         h = (h ^ uint8_t(p_name[i])) * 16777619u;
     }
     return h;
+}
+
+uint32_t mix_seed(uint32_t p_seed, uint32_t p_planet) {
+    return p_planet == 0u ? p_seed : ExactNoise::hash3(p_seed, p_planet, PLANET_SEED_SALT).x;
 }
 
 namespace {
@@ -404,13 +414,18 @@ private:
     }
 
     void field(const ov::Value &p_d, int64_t p_i) {
-        if (!keys(p_d, ov::format("field %d", p_i), { "name", "seed", "bands", "terms" })) {
+        if (!keys(p_d, ov::format("field %d", p_i), { "name", "seed", "bands", "terms", "mean", "poles" })) {
             return;
         }
         Field f;
         f.name = text(p_d, "name", ov::format("field %d", p_i));
         const ov::str where = "field '" + f.name + ov::str("'");
-        f.seed = p_d.has("seed") ? seed(p_d, where) : name_hash(f.name);
+        f.seed = mix_seed(p_d.has("seed") ? seed(p_d, where) : name_hash(f.name), ground.seed);
+        f.mean = float(number(p_d, "mean", where, 0.0));
+        f.poles = float(number(p_d, "poles", where, 0.0));
+        if (f.poles != 0.0f && ground.pole_level < 0) {
+            fail(where, "'poles' needs a sphere's poles (the flat base has none; a torus's latitude isn't written yet).");
+        }
         const ov::Value band_list = array(p_d, "bands", where);
         const ov::str band_where = where + ov::str(" band");
         for (int64_t i = 0; i < int64_t(band_list.size()) && error.empty(); i++) {
@@ -672,6 +687,11 @@ ov::str validate_field(const Table &p_table, int p_i) {
         }
         if (b.amp != 0.0f && !ExactNoise::in_exact_range(b.amp)) {
             return where + ov::format("octave k = %d: amplitude %s outside [2^-16, 2^40].", b.k, b.amp);
+        }
+    }
+    for (const float c : { f.mean, f.poles }) {
+        if (c != 0.0f && !moderate(c)) {
+            return where + ov::format("mean or poles %s outside [2^-40, 2^40].", c);
         }
     }
     for (const Term &t : f.terms) {

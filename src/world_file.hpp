@@ -15,19 +15,38 @@
 //
 //   {
 //     "engine": "engine.json" or { "voxel_m": 0.05, "lods": 25 },   the master variables
-//     "climate": "climate.json" or { "fields": [ field... ] },       the fields that place the biomes; none: no fields
-//     "planet": { "radius_m": 0, "ring_m": 0 },
+//     "seed": 48211,                                                 the planet's: every note and field mixed with it
+//     "shape": { "kind": "flat" | "sphere" | "torus", "radius_m": 2000, "ring_m": 9000 },
+//     "sea": { "level_m": 0, "water": { "deep": [r, g, b], "shallow": [r, g, b], "clarity_m": 12 },
+//              "shore": { "below_m": 2, "above_m": 3, "sand": [r, g, b] } },
+//     "climate": "climate.json" or { "fields": "fields.json" or [ field... ],
+//                                    "<field name>": { "mean": 0.4, "poles": -0.9 }... },
+//     "atmosphere": { "density": 1, "tint": [1, 1, 1] },
 //     "look": { "atmosphere": true, "atmosphere_scale": 0, "clouds": true },
 //     "instances": [ { "species": "conifer", "cell_m": 5, "share": 1 }... ],
 //     "features": [ { "kind": "lava_lake", "cell_m": 640, "chance": 0.6, "radius_m": [18, 45] }... ],
 //     "feature_region": { "side_m": 0, "centre_m": [-50, -150] },
 //     "species": "species.json" or [ species... ],
-//     "biomes": "ground.biomes.json" or [ biome..., default biome ],
+//     "biomes": "ground.biomes.json" or [ biome or "<name>.biome.json"..., default biome ],
 //     "instance_band": true,
 //     "edits": "<name>.edits.json" or { "version": 1, "edits": [ edit... ] }
 //   }
 //
-// A path is relative to the file naming it, or absolute (res://, /...); "species" and "biomes" files hold the list.
+// A planet file (*.planet.json) is a world file: one format, one loader. "seed" (a whole number in [0, 2^32); 0 or
+// absent: the identity, the table's own noises) gives each planet its own noises from the same biomes (Climate::mix_seed;
+// the instance and feature scatters keep theirs for now). "shape" is the base: flat (the datum, no radius), a sphere of
+// radius_m centred on the voxel (0, 0, 0), its +y pole at y = radius, or a torus round y, ring_m its ring and radius_m its
+// tube (BaseSurface::planet refuses one it can't hold); the old "planet" key is refused (renamed "shape", with a kind).
+// "sea" (none without it): its level_m above the base, what a graph's "sea" node reads and under which (plus the shore's
+// above_m) no tree or rock grows (SDFTable::set_site_floor_m); its water (linear colours, the depth of clear water) and
+// shore (the sand band's depth below and height above the level, its colour) are the sea pass's look. "climate": its
+// fields (a list, or a file holding it), and per field name a mean (added) and poles (times the latitude n_y^2: 0 at the
+// equator, 1 at the poles; refused on a flat base and a torus), merged into the fields (climate_parse.cpp); a field name
+// that isn't one is refused. "atmosphere": the air's density (times every scattering and absorption coefficient) and the
+// tint of its Rayleigh scattering (AtmosphereMedium::for_base); "look" whether there is air and clouds, and their scale.
+// A path is relative to the file naming it, or absolute (res://, /...); "species" and "biomes" files hold the list, a
+// string in a "biomes" list a file holding one biome. The default biome (the one without "at") is moved last; two are
+// refused.
 // "fields" and "biomes" are the climate table of climate_parse.cpp (each biome a graph of notes, what it grows, its
 // features), merged here and compiled there (at the engine's values). A world names its ground: without biomes the
 // cascade refuses it (SDFCascade::attach_climate); GROUND_BIOMES is the template ground's. "species" are what the
@@ -60,11 +79,28 @@ struct WorldFile {
     double voxel_m = 0.5; // LOD 0
     int lods = 15; // LODs 0 .. lods - 1 (at most ChunkMath::MAX_LOD_NUMBERS)
     ov::Value climate_table = ov::Value::object(); // Terrain::compile's input, empty for none
+    // "shape": a sphere's radius (a torus's tube), a torus's ring; 0 the flat datum.
     double planet_radius_m = 0.0; // > 0: a planet of this radius centred on the voxel (0, 0, 0), its +y pole at y = radius; 0 flat
     double planet_ring_m = 0.0; // > 0 with a planet: a torus round y, this ring's radius, planet_radius_m its tube's
+    uint32_t seed = 0; // "seed" (Climate::Ground::seed)
+    // "sea": its level above the base and its look (the sea pass's), on false without the key.
+    struct Sea {
+        bool on = false;
+        double level_m = 0.0;
+        Float3 deep{ 0.02f, 0.09f, 0.16f };
+        Float3 shallow{ 0.1f, 0.45f, 0.45f };
+        double clarity_m = 12.0;
+        double shore_below_m = 2.0;
+        double shore_above_m = 3.0;
+        Float3 sand{ 0.76f, 0.7f, 0.5f };
+    };
+    Sea sea;
     // The volumetric atmosphere over the base (Atmosphere) and its scale (AtmosphereMedium::for_base: 0 from the base).
     bool atmosphere = true;
     double atmosphere_scale = 0.0;
+    // "atmosphere": the air's density and its Rayleigh tint (AtmosphereMedium::for_base; 1: Earth's air).
+    double atmosphere_density = 1.0;
+    Float3 atmosphere_tint{ 1.0f, 1.0f, 1.0f };
     bool clouds = true; // the volumetric clouds in it (Clouds), their layer's scale as the atmosphere's
     SDFTable::Region feature_region; // SDFTable::set_feature_region
     std::vector<Climate::InstanceShare> instances; // SDFTable::set_instances

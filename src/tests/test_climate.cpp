@@ -204,7 +204,7 @@ TEST_CASE("ClimateReport: check_world refuses bad JSON and a refused table, and 
                 p_span + R"(]}, "graph": {"nodes": [{"id": "c", "kind": "constant", "value_m": )" + p_value_m + R"(},
                 {"id": "out", "kind": "output", "height": "c"}]}}, {"name": "b"}]})";
     };
-    const char *planet = R"("planet": {"radius_m": 2000},)";
+    const char *planet = R"("shape": {"kind": "sphere", "radius_m": 2000},)";
     CHECK(ClimateReport::check_world(world("", "0.5"), "") == ov::str());
     CHECK(!ClimateReport::check_world("{\"fields\": [", "").empty());
     CHECK(!ClimateReport::check_world("[1, 2]", "").empty());
@@ -212,7 +212,7 @@ TEST_CASE("ClimateReport: check_world refuses bad JSON and a refused table, and 
     CHECK(ClimateReport::check_world(world(planet, "0.5"), "") == ov::str());
     CHECK(ClimateReport::check_world(world("", "0.5", "-2500"), "") == ov::str());
     CHECK(ov::contains(ClimateReport::check_world(world(planet, "0.5", "-2500"), ""), "past the planet's centre"));
-    CHECK(ov::contains(ClimateReport::check_world(world(R"("planet": {"ring_m": 5000},)", "0.5"), ""), "needs radius_m"));
+    CHECK(ov::contains(ClimateReport::check_world(world(R"("shape": {"kind": "torus", "ring_m": 5000},)", "0.5"), ""), "'kind' is flat"));
 }
 
 // The biome mixer's maps are the engine's: a world in memory sampled by the report's own code, the same bits twice, a
@@ -651,4 +651,103 @@ TEST_CASE("Cascade: several ground notes on one lattice, one band per field") {
         Cascade::for_each_point(box, [&](const Vector3i64 &p_p, int64_t p_i) { bad += ExactNoise::same_bits(Terrain::point(two, p_p, 1).ground, v.at(two.output, p_i)) ? 0 : 1; });
         CHECK(bad == 0);
     }
+}
+
+// The "sea" node: the world's sea level as LOD0 voxels, a constant; refused in a world without a sea.
+TEST_CASE("Climate: a sea node reads the world's sea level") {
+    GroundFixture g(0.5, 15);
+    const char *table = R"({"biomes": [{"name": "a", "graph": {"nodes": [{"id": "s", "kind": "sea"},
+        {"id": "d", "kind": "constant", "value_m": -60}, {"id": "f", "kind": "add", "a": "s", "b": "d"}, {"id": "o", "kind": "output", "height": "f"}]}}]})";
+    Table t;
+    Terrain::LevelProgram prog;
+    CHECK(ov::contains(parse_json(table, g.ground, t, prog), "the world has no sea"));
+    Ground sea = g.ground;
+    sea.sea_level_m = 10.0; // 20 voxels of 0.5 m
+    CHECK_OR_RETURN(parse_json(table, sea, t, prog) == ov::str());
+    CHECK(Terrain::point(prog, Vector3i64(3, -7, 11), 0).ground.w == -100.0f); // (10 - 60) m
+    CHECK(Terrain::point(prog, Vector3i64(-5, 2, 0), 6).ground.w == -100.0f);
+}
+
+namespace {
+
+// A table of one field (a band of 400 m: octave 10 at 0.5 m, level 7; p_offsets its extra keys) and one biome of two
+// notes (one warped: its reads + 0, 1, 2) placed on it, and the default.
+ov::str seeded_table(const char *p_offsets = "") {
+    return ov::str(R"({"fields": [{"name": "t", "bands": [{"wavelength_m": 400, "amp": 1}])") + p_offsets +
+            R"(}], "biomes": [{"name": "a", "at": {"t": [0, 0.5]}, "graph": {"nodes": [
+        {"id": "c", "kind": "note", "wavelength_m": 1600, "seed": 3, "amp_m": 4}, {"id": "w", "kind": "warp", "in": "c", "amount_m": 4},
+        {"id": "n", "kind": "note", "wavelength_m": 400, "seed": 1, "amp_m": 8, "warp": "w"},
+        {"id": "o", "kind": "output", "height": "n"}]}}, {"name": "b"}]})";
+}
+
+std::vector<uint32_t> note_seeds(const Terrain::LevelProgram &p_prog) {
+    std::vector<uint32_t> seeds;
+    for (const Terrain::Node &n : p_prog.nodes) {
+        if (n.op == Terrain::Op::NOTE) {
+            seeds.push_back(n.band.seed);
+        }
+    }
+    return seeds;
+}
+
+} // namespace
+
+// A planet's seed: 0 is the identity (every world without one keeps its notes: the program pins don't move), another
+// seed draws other noises from the same table, node for node.
+TEST_CASE("Climate: the planet's seed mixes every note and field band, 0 the identity") {
+    for (const uint32_t s : { 0u, 1u, 59943u, 0xFFFFFFFFu }) {
+        CHECK(mix_seed(s, 0u) == s);
+        CHECK(mix_seed(s, 48211u) != s);
+    }
+    GroundFixture g(0.5, 15);
+    Table t0, t1, t2;
+    Terrain::LevelProgram p0, p1, p2;
+    CHECK_OR_RETURN(parse_json(seeded_table(), g.ground, t0, p0) == ov::str());
+    CHECK(g.ground.seed == 0u);
+    CHECK(t0.fields[0].seed == name_hash("t"));
+    CLIMATE_REQUIRE(!t0.fields[0].bands.empty());
+    CHECK(t0.fields[0].bands[0].seed == ExactNoise::make_octave(name_hash("t"), 10u, 10, 1.0f).seed);
+    Ground planet = g.ground;
+    planet.seed = 48211u;
+    CHECK_OR_RETURN(parse_json(seeded_table(), planet, t1, p1) == ov::str());
+    CHECK(t1.fields[0].seed == mix_seed(name_hash("t"), 48211u));
+    CHECK(p1.nodes.size() == p0.nodes.size());
+    const std::vector<uint32_t> a = note_seeds(p0), b = note_seeds(p1);
+    CLIMATE_REQUIRE(a.size() == b.size());
+    CHECK(a.size() >= 5); // the field's band, the warp's three reads of c, n
+    for (size_t i = 0; i < a.size(); i++) {
+        CHECK(a[i] != b[i]);
+    }
+    // The same seed twice: the same notes.
+    CHECK_OR_RETURN(parse_json(seeded_table(), planet, t2, p2) == ov::str());
+    CHECK(note_seeds(p2) == b);
+}
+
+// A field's mean is a constant added last: at the field's own lattice points its value plus the mean, its gradient the
+// same bits; a mean of 0 adds no term (the generic text would keep it).
+TEST_CASE("Climate: a field's mean shifts it exactly, and only a mean that isn't 0 is a term") {
+    GroundFixture g(0.5, 15);
+    Table t0, t1, tz;
+    Terrain::LevelProgram p0, p1, pz;
+    CHECK_OR_RETURN(parse_json(seeded_table(), g.ground, t0, p0) == ov::str());
+    CHECK_OR_RETURN(parse_json(seeded_table(R"(, "mean": 0.375)"), g.ground, t1, p1) == ov::str());
+    CHECK_OR_RETURN(parse_json(seeded_table(R"(, "mean": 0)"), g.ground, tz, pz) == ov::str());
+    CHECK(t1.fields[0].mean == 0.375f);
+    CHECK(pz.nodes.size() == p0.nodes.size());
+    const int level = p0.nodes[size_t(p0.fields[0])].level; // 7: the band's
+    for (const Vector3i64 &q : { Vector3i64(0, 0, 0), Vector3i64(3, -5, 2), Vector3i64(-9, 1, 4) }) {
+        for (const int lod : { 0, 3 }) {
+            const int64_t s = int64_t(1) << (level - lod); // a point of the field's lattice, on Λ_lod
+            const Vector3i64 p(q.x * s, q.y * s, q.z * s);
+            Float4 v0, v1;
+            Terrain::point_nodes(p0, p, lod, &p0.fields[0], 1, &v0);
+            Terrain::point_nodes(p1, p, lod, &p1.fields[0], 1, &v1);
+            CHECK(float_bits(v1.w) == float_bits(Cascade::flush_value(v0.w + 0.375f)));
+            CHECK(float_bits(v1.x) == float_bits(v0.x));
+            CHECK(float_bits(v1.y) == float_bits(v0.y));
+            CHECK(float_bits(v1.z) == float_bits(v0.z));
+        }
+    }
+    // Poles on a base without them: refused.
+    CHECK(ov::contains(parse_json(seeded_table(R"(, "poles": 1)"), g.ground, t1, p1), "'poles' needs a sphere's poles"));
 }

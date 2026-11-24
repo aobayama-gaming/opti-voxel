@@ -40,6 +40,9 @@ using ExactNoise::Float4;
 //   NORM   Climate::blend_weight(in[0], in[1]): a kernel over the total, capped at 1.
 //   PICK   a biome drawn by its inputs (the biome weights; a hash_cell of the point, Climate::pick_of): a discrete
 //          value, carried by copy (the floor parent's), never interpolated.
+//   POLE   the latitude n_y^2 of a sphere's up (a field's "poles"; BaseSurface::pole_form): read from the base's radius
+//          form on the node's own level, its gradient scaled to the point's level, so a point gets the same bits from every
+//          LOD. Its level is fixed by the compiler (never NO_LEVEL): computed there, subdivided below.
 enum class Op : uint8_t {
     NOTE,
     CONST,
@@ -57,6 +60,7 @@ enum class Op : uint8_t {
     RCP,
     NORM,
     PICK,
+    POLE,
     COUNT,
 };
 

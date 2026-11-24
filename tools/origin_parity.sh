@@ -48,7 +48,7 @@ world = json.load(open(file))
 engine = world.get("engine", {})
 if isinstance(engine, str):
     engine = json.load(open(os.path.join(os.path.dirname(file), engine)))
-print(engine.get("voxel_m", 0.5), world.get("planet", {}).get("radius_m", 0), engine.get("lods", 15))
+print(engine.get("voxel_m", 0.5), world.get("shape", {}).get("radius_m", 0), engine.get("lods", 15))
 PY
 )"
 # Origins and cameras in voxels. R = the root chunk span (2^LODS ids of 14 voxels, chunk_size 32,

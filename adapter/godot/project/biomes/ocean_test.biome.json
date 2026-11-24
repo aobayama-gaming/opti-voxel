@@ -1,0 +1,17 @@
+{
+ "comment": "The ocean of ocean_test.planet.json, deliberately plain: a floor 60 m under the sea level, two notes on it, placed on the wet side. A check fixture (the sea node, a biome file), not a designed biome.",
+ "name": "ocean",
+ "debug_color": "#2a4a7a",
+ "surface": {"flat": "#6a6458", "steep": "#4a463e"},
+ "at": {"humidity": [0.6, 0.5]},
+ "graph": {
+  "nodes": [
+   {"id": "level", "kind": "sea"},
+   {"id": "depth", "kind": "constant", "value_m": -60},
+   {"id": "swell", "kind": "note", "wavelength_m": 409.6, "seed": 7211, "amp_m": 20},
+   {"id": "ripple", "kind": "note", "wavelength_m": 51.2, "seed": 7212, "amp_m": 2},
+   {"id": "floor", "kind": "mix", "rows": [{"in": "level"}, {"in": "depth"}, {"in": "swell"}, {"in": "ripple"}]},
+   {"id": "out", "kind": "output", "height": "floor"}
+  ]
+ }
+}

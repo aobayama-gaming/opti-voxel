@@ -5,7 +5,8 @@
   "lods": 15
  },
  "biomes": "res://worlds/ground.biomes.json",
- "planet": {
+ "shape": {
+  "kind": "sphere",
   "radius_m": 6371000
  }
 }

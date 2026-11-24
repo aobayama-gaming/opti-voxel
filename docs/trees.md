@@ -44,7 +44,10 @@ Library-built instances placed by the stream: trees, the far-field moment blobs,
   `SDFBase::up_at(base)` (+y on the flat world, the one source of "up" for placement; `UP_Y` keeps the records from
   before, pinned by a hash). The sources have no end: the trees and rocks grow wherever the ground is (the world file's
   `zone` square is gone; every walk of a source starts at its `start_level`, nodes of at most `SITE_WALK_NODE_M`, so a site is its cell's alone, `docs/instance-stream.md`),
-  the lake keep-out the distance to a lake's axis (`LavaPool::near`, the sources' `accept`). A whole build (the stream's
+  the lake keep-out the distance to a lake's axis (`LavaPool::near`, the sources' `accept`), and **no tree or rock under
+  the sea**: a site whose base altitude is under the sea level plus the shore's `above_m` is refused
+  (`SDFTable::site_allowed`, set by `set_site_floor_m` from the world's `sea`). Both run on the CPU after either walk,
+  so `walk_gpu=0` and `1` keep the same sites. Biome features (lakes, islands) aren't refused under the sea. A whole build (the stream's
   oracle) walks a box the caller gives (`SDFTable::set_whole_region`: a square of `side_m` round the ground under
   `centre_m` of the base's tangent plane, `ground_at`, over 4 half sides of height up and down). Hashing 3D cells moved every tree,
   the coarse-plane projection (feature/cell-sites) again: forest5cm is another forest than before. **What grows where

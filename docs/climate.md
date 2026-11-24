@@ -25,7 +25,19 @@ continents) are macro inputs until the planned macro engine computes them.
 
 1. **Fields** (`Field`): a few slow scalars, each a sum of plain perlin octaves of its own seed, plus linear terms on
    earlier fields (`coef * an earlier field`, in list order): temperature, humidity, wind. The v1 term on the ground
-   is gone: the ground depends on the weights, which depend on the fields (the parser says so).
+   is gone: the ground depends on the weights, which depend on the fields (the parser says so). A field's `mean` adds a
+   constant (a term only when it isn't 0, so the pins don't move) and its `poles` times the latitude: the op `POLE`,
+   n_y² of a sphere's up (0 on the equator, 1 at the poles; `BaseSurface::pole_form`, GLSL `base_pole`, op for op).
+   `POLE` sits on a fixed level, the field's, or the coarsest level where the base's radius form is exact
+   (`Ground::pole_level`, `BaseSurface::pole_lod`) if that is finer, so a point gets the same bits from every LOD. Poles
+   need a sphere: the flat base has none and a torus's latitude (the tube's angle) isn't written yet (refused). A planet
+   file writes both as per-field offsets (`"climate": {"fields": [...], "temperature": {"mean", "poles"}}`,
+   `docs/terrain.md`).
+   **Seeds:** the planet's `seed` (`Ground::seed`) mixes every note's and field's seed (`Climate::mix_seed`:
+   `hash3(seed, planet, PLANET_SEED_SALT)`), 0 the identity, so one biome file grows another ground on another planet
+   and every world without a seed keeps its bits. Instance scatter seeds aren't mixed yet (a planet's trees stand where
+   another's would). **The `sea` node:** the world's sea level (`sea.level_m`) as a constant of LOD-0 voxels, for a
+   graph to stand under; a world without a sea refuses it.
 2. **Weights**: a biome is a place in the fields' space, `"at"`: a centre and a span on each field it names
    (`[centre, span]`, or `{min, max}`: their middle and half their gap). Its kernel `k_b` is the product over those
    fields of `smoothstep(clamp((1 - u^2) * 2, 0, 1))`, `u = (f - centre) / span` (`Climate::axis_factor`): on each
@@ -152,13 +164,18 @@ computes no terrain and has no node kind the engine hasn't.
   too: `worlds/tiny_biomes.world.json` is a blank 2 km planet, five placeholder biomes on the template ground over three
   fields of 819.2 + 409.6 m), as it is (every biome's `graph`, place, surface, clouds, instances, features, every other
   key), with the mixer's keys beside it (`fields`, its climate's; `path`, the file it came from; `current`, `mode`,
-  `view`, `mixer_version`). A biome's `at` is kept as `[centre, span]`. The world's engine section sets the octaves
-  (`EngineInfo.use_world`); a planet's views start on the whole planet. The World mode's fields panel
-  (`fields_panel.gd`) edits the fields' bands (each shown with the octave the engine snaps it to), adds and removes
-  fields, and sets the planet's radius (written into the shaders: a recompile). The world autosaves (user://), and *Export* (World menu) writes it over its own file once `ClimateReportNode.check`
+  `view`, `mixer_version`, `sources`: the biome files and the biomes' list file it read). Biome files are read inline
+  (the default moved last), a fields file too, each field's `mean` / `poles` kept on it. A biome's `at` is kept as
+  `[centre, span]`. The world's engine section sets the octaves (`EngineInfo.use_world`); a planet's views start on the
+  whole planet. The World mode's fields panel (`fields_panel.gd`) edits the fields' bands (each shown with the octave
+  the engine snaps it to) and their mean and poles (poles on a sphere only), adds and removes fields, and sets the
+  shape's radius, the seed and the sea (on or off, its level; debounced, a recompile). The world autosaves (user://),
+  and *Export* (World menu) writes it over its own file once `ClimateReportNode.check`
   (`ClimateReport::check_world`: the whole file, at its engine and over its planet, which refuses a ground under its
-  centre the flat world takes) accepts it: the file is the world minus the mixer's keys (a climate file it names untouched;
-  edited fields then go inline). The CPU maps (`ClimateReport::preview`) are sampled over the world's planet too. Numbers keep 7 significant digits; a value fits on one line up to 120
+  centre the flat world takes) accepts it: the file is the world minus the mixer's keys (a file it names, biome, biome
+  list, climate or fields, kept while its content is unchanged, else inline: the mixer never writes a file another
+  world may name). *New planet* gives the world a random seed; *Freeze* writes `<name>.frozen.world.json` next to it,
+  everything inline. The CPU maps (`ClimateReport::preview`) are sampled over the world's planet too. Numbers keep 7 significant digits; a value fits on one line up to 120
   characters.
 - **The graph is the biome's `graph`** (`graph.gd`), node for node: a link is an input key naming another node's id
   (input port i is the kind's input i, a mix's port i its row i's `in`, one port more a new row), each node one output.

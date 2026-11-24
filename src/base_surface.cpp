@@ -299,6 +299,36 @@ Float4 BaseSurface::radius_form(const VoxelPos &p_voxel, int p_lod) const {
     return Float4{ vx * r, vy * r, vz * r, ss * r - rl };
 }
 
+Float4 BaseSurface::pole_form(const VoxelPos &p_voxel, int p_lod, int p_m) const {
+    if (base_kind != Kind::SPHERE) {
+        return Float4{ 0.0f, 0.0f, 0.0f, 0.0f };
+    }
+    const float vx = radius_axis(p_voxel.x, anchor.x, p_lod);
+    const float vy = radius_axis(p_voxel.y, anchor.y, p_lod);
+    const float vz = radius_axis(p_voxel.z, anchor.z, p_lod);
+    const float ss = ov::max(vx * vx + vy * vy + vz * vz, 1.0f);
+    const float r = ExactNoise::det_rsqrt(ss);
+    const float nx = vx * r;
+    const float ny = vy * r;
+    const float nz = vz * r;
+    const float t = ov::min(ny * ny, 1.0f);
+    // d(n_y^2)/dv_j = 2 n_y (delta_yj - n_y n_j) / |v|, per spacing of Λ_m.
+    const float k = (ny + ny) * r * exact_pow2(p_m - p_lod);
+    const float kn = k * ny;
+    return Float4{ -(kn * nx), k * (1.0f - t), -(kn * nz), t };
+}
+
+int BaseSurface::pole_lod() const {
+    if (base_kind != Kind::SPHERE) {
+        return -1;
+    }
+    int lod = 0;
+    while (std::ldexp(2.0 * radius, -lod) > double(RADIUS_LIMIT)) {
+        lod++;
+    }
+    return lod;
+}
+
 Float4 BaseSurface::flat_form(const VoxelPos &p_voxel, int p_lod) const {
     // up = (-0, 1, -0): the ground's t = up - grad h then reads -(dh/dx) bit for bit (-0 - x is -x for every x).
     const float s = exact_pow2(-p_lod);
@@ -482,6 +512,42 @@ vec4 base_radius(WorldPos p, int lod) {
 )glsl"),
             { { "BASE_SHAPE", base_kind == Kind::TORUS ? GLSL_TORUS_SHAPE : GLSL_SPHERE_SHAPE }, { "REGION_SHIFT", ov::itos(REGION_SHIFT) }, { "REGION_HALF", ov::itos(REGION_HALF) }, { "CENTRE_LO", glsl_lo(anchor) }, { "CENTRE_HI", glsl_hi(anchor) }, { "RADIUS_LIMIT", ov::itos(RADIUS_LIMIT) }, { "RADIUS", glsl_float(float(radius)) },
                     { "RING", glsl_float(float(ring)) } });
+}
+
+ov::str BaseSurface::glsl_pole() const {
+    using namespace ExactNoise;
+    if (base_kind != Kind::SPHERE) {
+        return R"glsl(
+// BaseSurface::pole_form on a base without poles.
+vec4 base_pole(WorldPos p, int lod, int m) {
+    return vec4(0.0);
+}
+)glsl";
+    }
+    return ov::replace_all(ov::str(R"glsl(
+// BaseSurface::pole_form: the latitude n_y^2 of p's up from the radius form at LOD lod, its gradient per spacing of Λ_m.
+vec4 base_pole(WorldPos p, int lod, int m) {
+    uvec3 lo = p.lo;
+    ivec3 hi = p.hi;
+    i64_sub(lo, hi, CENTRE_LO, CENTRE_HI);
+    i64_asr(lo, hi, lod);
+    ivec3 v = sat_words(lo, hi, RADIUS_LIMIT);
+    precise float vx = float(v.x);
+    precise float vy = float(v.y);
+    precise float vz = float(v.z);
+    precise float ss = max(vx * vx + vy * vy + vz * vz, 1.0);
+    precise float r = det_rsqrt(ss);
+    precise float nx = vx * r;
+    precise float ny = vy * r;
+    precise float nz = vz * r;
+    precise float t = min(ny * ny, 1.0);
+    precise float k = (ny + ny) * r * exact_pow2(m - lod);
+    precise float kn = k * ny;
+    precise vec4 res = vec4(-(kn * nx), k * (1.0 - t), -(kn * nz), t);
+    return res;
+}
+)glsl"),
+            { { "CENTRE_LO", glsl_lo(anchor) }, { "CENTRE_HI", glsl_hi(anchor) }, { "RADIUS_LIMIT", ov::itos(RADIUS_LIMIT) } });
 }
 
 BaseSurface::Render BaseSurface::render(const VoxelPos &p_origin, double p_voxel_m) const {
