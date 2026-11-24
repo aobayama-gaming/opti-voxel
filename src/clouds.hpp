@@ -35,21 +35,22 @@
 // or 4 camera altitudes, its origin snapped to them), each from where its line leaves the base towards the sun, so it
 // holds for any receiver under the layer; the hosts' terrain reads it once per fragment (cloud_sun_shadow).
 //
-// The cover and the type are the weather's (Weather, docs/weather.md): its last two states, uploaded as one texture of
-// the cube-sphere grid when a tick lands (RG the previous state's cover and type, BA the latest's), blended by where the
-// frame stands between them and read by the direction from the planet's centre; the noises drift with the wind at the
-// camera. Planets only: no weather, no clouds.
+// The clouds are the weather's (Weather, docs/weather.md): the layer runs from the ground to its levels' top, and each
+// level's cloud of its last two states is uploaded when a tick lands as a 3D texture, the grid's atlas a slice per level
+// (R the previous state's, G the latest's), blended by where the frame stands between them, read by the grid's lookup
+// and the altitude (linear between the levels); the noises shape it and drift with the wind at the camera. Planets
+// only: no weather, no clouds.
 struct CloudLayer {
     // Earth's: a cumulus layer from 1.5 to 4 km, the shape noise repeating every ~12 km, the detail every ~1.5 km, the
-    // weather (cover and type) every ~48 km, every read of them warped by an offset repeating every ~800 km (so the
-    // field does too, not every weather period).
+    // weather (the coverage noise) every ~48 km, every read of them warped by an offset repeating every ~800 km (so the
+    // field does too, not every weather period); of_weather scales it.
     float bottom_m = 1500.0f;
     float top_m = 4000.0f;
     float extinction = 0.04f; // 1/m at density 1
     float albedo = 0.99f;
     float shadow_reach_m = 80000.0f; // the longest path of a shadow ray through the layer (a low sun over a plane)
     float shadow_min_extent_m = 64000.0f; // the shadow map's side round the camera, at least (Frame::shadow_extent_m; no uniform)
-    // The noises' periods in LOD0 voxels (powers of two: the shading frame), set by for_base.
+    // The noises' periods in LOD0 voxels (powers of two: the shading frame), set by of_weather.
     int shape_period_vox = 0;
     int detail_period_vox = 0;
     int weather_period_vox = 0;
@@ -59,19 +60,18 @@ struct CloudLayer {
     static constexpr double EARTH_DETAIL_PERIOD_M = 1500.0;
     static constexpr double EARTH_WEATHER_PERIOD_M = 48000.0;
     static constexpr double EARTH_WARP_PERIOD_M = 800000.0; // 2^23 voxels at 5 cm: the frame's longest period
-    // The bottom stays at least this many times the ground's relief above the base: the grid's march knows nothing of the
-    // terrain, so a cloud must not reach into it (a mountain would be hidden behind the cloud inside it).
-    static constexpr double RELIEF_BOTTOMS = 1.25;
+    // The noises' periods in the weather's cells (of_weather): the coverage's breaks a cell's cover into clouds, the
+    // shape's draws them, the detail's frays them.
+    static constexpr double WEATHER_CELLS = 16.0;
+    static constexpr double SHAPE_CELLS = 4.0;
+    static constexpr double DETAIL_CELLS = 0.5;
 
-    // Earth's layer for a base of curvature radius p_radius_m under a ground of relief p_relief_m, at LOD0 voxels of
-    // p_voxel_m: under Earth's radius every length times s = R / R_earth (at least RELIEF_BOTTOMS reliefs over Earth's
-    // bottom) and the extinction over s, the same optical depths (AtmosphereMedium::for_base's rule); p_scale > 0 sets s.
-    // Then the layer is lifted, its thickness kept, until its bottom is RELIEF_BOTTOMS reliefs up (Earth's 3.3 km relief:
-    // 4.1 to 6.6 km).
-    static CloudLayer for_base(double p_radius_m, double p_relief_m, double p_voxel_m, double p_scale = 0.0);
-    // A layer from p_bottom_m to p_top_m above the base (the world file's look): every length and the extinction scaled by
-    // its thickness over Earth's (s = thickness / 2.5 km), so its clouds keep Earth's shapes and optical depths at that size.
-    static CloudLayer between(double p_bottom_m, double p_top_m, double p_voxel_m);
+    // The weather's layer (Weather: its levels' top p_top_m over the ground, its cells about p_cell_m wide) at LOD0
+    // voxels of p_voxel_m: from the ground to the top, Earth's optical depths at that thickness (the extinction over s =
+    // top / 2.5 km, the shadow's reach times s), the noises' periods the cells' (WEATHER_CELLS, SHAPE_CELLS, DETAIL_CELLS),
+    // so the clouds' places, bases and tops are the simulation's and the noise only shapes them. The march knows nothing
+    // of the terrain: a hill reaching into a cloud is hidden behind the cloud's part in front of it.
+    static CloudLayer of_weather(double p_top_m, double p_cell_m, double p_voxel_m);
 
     // The fields as the shaders' uniforms (GLSLUniforms).
     template <class F>
@@ -173,10 +173,10 @@ public:
         p_f("cloud_shadow_extent_m", p_frame.shadow_extent_m);
     }
 
-    // p_atmosphere (started, outliving this) lights the clouds and hazes them in p_layer; the weather's texture is
-    // p_grid's.
+    // p_atmosphere (started, outliving this) lights the clouds and hazes them in p_layer (CloudLayer::of_weather); the
+    // weather's texture is p_weather's grid and levels.
     void start(ov::gpu::Device *p_device, const Atmosphere *p_atmosphere, const BaseSurface &p_base, double p_voxel_m, const CloudLayer &p_layer,
-            const WeatherGrid &p_grid, TexturesFn p_textures);
+            const Weather &p_weather, TexturesFn p_textures);
     // Each frame before frame(): the weather (its blend; with p_landed, a new state: its last two uploaded) and the
     // wind the noises drift with (render metres per second).
     void set_weather(const Weather &p_weather, const Float3 &p_wind_mps, bool p_landed);
@@ -200,9 +200,9 @@ public:
     static ov::str glsl_lookup();
     // The passes' compute shaders.
     static ov::str glsl_pass_noise();
-    // The passes over a weather grid (its lookup, WeatherGrid::glsl_lookup).
-    static ov::str glsl_pass_march(const WeatherGrid &p_weather);
-    static ov::str glsl_pass_shadow(const WeatherGrid &p_weather);
+    // The passes over a weather grid (its lookup, WeatherGrid::glsl_lookup) of p_levels levels.
+    static ov::str glsl_pass_march(const WeatherGrid &p_weather, int p_levels);
+    static ov::str glsl_pass_shadow(const WeatherGrid &p_weather, int p_levels);
     // A camera at p_camera_m's Frame over p_base with the sun towards p_sun (frame() adds the history, the wind, the
     // weather and the origin): the march's reach over a sphere of p_curvature_m (Atmosphere::ms_radius_m) and the shadow map.
     static Frame make_frame(const CloudLayer &p_layer, double p_curvature_m, const Float3 &p_camera_m, const Float3 &p_sun,
@@ -212,10 +212,11 @@ public:
             const CloudLayer &p_layer, const Frame &p_frame);
 
 private:
-    // The weather's atlas (WeatherGrid's padded layout as a texture) and the passes' text over its grid.
+    // The weather's atlas (WeatherGrid's padded layout as a texture, a slice per level) and the passes' text over its grid.
     struct Atlas {
         uint32_t width;
         uint32_t height;
+        uint32_t levels;
         ov::str march;
         ov::str shadow;
     };

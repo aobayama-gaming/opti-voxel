@@ -163,7 +163,8 @@ Agreed with the user (2026-11-24). Stacked PRs, `feature/weather-*`:
 6. **Grid interface:** `WeatherGrid` an interface over a base, the cube sphere one implementation, positions in
    metres; the planet file's `grid` becomes `cell_m`.
 7. **Levels:** the simulation in levels up to `top_m` (hydrostatic pressure, vertical wind, parcel convection under an
-   inversion, latent heat, drying aloft), the report's cross-section. Then the 3D clouds read from the levels, then
+   inversion, latent heat, drying aloft), the report's cross-section.
+8. **3D clouds:** the cloud layer from the ground to `top_m`, each level's cloud a slice of the texture (`docs/look.md`). Then
    the torus's grid.
 
 Later: curl-noise gusts, the FFT sea reading the wind (U10, fetch, swell), rain and ground wetness, saving the weather,

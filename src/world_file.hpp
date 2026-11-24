@@ -24,7 +24,7 @@
 //     "atmosphere": { "density": 1, "tint": [1, 1, 1] },
 //     "weather": { "on": true, "cell_m": 0, "top_m": 300, "tick_hz": 10, "time_scale": 1, "prevailing_mps": 8, "storm_m": 500,
 //                  "spin_up_s": 60 },
-//     "look": { "atmosphere": true, "atmosphere_scale": 0, "clouds": true, "cloud_bottom_m": 0, "cloud_top_m": 0 },
+//     "look": { "atmosphere": true, "atmosphere_scale": 0, "clouds": true },
 //     "instances": [ { "species": "conifer", "cell_m": 5, "share": 1 }... ],
 //     "features": [ { "kind": "lava_lake", "cell_m": 640, "chance": 0.6, "radius_m": [18, 45] }... ],
 //     "feature_region": { "side_m": 0, "centre_m": [-50, -150] },
@@ -120,9 +120,6 @@ struct WorldFile {
     double atmosphere_density = 1.0;
     Float3 atmosphere_tint{ 1.0f, 1.0f, 1.0f };
     bool clouds = true; // the volumetric clouds in it (Clouds), their layer's scale as the atmosphere's
-    // The cloud layer's altitudes above the base (metres; both 0: Earth's layer scaled to the base, CloudLayer::for_base).
-    double cloud_bottom_m = 0.0;
-    double cloud_top_m = 0.0;
     SDFTable::Region feature_region; // SDFTable::set_feature_region
     std::vector<Climate::InstanceShare> instances; // SDFTable::set_instances
     std::vector<Climate::FeatureShare> features; // SDFTable::set_features

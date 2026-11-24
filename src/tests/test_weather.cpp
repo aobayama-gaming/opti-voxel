@@ -126,7 +126,7 @@ TEST_CASE("ov::float_to_half: the nearest half, back through half_to_float") {
 // The clouds read the weather (Clouds' passes): its lookup is in their text, every placeholder substituted.
 TEST_CASE("Clouds: the passes read the weather texture, every placeholder substituted") {
     const CubeSphereGrid grid(16, 2000.0);
-    for (const ov::str &glsl : { Clouds::glsl_pass_march(grid), Clouds::glsl_pass_shadow(grid) }) {
+    for (const ov::str &glsl : { Clouds::glsl_pass_march(grid, 4), Clouds::glsl_pass_shadow(grid, 4) }) {
         CHECK(glsl.find("vec2 weather_uv(vec3 p)") != ov::str::npos);
         CHECK(glsl.find("weather_uv(p)") != ov::str::npos);
         CHECK(glsl.find("cloud_weather_blend") != ov::str::npos);

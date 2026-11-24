@@ -119,28 +119,24 @@ the 3D point in the shading frame (no 2D weather map, which a curved base would 
   unrelated fields at that cover), for +0.17 ms of cloud passes (1280x720, the video preset; measured before the passes
   skipped the weather outside the layer). A warp read from the shape noise itself sheared the clouds into streaks (its
   fine octaves: gradients ~1.5). The wind's offset wraps at the warp's period.
-- **Weather** (`Weather`, `docs/weather.md`): the simulation's cover and type over the whole planet. When a tick
+- **Weather** (`Weather`, `docs/weather.md`): the simulation's cloud per level over the whole planet. When a tick
   lands (`World::frame`: `Weather::update`), `Clouds::set_weather` uploads its last two states as one 3D RGBA16F
-  texture of the cube-sphere grid, (N + 2) x (N + 2) x 6 (the halo included; RG the previous state's cover and type, BA
-  the latest's: 0.3 MB at N = 64), and keeps the largest cover of the two (`cloud_cover_max`: the passes skip where it
-  is 0, as before the first state lands). `cloud_weather` reads it along the base's up at the point (`weather_uvw`,
-  `WeatherGrid::glsl_lookup`; the face's texels at their centre, so the linear sampler never blends two faces; the halo
-  makes the bilinear read cross a seam), blends the two states by `Weather::blend` (where the frame stands between
-  them: the cover moves smoothly between ticks) and moves the type round the weather's (the noise's offset from 0.5
-  moves it towards 0 or 1 by up to 0.4 of the way, `TYPE_SPREAD`, so it stays in [0, 1]). The noises drift with the
+  texture, the grid's atlas a slice per level (below), and keeps the largest cloud of the two (`cloud_cover_max`: the
+  passes skip where it is 0, as before the first state lands). `cloud_sim_cover` reads it along the base's up at the
+  point (`weather_uv`, `WeatherGrid::glsl_lookup`; the face's texels at their centre, so the linear sampler never blends
+  two faces; the halo makes the bilinear read cross a seam) and blends the two states by `Weather::blend` (where the
+  frame stands between them: the cover moves smoothly between ticks). The noises drift with the
   weather's wind at the camera times its time scale (`World::camera_wind`: the pattern moves with the cells' cover).
-- **Layer set by the world** (`"look": {"cloud_bottom_m", "cloud_top_m"}`, `CloudLayer::between`): the layer's altitudes
-  given outright, every length (the noises' periods, the shadow's reach) times its thickness over Earth's 2.5 km and the
-  extinction over it, so the clouds keep Earth's shapes at that size. `ocean_test` sets 100 to 180 m: shapes ~15 to 50 m,
-  under the weather's 45 m cells, so the clouds' places are the simulation's. The relief rule below is off there: a hill
-  above the bottom would reach into the clouds.
-- **Layer** (`CloudLayer::for_base`): Earth's 1.5 to 4 km, extinction 0.04 /m at density 1 (Hillaire 2016's cumulus
-  range is 0.05 to 0.12), albedo 0.99; under Earth's radius scaled like the atmosphere (lengths times s, extinction over
-  s, s at least `RELIEF_BOTTOMS` reliefs over Earth's bottom), then lifted, its thickness kept, until its bottom is
-  `RELIEF_BOTTOMS` (1.25) reliefs up: the march knows nothing of the terrain, so no cloud may reach into it. The
-  relief is the program's top (`SDFCascade::ground_top_m`, a bound: the template ground's sum of amplitudes, ~6.6 km at
-  5 cm and 0.5 m alike, puts the layer at ~8.2 to ~10.7 km; the old fixed 3.3 km relief had it at 4.1 to 6.6 km); a 2 km planet under
-  `tiny.world.json`'s 819 m at ~1 to ~2.7 km.
+- **Layer** (`CloudLayer::of_weather`): the weather's, from the ground to its levels' top (`top_m`, `docs/weather.md`):
+  Earth's extinction (0.04 /m at density 1, Hillaire 2016's cumulus range is 0.05 to 0.12) over s = top / 2.5 km, the
+  same optical depths, albedo 0.99; the noises' periods the weather's cells (`WEATHER_CELLS` 16 for the coverage noise,
+  `SHAPE_CELLS` 4, `DETAIL_CELLS` 0.5), so the clouds' places, bases and tops are the simulation's and the noise only
+  shapes them. The march knows nothing of the terrain: a hill reaching into a cloud is hidden behind its front part.
+- **3D from the levels:** the weather texture is the grid's atlas a slice per level (R the previous state's cloud, G the
+  latest's), read at the altitude over the top (linear between the levels' middles, clamped to them), so a column's
+  cloud has the simulation's base and top; the coverage is the cover there past its threshold on the coverage noise,
+  then Schneider's remap of the shape noise (no per-type height gradient: the levels give the profile). The light
+  towards the sun and the shadow map read the levels along their rays.
 - **Light:** Hillaire's (Frostbite, "Physically Based Sky, Atmosphere and Cloud Rendering", SIGGRAPH 2016): the
   energy-conserving step, a dual-lobe Henyey-Greenstein phase (0.8 forward, -0.3 back, 0.7 / 0.3), the sun through the
   air (`atmo_transmittance` at the ray's two ends, linear between) and through the cloud (6 steps from 1% of the

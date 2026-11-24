@@ -508,7 +508,7 @@ ov::str parse_engine(const ov::Value &p_data, const ov::str &p_dir, WorldFile &r
 // "look" and "feature_region" into r_world.
 ov::str parse_look(const ov::Value &p_data, WorldFile &r_world) {
     ov::str err;
-    const ov::Value look = section(p_data, "look", { "atmosphere", "atmosphere_scale", "clouds", "cloud_bottom_m", "cloud_top_m" }, err);
+    const ov::Value look = section(p_data, "look", { "atmosphere", "atmosphere_scale", "clouds" }, err);
     ov::Value region = section(p_data, "feature_region", { "side_m", "centre_m" }, err);
     const ov::Value centre = region.get("centre_m", ov::Value::array());
     if (err.empty() && region.has("centre_m") && !(centre.is_array() && centre.size() == 2 && centre[size_t(0)].is_number() && centre[size_t(1)].is_number())) {
@@ -523,12 +523,6 @@ ov::str parse_look(const ov::Value &p_data, WorldFile &r_world) {
     w.atmosphere = look.get("atmosphere", w.atmosphere).as_bool();
     w.atmosphere_scale = look.get("atmosphere_scale", w.atmosphere_scale).as_double();
     w.clouds = look.get("clouds", w.clouds).as_bool();
-    w.cloud_bottom_m = look.get("cloud_bottom_m", w.cloud_bottom_m).as_double();
-    w.cloud_top_m = look.get("cloud_top_m", w.cloud_top_m).as_double();
-    const bool layer_set = w.cloud_bottom_m != 0.0 || w.cloud_top_m != 0.0;
-    if (layer_set && !(w.cloud_bottom_m > 0.0 && w.cloud_top_m > w.cloud_bottom_m && std::isfinite(w.cloud_top_m))) {
-        return "world: look: cloud_bottom_m > 0 and cloud_top_m above it (both 0: the layer scaled to the base).";
-    }
     w.feature_region.side_m = region.get("side_m", w.feature_region.side_m).as_double();
     if (centre.size() == 2) {
         w.feature_region.x_m = centre[size_t(0)].as_double();

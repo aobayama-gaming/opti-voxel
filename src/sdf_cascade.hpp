@@ -160,7 +160,7 @@ public:
         configure(r_param, p_world.lods);
         return world_error;
     }
-    // The relief the sky stays above (metres: AtmosphereMedium, CloudLayer): the program's top, its output's upper
+    // The relief the sky stays above (metres: AtmosphereMedium): the program's top, its output's upper
     // bound over the base (a bound, not the highest point drawn); 0 for a ground that never rises above its base.
     double ground_top_m() const { return prog.hi.empty() ? 0.0 : ov::max(prog.hi[size_t(prog.output)] * double(voxel_size), 0.0); }
 

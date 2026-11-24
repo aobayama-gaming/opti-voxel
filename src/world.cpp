@@ -223,9 +223,8 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
         if (content.clouds && weather && hosts.cloud_textures) {
             clouds = new Clouds();
             const double vm = double(chunk_param.voxel_size);
-            const CloudLayer layer = content.cloud_top_m > 0.0 ? CloudLayer::between(content.cloud_bottom_m, content.cloud_top_m, vm)
-                                                               : CloudLayer::for_base(sdf->get_base().curvature_radius_m(vm), sdf->ground_top_m(), vm, content.atmosphere_scale);
-            clouds->start(hosts.device, atmosphere, sdf->get_base(), vm, layer, weather->grid(), hosts.cloud_textures);
+            clouds->start(hosts.device, atmosphere, sdf->get_base(), vm, CloudLayer::of_weather(weather->top_m(), weather->grid().cell_m(), vm), *weather,
+                    hosts.cloud_textures);
         }
     }
 

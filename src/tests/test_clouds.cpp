@@ -13,28 +13,19 @@ bool power_of_two(int p_v) {
 
 } // namespace
 
-TEST_CASE("CloudLayer::for_base: Earth's layer over low ground; lifted over a high one; a small planet's scaled, its optical depth the same") {
+TEST_CASE("CloudLayer::of_weather: the ground to the levels' top, Earth's optical depth, the noises the cells'") {
     const CloudLayer earth;
-    const CloudLayer low = CloudLayer::for_base(6371000.0, 500.0, 0.5);
-    CHECK(low.bottom_m == earth.bottom_m);
-    CHECK(low.top_m == earth.top_m);
-    CHECK(low.extinction == earth.extinction);
-    // The flat world's 3.3 km relief lifts the layer to RELIEF_BOTTOMS reliefs, its thickness kept.
-    const CloudLayer high = CloudLayer::for_base(INFINITY, 3300.0, 0.5);
-    CHECK(double(high.bottom_m) == doctest::Approx(CloudLayer::RELIEF_BOTTOMS * 3300.0));
-    CHECK(double(high.top_m - high.bottom_m) == doctest::Approx(double(earth.top_m - earth.bottom_m)));
-    // A 2 km planet: R / R_earth would put the clouds under its 62.5 m hills; RELIEF_BOTTOMS reliefs set the scale.
-    const CloudLayer tiny = CloudLayer::for_base(2000.0, 62.5, 0.05);
-    const double s = CloudLayer::RELIEF_BOTTOMS * 62.5 / double(earth.bottom_m);
-    CHECK(double(tiny.bottom_m) == doctest::Approx(CloudLayer::RELIEF_BOTTOMS * 62.5).epsilon(1e-5));
-    CHECK(double(tiny.top_m - tiny.bottom_m) == doctest::Approx(s * double(earth.top_m - earth.bottom_m)).epsilon(1e-5));
-    CHECK(double(tiny.extinction) * double(tiny.top_m - tiny.bottom_m) ==
-            doctest::Approx(double(earth.extinction) * double(earth.top_m - earth.bottom_m)).epsilon(1e-5));
-    // The noises' periods: powers of two of voxels, within a factor of two under the scaled period, the warp a multiple
-    // of the others (the wind's offset wraps at it) and longer than the weather (the field repeats at the warp's).
-    const CloudLayer flat = CloudLayer::for_base(INFINITY, 3300.0, 0.05);
-    const CloudLayer fine = CloudLayer::for_base(INFINITY, 3300.0, 0.001); // the frame's longest period clamps them all
-    for (const CloudLayer &l : { low, tiny, flat, fine }) {
+    const CloudLayer ocean = CloudLayer::of_weather(200.0, 45.0, 0.05);
+    CHECK(ocean.bottom_m == 0.0f);
+    CHECK(ocean.top_m == 200.0f);
+    CHECK(double(ocean.extinction) * 200.0 == doctest::Approx(double(earth.extinction) * double(earth.top_m - earth.bottom_m)).epsilon(1e-5));
+    CHECK(double(ocean.shape_period_vox) * 0.05 <= CloudLayer::SHAPE_CELLS * 45.0);
+    CHECK(double(ocean.shape_period_vox) * 0.05 > 0.5 * CloudLayer::SHAPE_CELLS * 45.0);
+    // The noises' periods: powers of two of voxels, the warp a multiple of the others (the wind's offset wraps at it)
+    // and longer than the weather (the field repeats at the warp's).
+    const CloudLayer fine = CloudLayer::of_weather(200.0, 45.0, 0.001); // the frame's longest period clamps them all
+    const CloudLayer earthlike = CloudLayer::of_weather(4000.0, 20000.0, 0.5);
+    for (const CloudLayer &l : { ocean, fine, earthlike }) {
         CHECK(power_of_two(l.shape_period_vox));
         CHECK(power_of_two(l.detail_period_vox));
         CHECK(power_of_two(l.weather_period_vox));
@@ -43,19 +34,15 @@ TEST_CASE("CloudLayer::for_base: Earth's layer over low ground; lifted over a hi
         CHECK(l.weather_period_vox % l.shape_period_vox == 0);
         CHECK(l.shape_period_vox % l.detail_period_vox == 0);
     }
-    CHECK(double(low.shape_period_vox) * 0.5 <= CloudLayer::EARTH_SHAPE_PERIOD_M);
-    CHECK(double(low.shape_period_vox) * 0.5 > 0.5 * CloudLayer::EARTH_SHAPE_PERIOD_M);
-    // An explicit scale wins.
-    CHECK(double(CloudLayer::for_base(2000.0, 0.0, 0.05, 0.5).top_m) == doctest::Approx(0.5 * double(earth.top_m)));
 }
 
 TEST_CASE("Clouds: every constant of the passes' and the hosts' GLSL substituted") {
     const CubeSphereGrid grid(16, 2000.0);
-    for (const ov::str &glsl : { Clouds::glsl_pass_noise(), Clouds::glsl_pass_march(grid), Clouds::glsl_pass_shadow(grid), Clouds::glsl_lookup() }) {
+    for (const ov::str &glsl : { Clouds::glsl_pass_noise(), Clouds::glsl_pass_march(grid, 4), Clouds::glsl_pass_shadow(grid, 4), Clouds::glsl_lookup() }) {
         CHECK(glsl.find('$') == ov::str::npos);
     }
-    CHECK(Clouds::glsl_pass_march(grid).find("vec3 cloud_camera_m;") != ov::str::npos);
-    CHECK(Clouds::glsl_pass_shadow(grid).find("float cloud_shadow_extent_m;") != ov::str::npos);
+    CHECK(Clouds::glsl_pass_march(grid, 4).find("vec3 cloud_camera_m;") != ov::str::npos);
+    CHECK(Clouds::glsl_pass_shadow(grid, 4).find("float cloud_shadow_extent_m;") != ov::str::npos);
 }
 
 TEST_CASE("Clouds::block_bytes: std140, the base first, padded to 16") {
