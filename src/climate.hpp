@@ -131,6 +131,20 @@ struct BiomeClouds {
     float type = 0.0f;
 };
 
+// How a biome pushes the weather ("weather"; WeatherSim, docs/weather.md "Forcing"): the cells over it blend their biomes
+// values by weight. wind: times the planet's prevailing wind there; drag: the ground's drag on the air (forest high, sea
+// and ice low); heat: the temperature the air relaxes to, in [-1, 1] (hot: a thermal low drawing the air in); moisture:
+// the vapour the ground gives up to (saturation 1: a biome over it makes cloud by itself); gust: the gusts' strength (the
+// look's, not the simulation's); storms: the storms a whole planet of this biome would start in an hour.
+struct BiomeWeather {
+    float wind = 1.0f;
+    float drag = 1.0f;
+    float heat = 0.0f;
+    float moisture = 0.7f;
+    float gust = 0.5f;
+    float storms = 0.0f;
+};
+
 // A species a biome grows (its "instances", or the world's for a biome that lists none): a name of the world's species,
 // one site per cell of cell_m metres (a kind's entries of one cell are one source: SDFTable), and an integer share among
 // the biome's entries of that source (BiomePick).
@@ -168,6 +182,7 @@ struct Biome {
     bool features_listed = false;
     Surface surface;
     BiomeClouds clouds;
+    BiomeWeather weather;
     uint32_t debug_color = 0; // 0xRRGGBB, reports and debug views
 };
 

@@ -22,6 +22,8 @@
 //     "climate": "climate.json" or { "fields": "fields.json" or [ field... ],
 //                                    "<field name>": { "mean": 0.4, "poles": -0.9 }... },
 //     "atmosphere": { "density": 1, "tint": [1, 1, 1] },
+//     "weather": { "on": true, "grid": 64, "tick_hz": 10, "time_scale": 1, "prevailing_mps": 8, "storm_m": 500,
+//                  "spin_up_s": 60 },
 //     "look": { "atmosphere": true, "atmosphere_scale": 0, "clouds": true },
 //     "instances": [ { "species": "conifer", "cell_m": 5, "share": 1 }... ],
 //     "features": [ { "kind": "lava_lake", "cell_m": 640, "chance": 0.6, "radius_m": [18, 45] }... ],
@@ -44,7 +46,10 @@
 // fields (a list, or a file holding it), and per field name a mean (added) and poles (times the latitude n_y^2: 0 at the
 // equator, 1 at the poles; refused on a flat base and a torus), merged into the fields (climate_parse.cpp); a field name
 // that isn't one is refused. "atmosphere": the air's density (times every scattering and absorption coefficient) and the
-// tint of its Rayleigh scattering (AtmosphereMedium::for_base); "look" whether there is air and clouds, and their scale.
+// tint of its Rayleigh scattering (AtmosphereMedium::for_base); "weather" the simulated weather over a sphere (on there
+// by default, refused on a flat shape or a torus; docs/weather.md): its grid's cells a cube face's side, its ticks a
+// second, the game seconds a real one simulates, the prevailing wind's speed, a storm's radius (the Coriolis comes from
+// it; 0 or absent: a quarter of the radius) and the game seconds simulated before the first frame; "look" whether there is air and clouds, and their scale.
 // A path is relative to the file naming it, or absolute (res://, /...); "species" and "biomes" files hold the list, a
 // string in a "biomes" list a file holding one biome. The default biome (the one without "at") is moved last; two are
 // refused.
@@ -96,6 +101,17 @@ struct WorldFile {
         Float3 sand{ 0.76f, 0.7f, 0.5f };
     };
     Sea sea;
+    // "weather" (docs/weather.md): on by default over a sphere, never over a flat shape or a torus.
+    struct Weather {
+        bool on = false;
+        int grid = 64;
+        double tick_hz = 10.0;
+        double time_scale = 1.0;
+        double prevailing_mps = 8.0;
+        double storm_m = 0.0; // 0: a quarter of the planet's radius
+        double spin_up_s = 60.0;
+    };
+    Weather weather;
     // The volumetric atmosphere over the base (Atmosphere) and its scale (AtmosphereMedium::for_base: 0 from the base).
     bool atmosphere = true;
     double atmosphere_scale = 0.0;
