@@ -21,8 +21,9 @@
 //   in parallel at LOW priority) and runs the spin-up; then one tick (time_scale / tick_hz game seconds) per step while
 //   the clock is ahead of it. More than MAX_BEHIND ticks behind (a stall, a slow machine), it drops the excess: the
 //   weather slows, it never runs away.
-// - A published state is the LOOK floats per padded cell (Look): the wind (m/s, planet axes), the cover, the type, the
-//   rain, the temperature and the vapour.
+// - A published state is stride() floats per padded cell: the column's LOOK (Look: the ground level's wind (m/s, planet
+//   axes), the cover, the type, the rain, the ground level's temperature and vapour, the wind aloft (the levels' mean)),
+//   then each level's cloud water over FULL_CLOUD (the clouds' density), the ground's first.
 class Weather : public ov::WorkerLoop {
 public:
     enum Look {
@@ -34,6 +35,9 @@ public:
         RAIN,
         TEMP,
         VAPOUR,
+        ALOFT_X,
+        ALOFT_Y,
+        ALOFT_Z,
         LOOK
     };
     static constexpr int MAX_BEHIND = 20;
@@ -44,7 +48,8 @@ public:
     using ForcingFn = std::function<Climate::BiomeWeather(const VoxelPos &, int)>;
 
     struct Sample {
-        Float3 wind_mps; // planet (and render) axes, tangent to the sphere
+        Float3 wind_mps; // at the ground level, planet (and render) axes, tangent to the surface
+        Float3 aloft_mps; // the levels' mean
         float cover = 0.0f;
         float type = 0.0f;
         float rain = 0.0f;
@@ -74,7 +79,14 @@ public:
     float blend() const;
     // The latest state under a position (metres from the base's centre; false before the first).
     bool at(const double p_pos[3], Sample &r_sample) const;
-    // The last two states (LOOK floats per padded cell of grid()): previous, latest.
+    // Each level's cloud (over FULL_CLOUD) under a position: r_levels gets levels() floats (false before the first state).
+    bool clouds_at(const double p_pos[3], float *r_levels) const;
+    // The levels (WeatherSim's: the planet file's top_m over about its cells' width), each one top_m / levels thick.
+    int levels() const { return params.levels; }
+    double top_m() const { return params.top_m; }
+    // A published state's floats per padded cell: LOOK, then a cloud per level.
+    int stride() const { return LOOK + params.levels; }
+    // The last two states (stride() floats per padded cell of grid()): previous, latest.
     const std::vector<float> &previous() const { return prev_look; }
     const std::vector<float> &latest() const { return live_look; }
     const WeatherGrid &grid() const { return *cells; }

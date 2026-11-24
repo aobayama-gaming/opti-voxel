@@ -77,7 +77,44 @@ WeatherReport::Frame map_state(const Weather &p_weather, int p_w, double p_full_
             wind_max = ov::max(wind_max, speed);
         }
     }
+    // The equator's cross-section, the ground at the bottom; each level's cloudy share of the planet.
+    const int levels = p_weather.levels();
+    const int sh = levels * WeatherReport::SECTION_PX;
+    f.section_rgb.assign(size_t(p_w) * size_t(sh) * 3, 0);
+    std::vector<float> column(static_cast<size_t>(levels), 0.0f);
+    for (int x = 0; x < p_w; x++) {
+        double d[3];
+        pixel_dir(x, h / 2, p_w, h, d);
+        const double r = p_weather.radius_m();
+        const double pos[3] = { d[0] * r, 0.0, d[2] * r };
+        p_weather.clouds_at(pos, column.data());
+        for (int y = 0; y < sh; y++) {
+            const double c = ov::clamp(double(column[size_t(levels - 1 - y / WeatherReport::SECTION_PX)]), 0.0, 1.0);
+            uint8_t *o = &f.section_rgb[(size_t(y) * size_t(p_w) + size_t(x)) * 3];
+            o[0] = byte(0.08 + 0.92 * c);
+            o[1] = byte(0.12 + 0.88 * c);
+            o[2] = byte(0.25 + 0.75 * c);
+        }
+    }
+    ov::Value cloudy = ov::Value::array();
+    for (int k = 0; k < levels; k++) {
+        double share = 0.0, all = 0.0;
+        for (int y = 0; y < h; y += 2) {
+            for (int x = 0; x < p_w; x += 2) {
+                double d[3];
+                pixel_dir(x, y, p_w, h, d);
+                const double r = p_weather.radius_m();
+                const double pos[3] = { d[0] * r, d[1] * r, d[2] * r };
+                p_weather.clouds_at(pos, column.data());
+                const double a = std::sqrt(1.0 - d[1] * d[1]);
+                share += column[size_t(k)] > 0.25f ? a : 0.0;
+                all += a;
+            }
+        }
+        cloudy.push_back(share / all);
+    }
     ov::Value m = ov::Value::object();
+    m["cloudy_levels"] = cloudy;
     m["game_s"] = p_weather.game_s();
     m["storms"] = int64_t(p_weather.storms());
     m["mean_cover"] = cover_sum / weight;
@@ -120,6 +157,7 @@ WeatherReport::Frames run_world(const WorldFile &p_world, const std::vector<doub
     const double start_s = weather.game_s();
     out.width = ov::clamp(p_width, 64, 4096);
     out.height = out.width / 2;
+    out.section_height = weather.levels() * WeatherReport::SECTION_PX;
     for (const double minutes : p_minutes) {
         while (weather.game_s() < start_s + minutes * 60.0 - 1e-6) {
             now += period_usec;
@@ -164,6 +202,7 @@ ov::Value WeatherReport::run(const ov::str &p_out_dir, const ov::str &p_world_pa
         const ov::str tag = ov::format("%03d", int(std::lround(frame.minutes)));
         write_png(ov::path_join(p_out_dir, "cover_" + tag + ".png"), f.width, f.height, frame.cover_rgb);
         write_png(ov::path_join(p_out_dir, "wind_" + tag + ".png"), f.width, f.height, frame.wind_rgb);
+        write_png(ov::path_join(p_out_dir, "section_" + tag + ".png"), f.width, f.section_height, frame.section_rgb);
         ov::Value m = frame.numbers;
         m["minutes"] = frame.minutes;
         maps.push_back(m);
@@ -173,11 +212,17 @@ ov::Value WeatherReport::run(const ov::str &p_out_dir, const ov::str &p_world_pa
             p_world_path, stats["grid"].as_str(), stats["cell_m"].as_double(), int(stats["cells"].as_int()), world.weather.time_scale, world.weather.tick_hz,
             world.weather.storm_m > 0.0 ? ov::format("%g m", world.weather.storm_m) : ov::str("a quarter of the radius"), stats["omega_rad_s"].as_double(),
             stats["substep_s"].as_double());
-    md += "| game min | storms | mean cover | max wind (m/s) | raining |\n|---|---|---|---|---|\n";
+    md += ov::format("%d levels up to %g m. Cloudy levels: each level's share of the planet with cloud past a quarter of full cover, the ground first.\n\n",
+            int(stats["levels"].as_int()), stats["top_m"].as_double());
+    md += "| game min | storms | mean cover | max wind (m/s) | raining | cloudy levels |\n|---|---|---|---|---|---|\n";
     for (size_t i = 0; i < maps.size(); i++) {
         const ov::Value &m = maps[i];
-        md += ov::format("| %g | %d | %.2f | %.1f | %.1f%% |\n", m["minutes"].as_double(), int(m["storms"].as_int()), m["mean_cover"].as_double(),
-                m["max_wind_mps"].as_double(), 100.0 * m["raining"].as_double());
+        ov::str levels;
+        for (size_t k = 0; k < m["cloudy_levels"].size(); k++) {
+            levels += ov::format("%s%.0f%%", k == 0 ? "" : " ", 100.0 * m["cloudy_levels"][k].as_double());
+        }
+        md += ov::format("| %g | %d | %.2f | %.1f | %.1f%% | %s |\n", m["minutes"].as_double(), int(m["storms"].as_int()), m["mean_cover"].as_double(),
+                m["max_wind_mps"].as_double(), 100.0 * m["raining"].as_double(), levels);
     }
     md += ov::format("\nForcing and spin-up: %.0f ms. Tick: %.2f ms on average, %.2f ms at most (%d ticks).\n", stats["forcing"]["total_ms"].as_double(),
             stats["tick"]["avg_ms"].as_double(), stats["tick"]["max_ms"].as_double(), int(stats["tick"]["count"].as_int()));

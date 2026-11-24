@@ -276,7 +276,7 @@ ov::str parse_sea(const ov::Value &p_data, WorldFile &r_world) {
 // "weather" into r_world.weather: on over a sphere unless "on" is false; refused over a flat shape or a torus.
 ov::str parse_weather(const ov::Value &p_data, WorldFile &r_world) {
     ov::str err;
-    const ov::Value d = section(p_data, "weather", { "on", "cell_m", "tick_hz", "time_scale", "prevailing_mps", "storm_m", "spin_up_s" }, err);
+    const ov::Value d = section(p_data, "weather", { "on", "cell_m", "top_m", "tick_hz", "time_scale", "prevailing_mps", "storm_m", "spin_up_s" }, err);
     if (!err.empty()) {
         return err;
     }
@@ -296,15 +296,16 @@ ov::str parse_weather(const ov::Value &p_data, WorldFile &r_world) {
         return err;
     }
     w.cell_m = d.get("cell_m", w.cell_m).as_double();
+    w.top_m = d.get("top_m", w.top_m).as_double();
     w.tick_hz = d.get("tick_hz", w.tick_hz).as_double();
     w.time_scale = d.get("time_scale", w.time_scale).as_double();
     w.prevailing_mps = d.get("prevailing_mps", w.prevailing_mps).as_double();
     w.storm_m = d.get("storm_m", w.storm_m).as_double();
     w.spin_up_s = d.get("spin_up_s", w.spin_up_s).as_double();
     const double side = CubeSphereGrid::side_for(r_world.planet_radius_m, WeatherGrid::cell_width(r_world.planet_radius_m, w.cell_m));
-    const bool ok = w.cell_m >= 0.0 && side >= WeatherGrid::MIN_N && side <= WeatherGrid::MAX_N && w.tick_hz > 0.0 && w.tick_hz <= 120.0 && w.time_scale > 0.0 && w.time_scale <= 10000.0 && w.prevailing_mps >= 0.0 && w.prevailing_mps <= 200.0 && w.storm_m >= 0.0 && std::isfinite(w.storm_m) && w.spin_up_s >= 0.0 && w.spin_up_s <= 86400.0;
+    const bool ok = w.cell_m >= 0.0 && w.top_m > 0.0 && w.top_m <= 100000.0 && side >= WeatherGrid::MIN_N && side <= WeatherGrid::MAX_N && w.tick_hz > 0.0 && w.tick_hz <= 120.0 && w.time_scale > 0.0 && w.time_scale <= 10000.0 && w.prevailing_mps >= 0.0 && w.prevailing_mps <= 200.0 && w.storm_m >= 0.0 && std::isfinite(w.storm_m) && w.spin_up_s >= 0.0 && w.spin_up_s <= 86400.0;
     if (!ok) {
-        return ov::format("world: weather: cell_m giving a cube face of [%d, %d] cells (%g m: %g), tick_hz in (0, 120], time_scale in (0, 10000], prevailing_mps in [0, 200], storm_m >= 0, spin_up_s in [0, 86400].",
+        return ov::format("world: weather: cell_m giving a cube face of [%d, %d] cells (%g m: %g), top_m in (0, 100000], tick_hz in (0, 120], time_scale in (0, 10000], prevailing_mps in [0, 200], storm_m >= 0, spin_up_s in [0, 86400].",
                 WeatherGrid::MIN_N, WeatherGrid::MAX_N, w.cell_m, side);
     }
     r_world.weather = w;

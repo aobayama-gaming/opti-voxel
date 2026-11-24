@@ -46,23 +46,45 @@ ways) is the next, nothing else changes for it.
   filtering): the weather is a look, not a terrain input, so the float-mirror rule (`docs/gotchas.md`) does not apply.
 
 ## Simulation
-`WeatherSim` (`src/weather_sim.*`, engine-free, CPU): one layer of rotating shallow water over the whole planet on the
-grid, carrying vapour and cloud water. Every interior cell is written from the previous state only, so `parallel_for`
+`WeatherSim` (`src/weather_sim.*`, engine-free, CPU): the air over the whole planet in levels on the grid, hydrostatic
+and rotating, carrying vapour and cloud water. Every column is written from the previous state only, so `parallel_for`
 over the rows (LOW priority) gives the same bits on any thread count; the halos are refilled between passes.
-- **State** (`Field`, per padded cell): the wind, a 3D vector tangent to the sphere in the planet's axes (no per-face
-  frames at the seams); `ETA`, the layer's thickness anomaly, its pressure `c^2 ETA` (`WAVE_MPS` = 20 m/s);
-  `TEMP`, the air's temperature anomaly; `VAPOUR` (saturation 1) and `CLOUD`, cloud water. **Diagnostics** (`Diag`):
-  the cover (`CLOUD / FULL_CLOUD`), the type (stratus 0 to cumulus 1, rising with the lift and the heat) and the rain.
-  The cloud cover and type are only the simulation's: biomes don't set them.
+- **Levels:** the planet file's `top_m` over about `cell_m` (`levels = round(top_m / cell_m)`, at most 32), so the
+  cells are near cubes: on `ocean_test` (45 m cells, top 200 m) 4 levels of 50 m. A level's cells share their column's
+  surface metric (the shallow-atmosphere approximation: on the 2 km planets a cell 300 m up is 15% wider than its
+  metric says, which a look doesn't show).
+- **State** per padded cell (`stride()` floats): per level (`Field`) the wind, a 3D vector tangent to the surface in the
+  planet's axes (no per-face frames at the seams); `TEMP`, the air's potential temperature anomaly; `VAPOUR`
+  (saturation 1 at the ground) and `CLOUD`, cloud water; then the column's `ETA`, its top's height anomaly, the surface
+  pressure `c^2 ETA` (`WAVE_MPS` = 20 m/s). **Diagnostics** (`Diag`): the column's cover (its largest `CLOUD /
+  FULL_CLOUD`), its type (its cloudy depth: stratus 0, a tower 1) and its rain. Clouds are only the simulation's:
+  biomes don't set them.
 - **A substep** (`step(dt)` cuts dt into substeps of at most half a cell over the wave speed, the gravity waves' CFL):
-  1. The air from upstream (semi-Lagrangian: the state sampled where the wind brings it from), the Coriolis as an exact
-     rotation of the wind about the up by `-f dt` (`f = 2 Omega n_y`), the wind relaxed towards its target, the drag,
-     the temperature relaxed to the biome's heat, the vapour raised towards its moisture.
-  2. The pressure: the wind pushed by `-grad(c^2 ETA - BUOYANCY TEMP)` (warm air makes a low), central differences
-     through each cell's dual vectors (made once from its neighbours' positions, so the cube's distortion is in them).
-  3. The column: `ETA` follows the divergence; converging air rises (the lift), lowering the saturation (`1 +
-     SATURATION_HEAT TEMP - SATURATION_LIFT lift`): vapour past it condenses, cloud under it evaporates, cloud past
-     `RAIN_CLOUD` rains out; a little diffusion (`DIFFUSION`, a stabiliser).
+  1. Each level's air from upstream (semi-Lagrangian: the level sampled where its wind brings it from), the Coriolis as
+     an exact rotation of the wind about the up by `-f dt` (`f = 2 Omega n_y`), the wind relaxed towards its target.
+     The ground touches the lowest level only: its drag, its temperature relaxed to the biome's heat, its vapour raised
+     towards `GROUND_HUMIDITY` times the biome's moisture. The levels above relax towards an inversion
+     (`INVERSION_TEMP` times the altitude over the top: warmer with height).
+  2. The pressure: each level's wind pushed by `-grad(phi)`, `phi = c^2 ETA - BUOYANCY` (the warmth above the level,
+     its own half included): hydrostatic, so a warm column is a low at the ground and a high aloft. Central
+     differences through each cell's dual vectors (made once from its neighbours' surface points, so the cube's
+     distortion is in them).
+  3. The column: `ETA` follows the column's mean divergence; the levels' divergences give the vertical wind through
+     their interfaces (zero at the ground: `w = w_below - div dz`), which carries every field upwind between levels
+     (`lift`, at most half a level a substep). **Convection** (`convect`, a parcel scheme): a parcel of the lowest
+     level's air rises while it is no cooler than the level it reaches less `CONVECT_EXCESS` (its overshoot), its
+     vapour past each level's saturation condensing into latent warmth (`LATENT`: moist thermals punch higher); the
+     levels it rises through mix their air (wind, vapour, cloud; not the temperature, the forcing's profile) towards
+     their mean (`CONVECT_TAU_S`), and above its top the air sinks and dries (`DRY_TAU_S`). Then each level's vapour
+     past its saturation (`1 + SATURATION_HEAT TEMP - SATURATION_LAPSE altitude / top`) condenses, cloud under it
+     evaporates (fast: cloud mixed below its base goes, the base stays sharp), cloud past `RAIN_CLOUD` rains out; a
+     little horizontal diffusion (`DIFFUSION`, a stabiliser).
+- **What makes a cloud:** a mixed layer holds its water less each level's saturation, which falls with height. Warm
+  ground (a warm sea, hot land, a storm's warm core) carries the thermals up to the inversion and its cloud has a base
+  where the saturation meets the layer's vapour and a top where the thermals stop; cool ground stays under a shallow
+  clear layer; cold moist ground saturates its lowest level (fog). On `ocean_test` (warm sea, hotter dry land): a
+  cloudy tropical belt and some high polar cloud, the subtropics clear, every cloud between 100 and 200 m, cover
+  ~0.5 after 20 game minutes, no fog (`tools/weather_report.sh`, its cross-section).
 - **Coriolis:** a game value from the storm radius: `Omega = c / (storm_m sqrt 2)`, so the Rossby radius at 45 degrees
   is the planet file's `storm_m` (a quarter of the radius by default). The real Omega on a 2 km planet makes no storm;
   on it the default gives a 222 s rotation of the weather (not the sun's day).
@@ -71,22 +93,24 @@ over the rows (LOW priority) gives the same bits on any thread count; the halos 
 - **Storms:** each substep a cell starts one with its biome's chance (`storms`: what a whole planet of that biome
   starts in an hour), drawn from a hash of the seed, the tick, the substep and the cell; a storm is a warm, moist low of
   the storm radius (`inject_storm`) which the Coriolis spins up: counterclockwise in the north, clockwise in the south.
-- **Cost** (a standalone run of the core, one thread, this laptop, 2026-11-24): a 0.1 s tick at N = 64 (24.6k cells,
-  one substep) takes ~4 ms; at 10 ticks a second that is 4% of one core.
+- **Cost** (`tools/weather_report.sh`, this laptop, 2026-11-24): `ocean_test`'s 29.4k columns of 4 levels take ~4 ms a
+  0.1 s tick on the worker (7 levels to 300 m: ~7.5 ms), its 10 game minutes of spin-up ~3 s at load. At 10 ticks a
+  second that is under 8% of a core, off the frame.
 
 ## Forcing
 Each cell's biome weather (`Climate::BiomeWeather`, a biome's `"weather"` block, `docs/climate.md`): the cell's biome
 weights at its centre on the ground blend their biomes' values. `wind` scales the prevailing wind there, `drag` the
 ground's drag (forest high, sea and ice low: wind builds over open water), `heat` the temperature the air relaxes to
-(hot ground: a thermal low the air flows into), `moisture` the vapour the ground gives (a biome over 1 makes cloud by
-itself; under, cloud only where air converges), `gust` the look's gusts, `storms` the storms it starts. The forcing is
+(hot ground: a thermal low the air flows into, and thermals up to the inversion), `moisture` the vapour the ground gives
+(times `GROUND_HUMIDITY`; the cloud forms where the thermals carry it past the saturation), `gust` the look's gusts, `storms` the storms it starts. The forcing is
 sampled once when the weather starts (the climate never changes); the weather never changes the ground.
 
 ## Planet file
 `"weather"`: on by default over a sphere (`"on": false` turns it off), refused over a flat shape or a torus (until its
 grid lands). `cell_m` (the cells' width in metres; 0 or absent: 64 cells a cube face's side; refused where the side
 would leave [4, 1024]), `tick_hz` (10), `time_scale` (game seconds a real second simulates, 1), `prevailing_mps` (8),
-`storm_m` (0: a quarter of the radius), `spin_up_s` (game seconds simulated before the first frame, 60). At
+`storm_m` (0: a quarter of the radius), `spin_up_s` (game seconds simulated before the first frame, 60), `top_m` (the
+levels' top over the ground, 300; the levels about `cell_m` apart). At
 `time_scale` 1 and the default prevailing wind a 2 km planet's weather crosses its half circumference in ~10 minutes.
 
 ## Worker
@@ -109,9 +133,10 @@ would leave [4, 1024]), `tick_hz` (10), `time_scale` (game seconds a real second
 `tools/weather_report.sh` (`WeatherReport`, CPU only, headless): the world's weather on a clock of its own, each tick
 waited for, mapped at game minutes after the spin-up: `cover_<min>.png` (cover grey, rain blue) and `wind_<min>.png` (the
 way the wind blows as a hue: east red, north yellow-green, west cyan, south violet; its speed as the brightness),
-equirectangular with the +y pole at the top, and `report.md`. The test biomes of `ocean_test.planet.json` carry a
-weather block (the ocean moist, smooth and stormy; the land drier, warmer, rougher): clouds over the ocean, sheared into
-bands by the prevailing winds, one storm in ten minutes, a few percent of the planet raining.
+equirectangular with the +y pole at the top, `section_<min>.png` (a cross-section along the equator: longitude across,
+the levels up from the ground, the cloud water white at full cover) and `report.md` (per map: storms, mean cover, top
+wind, raining share, and each level's cloudy share of the planet). The test biomes of `ocean_test.planet.json` carry a
+weather block (the ocean a warm sea, moist, smooth and stormy; the land drier, hotter, rougher).
 
 ## Mixer
 The biome mixer (`debug/biome_mixer/`) edits a biome's weather and shows a world's.
@@ -136,7 +161,9 @@ Agreed with the user (2026-11-24). Stacked PRs, `feature/weather-*`:
    layer and the clouds over a flat shape or a torus are removed (one path: the simulation's).
 5. **Mixer** (#182): a biome's weather edited in the mixer, a time-lapse of the world's weather.
 6. **Grid interface:** `WeatherGrid` an interface over a base, the cube sphere one implementation, positions in
-   metres; the planet file's `grid` becomes `cell_m`. Then the layered simulation and the 3D clouds read from it, then
+   metres; the planet file's `grid` becomes `cell_m`.
+7. **Levels:** the simulation in levels up to `top_m` (hydrostatic pressure, vertical wind, parcel convection under an
+   inversion, latent heat, drying aloft), the report's cross-section. Then the 3D clouds read from the levels, then
    the torus's grid.
 
 Later: curl-noise gusts, the FFT sea reading the wind (U10, fetch, swell), rain and ground wetness, saving the weather,

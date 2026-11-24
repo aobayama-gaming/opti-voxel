@@ -701,8 +701,8 @@ void Clouds::set_weather(const Weather &p_weather, const Float3 &p_wind_mps, boo
     std::vector<uint16_t> texels(cells * 4);
     cover_max = 0.0f;
     for (size_t c = 0; c < cells; c++) {
-        const float *a = &prev[c * Weather::LOOK];
-        const float *b = &live[c * Weather::LOOK];
+        const float *a = &prev[c * size_t(p_weather.stride())];
+        const float *b = &live[c * size_t(p_weather.stride())];
         texels[c * 4 + 0] = ov::float_to_half(a[Weather::COVER]);
         texels[c * 4 + 1] = ov::float_to_half(a[Weather::TYPE]);
         texels[c * 4 + 2] = ov::float_to_half(b[Weather::COVER]);

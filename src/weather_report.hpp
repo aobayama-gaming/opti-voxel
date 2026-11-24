@@ -10,20 +10,26 @@
 // run on the CPU alone (no GPU, no window) on a clock of its own, mapped at the game minutes asked for. Each map is the
 // whole planet, equirectangular (longitude across, the +y pole at the top): the cover (grey, the rain blue) and the wind
 // (the direction it blows to as a hue, east red, north yellow-green, west cyan, south violet; its speed as the
-// brightness, full at twice the prevailing wind).
+// brightness, full at twice the prevailing wind), and a cross-section along the equator (longitude across, the levels
+// up from the ground, SECTION_PX rows each: the cloud water, white at full cover, the rain blue).
 namespace WeatherReport {
+
+constexpr int SECTION_PX = 12;
 
 struct Frame {
     double minutes = 0.0; // after the spin-up
     std::vector<uint8_t> cover_rgb; // width x height x 3
     std::vector<uint8_t> wind_rgb;
-    ov::Value numbers; // game_s, storms, mean_cover, max_wind_mps, raining (the share of the planet)
+    std::vector<uint8_t> section_rgb; // width x section_height x 3
+    ov::Value numbers; // game_s, storms, mean_cover, max_wind_mps, raining (the share of the planet), cloudy_levels (each
+                       // level's share of the planet with cloud past a quarter of full cover)
 };
 
 struct Frames {
     ov::str error; // the world has no weather (not a sphere, or off), or its file was refused
     int width = 0;
     int height = 0;
+    int section_height = 0;
     std::vector<Frame> frames;
     ov::Value stats; // Weather::get_stats after the last frame
 };

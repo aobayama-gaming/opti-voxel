@@ -25,11 +25,13 @@ void unit(double r_v[3]) {
     }
 }
 
-WeatherSim::Params small_planet() {
+WeatherSim::Params small_planet(int p_levels = 1) {
     WeatherSim::Params p;
     p.radius_m = 2000.0;
     p.prevailing_mps = 8.0;
     p.seed = 7;
+    p.levels = p_levels;
+    p.top_m = 300.0;
     return p;
 }
 
@@ -43,14 +45,15 @@ Climate::BiomeWeather still(float p_moisture) {
     return w;
 }
 
-// The largest |field| over the interior cells, and whether every value is finite.
-double largest(const WeatherSim &p_sim, int p_field, bool &r_finite) {
+// The largest |value| at p_offset of each interior cell's record (a level's field: level_offset + Field; the column's
+// ETA: eta_offset), and whether every value is finite.
+double largest(const WeatherSim &p_sim, int p_offset, bool &r_finite) {
     const auto &g = static_cast<const CubeSphereGrid &>(p_sim.grid());
     double m = 0.0;
     for (int f = 0; f < CubeSphereGrid::FACES; f++) {
         for (int j = 0; j < g.size(); j++) {
             for (int i = 0; i < g.size(); i++) {
-                const float v = p_sim.state()[g.index(f, i, j) * WeatherSim::FIELDS + p_field];
+                const float v = p_sim.state()[g.index(f, i, j) * size_t(p_sim.stride()) + size_t(p_offset)];
                 r_finite = r_finite && std::isfinite(v);
                 m = std::max(m, double(std::fabs(v)));
             }
@@ -72,6 +75,20 @@ double mean_diag(const WeatherSim &p_sim, int p_diag) {
     return sum / double(g.cells());
 }
 
+// A level's field averaged over the interior cells.
+double mean_level(const WeatherSim &p_sim, int p_level, int p_field) {
+    const auto &g = static_cast<const CubeSphereGrid &>(p_sim.grid());
+    double sum = 0.0;
+    for (int f = 0; f < CubeSphereGrid::FACES; f++) {
+        for (int j = 0; j < g.size(); j++) {
+            for (int i = 0; i < g.size(); i++) {
+                sum += p_sim.state()[g.index(f, i, j) * size_t(p_sim.stride()) + size_t(WeatherSim::level_offset(p_level) + p_field)];
+            }
+        }
+    }
+    return sum / double(g.cells());
+}
+
 // The circulation round a centre: the mean of ((up - centre) x wind) . up over the cells within p_radius radians,
 // positive counterclockwise seen from above.
 double circulation(const WeatherSim &p_sim, const double p_centre[3], double p_radius) {
@@ -87,7 +104,7 @@ double circulation(const WeatherSim &p_sim, const double p_centre[3], double p_r
                 if (length3(r) > p_radius) {
                     continue;
                 }
-                const float *s = &p_sim.state()[g.index(f, i, j) * WeatherSim::FIELDS];
+                const float *s = &p_sim.state()[g.index(f, i, j) * size_t(p_sim.stride())]; // the ground level's wind
                 const double c[3] = { r[1] * s[2] - r[2] * s[1], r[2] * s[0] - r[0] * s[2], r[0] * s[1] - r[1] * s[0] };
                 sum += c[0] * up[0] + c[1] * up[1] + c[2] * up[2];
                 count++;
@@ -134,14 +151,16 @@ TEST_CASE("WeatherSim: the prevailing wind, easterly trades, westerlies, calm at
 
 TEST_CASE("WeatherSim: still air stays still") {
     const auto grid = std::make_shared<CubeSphereGrid>(16, 2000.0);
-    WeatherSim sim(grid, small_planet(), std::vector<Climate::BiomeWeather>(grid->cells(), still(0.5f)));
+    WeatherSim sim(grid, small_planet(4), std::vector<Climate::BiomeWeather>(grid->cells(), still(0.5f)));
     for (int t = 0; t < 50; t++) {
         sim.step(0.1);
     }
     bool finite = true;
-    CHECK(largest(sim, WeatherSim::WIND_X, finite) == 0.0);
-    CHECK(largest(sim, WeatherSim::WIND_Y, finite) == 0.0);
-    CHECK(largest(sim, WeatherSim::ETA, finite) == 0.0);
+    for (int k = 0; k < sim.levels(); k++) {
+        CHECK(largest(sim, WeatherSim::level_offset(k) + WeatherSim::WIND_X, finite) == 0.0);
+        CHECK(largest(sim, WeatherSim::level_offset(k) + WeatherSim::WIND_Y, finite) == 0.0);
+    }
+    CHECK(largest(sim, sim.eta_offset(), finite) == 0.0);
     CHECK(finite);
     CHECK(mean_diag(sim, WeatherSim::COVER) == 0.0);
 }
@@ -161,7 +180,7 @@ TEST_CASE("WeatherSim: a storm spins cyclonically, each hemisphere its way, and 
         const double spin = circulation(sim, centre, 0.25);
         CHECK((y > 0.0 ? spin > 0.0 : spin < 0.0));
         bool finite = true;
-        CHECK(largest(sim, WeatherSim::ETA, finite) <= std::fabs(WeatherSim::STORM_ETA));
+        CHECK(largest(sim, sim.eta_offset(), finite) <= std::fabs(WeatherSim::STORM_ETA));
         CHECK(largest(sim, WeatherSim::WIND_X, finite) < 30.0);
         CHECK(finite);
     }
@@ -188,8 +207,9 @@ TEST_CASE("WeatherSim: deterministic for a seed") {
     std::vector<Climate::BiomeWeather> w(grid->cells(), stormy);
     WeatherSim::Params other = small_planet();
     other.seed = 8;
-    WeatherSim a(grid, small_planet(), w);
-    WeatherSim b(grid, small_planet(), w);
+    WeatherSim a(grid, small_planet(3), w);
+    WeatherSim b(grid, small_planet(3), w);
+    other.levels = 3;
     WeatherSim c(grid, other, w);
     for (int t = 0; t < 200; t++) {
         a.step(0.25);
@@ -206,7 +226,7 @@ TEST_CASE("WeatherSim: deterministic for a seed") {
 // A long step is cut into substeps the gravity waves' CFL allows: 60 game seconds at once stay finite and bounded.
 TEST_CASE("WeatherSim: a long step takes substeps and stays stable") {
     const auto grid = std::make_shared<CubeSphereGrid>(32, 2000.0);
-    WeatherSim sim(grid, small_planet(), std::vector<Climate::BiomeWeather>(grid->cells(), Climate::BiomeWeather()));
+    WeatherSim sim(grid, small_planet(6), std::vector<Climate::BiomeWeather>(grid->cells(), Climate::BiomeWeather()));
     CHECK(sim.max_substep_s() > 0.0);
     const double dir[3] = { 0.0, 1.0, 0.0 };
     sim.inject_storm(dir, 1.0);
@@ -214,9 +234,47 @@ TEST_CASE("WeatherSim: a long step takes substeps and stays stable") {
         sim.step(60.0);
     }
     bool finite = true;
-    CHECK(largest(sim, WeatherSim::WIND_X, finite) < 40.0);
+    for (int k = 0; k < sim.levels(); k++) {
+        CHECK(largest(sim, WeatherSim::level_offset(k) + WeatherSim::WIND_X, finite) < 40.0);
+        CHECK(largest(sim, WeatherSim::level_offset(k) + WeatherSim::TEMP, finite) < 2.0);
+    }
     CHECK(finite);
     CHECK(sim.time_s() == doctest::Approx(1200.0));
+}
+
+// Warm moist ground under the levels (no wind, no storms): the warm air overturns and carries the vapour up, where the
+// saturation is lower: the cloud forms aloft, its base above the ground level, which stays clear.
+TEST_CASE("WeatherSim: warm moist ground convects, its cloud forms aloft") {
+    const auto grid = std::make_shared<CubeSphereGrid>(8, 2000.0);
+    Climate::BiomeWeather warm = still(1.3f);
+    warm.heat = 0.6f;
+    WeatherSim sim(grid, small_planet(6), std::vector<Climate::BiomeWeather>(grid->cells(), warm));
+    for (int t = 0; t < 60; t++) { // 600 s
+        sim.step(10.0);
+    }
+    double aloft = 0.0;
+    for (int k = 2; k < sim.levels(); k++) {
+        aloft = std::max(aloft, mean_level(sim, k, WeatherSim::CLOUD));
+    }
+    CHECK(aloft > 0.25 * WeatherSim::FULL_CLOUD);
+    CHECK(mean_level(sim, 0, WeatherSim::CLOUD) < 0.1 * aloft); // the base above the ground level
+    CHECK(mean_level(sim, sim.levels() - 1, WeatherSim::VAPOUR) > 0.3); // lifted
+    CHECK(mean_diag(sim, WeatherSim::COVER) > 0.25);
+}
+
+// Cold moist ground (stable air: no overturning): the lowest level saturates, the cloud sits on the ground (fog) and the
+// levels above stay drier.
+TEST_CASE("WeatherSim: cold moist ground makes fog in the lowest level") {
+    const auto grid = std::make_shared<CubeSphereGrid>(8, 2000.0);
+    Climate::BiomeWeather cold = still(1.4f);
+    cold.heat = -0.8f;
+    WeatherSim sim(grid, small_planet(6), std::vector<Climate::BiomeWeather>(grid->cells(), cold));
+    for (int t = 0; t < 60; t++) {
+        sim.step(10.0);
+    }
+    const double fog = mean_level(sim, 0, WeatherSim::CLOUD);
+    CHECK(fog > 0.25 * WeatherSim::FULL_CLOUD);
+    CHECK(mean_level(sim, sim.levels() - 1, WeatherSim::CLOUD) < 0.5 * fog);
 }
 
 TEST_CASE("Climate: a biome's weather parses, out of range or unknown keys are refused") {

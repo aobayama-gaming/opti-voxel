@@ -77,7 +77,9 @@ TEST_CASE("Weather: the worker's states follow the clock") {
     CHECK(weather.game_s() == doctest::Approx(6.0));
     CHECK(weather.blend() >= 0.0f);
     CHECK(weather.blend() <= 1.0f);
-    CHECK(weather.latest().size() == weather.grid().padded_cells() * Weather::LOOK);
+    CHECK(weather.levels() == 2); // 300 m over 196 m cells
+    CHECK(weather.stride() == Weather::LOOK + 2);
+    CHECK(weather.latest().size() == weather.grid().padded_cells() * size_t(weather.stride()));
     CHECK(weather.previous().size() == weather.latest().size());
     const double pos[3] = { 600.0, 1600.0, -1000.0 };
     Weather::Sample s;

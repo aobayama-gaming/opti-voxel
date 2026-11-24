@@ -17,6 +17,8 @@ Weather::Weather(const WorldFile::Weather &p_weather, const BaseSurface &p_base,
         cells = std::make_shared<CubeSphereGrid>(WeatherGrid::MIN_N, p_base.get_radius() * p_voxel_m);
     }
     params.radius_m = p_base.get_radius() * p_voxel_m;
+    params.top_m = p_weather.top_m;
+    params.levels = ov::clamp(int(std::lround(p_weather.top_m / cells->cell_m())), 1, WeatherSim::MAX_LEVELS);
     params.prevailing_mps = p_weather.prevailing_mps;
     params.storm_m = p_weather.storm_m;
     params.seed = p_seed;
@@ -83,13 +85,16 @@ void Weather::build() {
 }
 
 std::vector<float> Weather::look() const {
-    std::vector<float> out(cells->padded_cells() * LOOK);
+    const int st = stride();
+    const int sim_st = sim->stride();
+    const int levels_n = sim->levels();
+    std::vector<float> out(cells->padded_cells() * size_t(st));
     const std::vector<float> &s = sim->state();
     const std::vector<float> &d = sim->diagnostics();
     for (size_t c = 0; c < cells->padded_cells(); c++) {
-        const float *sc = &s[c * WeatherSim::FIELDS];
+        const float *sc = &s[c * size_t(sim_st)];
         const float *dc = &d[c * WeatherSim::DIAGS];
-        float *o = &out[c * LOOK];
+        float *o = &out[c * size_t(st)];
         o[WIND_X] = sc[WeatherSim::WIND_X];
         o[WIND_Y] = sc[WeatherSim::WIND_Y];
         o[WIND_Z] = sc[WeatherSim::WIND_Z];
@@ -98,6 +103,17 @@ std::vector<float> Weather::look() const {
         o[RAIN] = dc[WeatherSim::RAIN];
         o[TEMP] = sc[WeatherSim::TEMP];
         o[VAPOUR] = sc[WeatherSim::VAPOUR];
+        float aloft[3] = { 0.0f, 0.0f, 0.0f };
+        for (int k = 0; k < levels_n; k++) {
+            const float *l = sc + WeatherSim::level_offset(k);
+            for (int a = 0; a < 3; a++) {
+                aloft[a] += l[WeatherSim::WIND_X + a] / float(levels_n);
+            }
+            o[LOOK + k] = l[WeatherSim::CLOUD] / float(WeatherSim::FULL_CLOUD);
+        }
+        o[ALOFT_X] = aloft[0];
+        o[ALOFT_Y] = aloft[1];
+        o[ALOFT_Z] = aloft[2];
     }
     return out;
 }
@@ -192,13 +208,22 @@ bool Weather::at(const double p_pos[3], Sample &r_sample) const {
         return false;
     }
     float v[LOOK];
-    cells->sample(live_look.data(), LOOK, p_pos, v);
+    cells->sample(live_look.data(), stride(), LOOK, p_pos, v);
     r_sample.wind_mps = Float3{ v[WIND_X], v[WIND_Y], v[WIND_Z] };
+    r_sample.aloft_mps = Float3{ v[ALOFT_X], v[ALOFT_Y], v[ALOFT_Z] };
     r_sample.cover = v[COVER];
     r_sample.type = v[TYPE];
     r_sample.rain = v[RAIN];
     r_sample.temp = v[TEMP];
     r_sample.vapour = v[VAPOUR];
+    return true;
+}
+
+bool Weather::clouds_at(const double p_pos[3], float *r_levels) const {
+    if (!has_live) {
+        return false;
+    }
+    cells->sample(live_look.data() + LOOK, stride(), params.levels, p_pos, r_levels);
     return true;
 }
 
@@ -208,6 +233,8 @@ ov::Value Weather::get_stats() const {
     d["grid"] = ov::format("%d faces of %d x %d", cells->faces(), cells->width(), cells->height());
     d["cell_m"] = cells->cell_m();
     d["cells"] = int64_t(cells->cells());
+    d["levels"] = int64_t(params.levels);
+    d["top_m"] = params.top_m;
     d["ready"] = has_live;
     d["ticks"] = int64_t(live_tick);
     d["game_s"] = live_time_s;

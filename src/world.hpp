@@ -238,6 +238,7 @@ private:
     std::unique_ptr<Weather> weather; // its worker ticks the weather (WorldFile::Weather on)
     Clouds *clouds = nullptr; // the same; reads the atmosphere's textures, so goes first
     Float3 wind_at_camera;
+    Float3 aloft_at_camera;
     Float3 sun{ 0.0f, 1.0f, 0.0f };
     PageAuditor *auditor = nullptr;
     ov::Value audit = ov::Value::object();

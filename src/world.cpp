@@ -331,12 +331,14 @@ void World::frame(const Float3 *p_camera_pos, const Float3 *p_camera_forward, do
         Weather::Sample here;
         if (p_camera_pos != nullptr) {
             const double camera[3] = { double(p_camera_pos->x), double(p_camera_pos->y), double(p_camera_pos->z) };
-            wind_at_camera = weather_at(camera, here) ? here.wind_mps : Float3();
+            const bool known = weather_at(camera, here);
+            wind_at_camera = known ? here.wind_mps : Float3();
+            aloft_at_camera = known ? here.aloft_mps : Float3();
         }
         if (clouds) {
-            // The noises drift at the weather's pace: its wind times its time scale.
+            // The noises drift at the weather's pace: the wind aloft (the clouds') times its time scale.
             const float k = float(content.weather.time_scale);
-            clouds->set_weather(*weather, Float3{ wind_at_camera.x * k, wind_at_camera.y * k, wind_at_camera.z * k }, landed);
+            clouds->set_weather(*weather, Float3{ aloft_at_camera.x * k, aloft_at_camera.y * k, aloft_at_camera.z * k }, landed);
         }
     }
     if (atmosphere && p_camera_pos != nullptr) {
