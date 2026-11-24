@@ -67,8 +67,13 @@ private:
     bool _settable(const char *p_name) const;
     // The render origin moved by p_shift metres (World::recenter): the Node3D siblings follow, then origin_shifted.
     void _move_render_origin(const Float3 &p_shift);
-    // What follows the render origin outside the meshers: the sea level colours, the VoxelSky siblings' frame.
+    // What follows the render origin outside the meshers: the base and the sea (World::base_render, sea_render) on the
+    // pages and the sea pass, the VoxelSky siblings' frame.
     void _push_render_frame();
+    // Without a VoxelSky sibling (the mixer's view), the global atmo_sun_dir from a DirectionalLight3D sibling (the sea's
+    // glint), when it changes.
+    void _push_sun_without_sky();
+    Vector3 sun_dir_sent; // the last atmo_sun_dir _push_sun_without_sky set
     // The atmosphere's and the clouds' uniforms to the pages and the VoxelSky siblings (World::start; their textures once
     // made).
     void _push_atmosphere(const Dictionary &p_params);
@@ -185,6 +190,9 @@ public:
     // SDF (metres, LOD 0) at a render-space position: the camera's distance to the terrain, for the
     // clip planes above 15 LODs.
     double get_sdf_at(const Vector3 &p_render_pos) const;
+    // The height of a render-space position above the world's sea (metres, World::sea_height_at): negative under water,
+    // NAN without a sea or before the world starts.
+    double get_sea_height_at(const Vector3 &p_render_pos) const;
     // The render-space point (u, v) metres along the base's reference tangent plane (BaseSurface::tangent_point; flat: x,
     // z from the world's (0, 0) column at the datum): the player's --spawn and the climate report's coordinates.
     Vector3 get_tangent_position(const Vector2 &p_tangent_m) const;

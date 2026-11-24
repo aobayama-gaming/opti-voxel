@@ -192,17 +192,28 @@ public:
         }
         // base_altitude's formula (glsl_render) in float32 on the CPU: its precision (tests), not the GPU's bits.
         float altitude(const Float3 &p_m) const;
+        // base_level_span_k's span (glsl_render) in float32 on the CPU, its k from level_k: its precision (tests), not the
+        // GPU's bits. TORUS: false (no closed form).
+        bool level_span_k(const Float3 &p_m, const Float3 &p_dir, float p_k, float r_t[2]) const;
     };
     // The render-space base with the render origin at LOD0 voxel p_origin (it changes with the origin).
     Render render(const VoxelPos &p_origin, double p_voxel_m) const;
+    // base_level_span_k's k for the level p_level_m metres above the base, the render origin at LOD0 voxel p_origin, from
+    // double (it changes with the origin): SPHERE |centre|^2 - (radius + level)^2 (m^2), so the level's large terms cancel
+    // before the float (base_q's h (2 R + h) would lose a metre of R + h at Earth's radius); FLAT the level plane's render
+    // y (m). TORUS: NAN (no closed form: WorldFile refuses a sea on one).
+    double level_k(const VoxelPos &p_origin, double p_voxel_m, double p_level_m) const;
     // The base's radius of curvature in metres (its smallest; FLAT: infinite): what local approximations of its shape
     // (the atmosphere's multiple scattering, its scale) take.
     double curvature_radius_m(double p_voxel_m) const;
     // Render's fields as `uniform` declarations (Render::visit), for a host whose shaders splice glsl_render.
     static ov::str glsl_render_uniforms();
-    // `float base_altitude(vec3 p)` (metres above the base, signed), `vec3 base_up(vec3 p)` (its unit gradient) and
-    // `bool base_level_span(vec3 p, vec3 dir, float h, out vec2 t)` (where a ray is below altitude h), plain GLSL that
-    // Godot's shading language takes too; after glsl_render_uniforms (or the host's own declarations of Render's fields).
+    // `float base_altitude(vec3 p)` (metres above the base, signed), `vec3 base_up(vec3 p)` (its unit gradient),
+    // `bool base_level_span(vec3 p, vec3 dir, float h, out vec2 t)` (where a ray is below altitude h) and
+    // `bool base_level_span_k(vec3 p, vec3 dir, float k, out vec2 t)` (the same below a fixed level whose k is level_k's:
+    // the sea's, keeping its bits at any radius; SPHERE and FLAT, the sphere's roots shared with base_level_span), plain
+    // GLSL that Godot's shading language takes too; after glsl_render_uniforms (or the host's own declarations of
+    // Render's fields).
     static ov::str glsl_render();
 
 private:

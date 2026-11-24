@@ -11,6 +11,7 @@
 #include "page_auditor.hpp"
 #include "page_host.hpp"
 #include "sdf_cascade.hpp"
+#include "sea.hpp"
 #include "world_file.hpp"
 
 #include "ov/value.hpp"
@@ -161,6 +162,12 @@ public:
     // The base in render space (BaseSurface::render), for the shaders' altitude, up and level spans (glsl_render): it
     // changes with the render origin.
     BaseSurface::Render base_render() const;
+    // The world file's sea in render space (Sea::render): off without one; it changes with the render origin, like
+    // base_render.
+    Sea::Render sea_render() const;
+    // The height of a render-space position above the sea's level in metres (Sea::height_at), negative under water; NAN
+    // without a sea or before start.
+    double sea_height_at(const double p_render_pos[3]) const;
 
     // Render-origin rebasing. Render space (every Float3 the host passes or gets) is metres from the render origin,
     // which starts at the world origin. Called by the host before frame(): when the camera is farther than

@@ -571,6 +571,56 @@ double BaseSurface::curvature_radius_m(double p_voxel_m) const {
     return base_kind == Kind::FLAT ? INFINITY : radius * p_voxel_m; // TORUS: the tube's
 }
 
+double BaseSurface::level_k(const VoxelPos &p_origin, double p_voxel_m, double p_level_m) const {
+    double v[3];
+    const double len = offset(anchor, p_origin, v) * p_voxel_m;
+    if (base_kind == Kind::FLAT) {
+        return v[1] * p_voxel_m + p_level_m;
+    }
+    if (base_kind == Kind::TORUS) {
+        return NAN;
+    }
+    const double r = radius * p_voxel_m + p_level_m;
+    return (len - r) * (len + r);
+}
+
+namespace {
+
+// GLSL base_sphere_span: the roots of t^2 + 2 b t + q = 0, the far one from b and the near one as q / far.
+bool sphere_span(float p_q, float p_b, float r_t[2]) {
+    const float disc = p_b * p_b - p_q;
+    const float s = std::sqrt(ov::max(disc, 0.0f));
+    const float far = p_b > 0.0f ? -p_q / (p_b + s) : s - p_b;
+    r_t[0] = far != 0.0f ? p_q / far : -s - p_b;
+    r_t[1] = far;
+    return disc >= 0.0f;
+}
+
+// GLSL base_plane_span: a ray p_below metres under the level plane, rising p_dir_y per metre.
+bool plane_span(float p_below, float p_dir_y, float r_t[2]) {
+    const float level = p_below / p_dir_y;
+    r_t[0] = p_dir_y < 0.0f ? level : -1e30f;
+    r_t[1] = p_dir_y > 0.0f ? level : 1e30f;
+    return p_dir_y != 0.0f || p_below > 0.0f;
+}
+
+} // namespace
+
+bool BaseSurface::Render::level_span_k(const Float3 &p_m, const Float3 &p_dir, float p_k, float r_t[2]) const {
+    const Float3 &c = point_m;
+    if (kind == Kind::SPHERE) {
+        const float q = (p_m.x * p_m.x + p_m.y * p_m.y + p_m.z * p_m.z) - 2.0f * (p_m.x * c.x + p_m.y * c.y + p_m.z * c.z) + p_k;
+        const Float3 d = p_m - c;
+        return sphere_span(q, d.x * p_dir.x + d.y * p_dir.y + d.z * p_dir.z, r_t);
+    }
+    if (kind == Kind::TORUS) {
+        r_t[0] = -1e30f;
+        r_t[1] = 1e30f;
+        return false;
+    }
+    return plane_span(p_k - p_m.y, p_dir.y, r_t);
+}
+
 float BaseSurface::Render::altitude(const Float3 &p_m) const {
     const Float3 &c = point_m;
     if (kind == Kind::FLAT) {
@@ -678,26 +728,47 @@ bool base_traced_span(vec3 p, vec3 dir, float h, out vec2 t) {
     return true;
 }
 
+// SPHERE: the roots of t^2 + 2 b t + q = 0 (b = (p - c).dir, q = |p - c|^2 - r^2), the far one from b and the near one
+// as q / far, so both keep their bits; false without a real root.
+bool base_sphere_span(float q, float b, out vec2 t) {
+    float disc = b * b - q;
+    float s = sqrt(max(disc, 0.0));
+    float far = b > 0.0 ? -q / (b + s) : s - b;
+    t = vec2(far != 0.0 ? q / far : -s - b, far);
+    return disc >= 0.0;
+}
+
+// FLAT: a ray `below` metres under the level plane, rising dir_y per metre.
+bool base_plane_span(float below, float dir_y, out vec2 t) {
+    float level = below / dir_y;
+    t = dir_y > 0.0 ? vec2(-1e30, level) : (dir_y < 0.0 ? vec2(level, 1e30) : vec2(-1e30, 1e30));
+    return dir_y != 0.0 || below > 0.0;
+}
+
 // Where the ray p + t dir (dir unit) is below altitude h: t in [t.x, t.y] (either may be behind p; +-1e30 unbounded);
-// false where it never is. SPHERE: the roots of |p + t dir - c| = R + h, the far one from b and the near one as q / far,
-// so both keep their bits.
+// false where it never is. SPHERE: the roots of |p + t dir - c| = R + h (base_sphere_span).
 bool base_level_span(vec3 p, vec3 dir, float h, out vec2 t) {
     if (base_kind == BASE_TORUS) {
         return base_traced_span(p, dir, h, t);
     }
     if (base_kind == BASE_SPHERE) {
-        float q = base_q(p, h);
-        float b = dot(p - base_point_m, dir);
-        float disc = b * b - q;
-        float s = sqrt(max(disc, 0.0));
-        float far = b > 0.0 ? -q / (b + s) : s - b;
-        t = vec2(far != 0.0 ? q / far : -s - b, far);
-        return disc >= 0.0;
+        return base_sphere_span(base_q(p, h), dot(p - base_point_m, dir), t);
     }
-    float below = h - (p.y - base_point_m.y);
-    float level = below / dir.y;
-    t = dir.y > 0.0 ? vec2(-1e30, level) : (dir.y < 0.0 ? vec2(level, 1e30) : vec2(-1e30, 1e30));
-    return dir.y != 0.0 || below > 0.0;
+    return base_plane_span(h - (p.y - base_point_m.y), dir.y, t);
+}
+
+// base_level_span below a fixed level whose k (BaseSurface::level_k, from double on the CPU) stands for h: SPHERE
+// |c|^2 - (R + h)^2, so q = |p|^2 - 2 p.c + k keeps its low bits at any radius; FLAT the level plane's render y. TORUS:
+// no closed form (false; WorldFile refuses a sea on one).
+bool base_level_span_k(vec3 p, vec3 dir, float k, out vec2 t) {
+    if (base_kind == BASE_SPHERE) {
+        return base_sphere_span(dot(p, p) - 2.0 * dot(p, base_point_m) + k, dot(p - base_point_m, dir), t);
+    }
+    if (base_kind == BASE_TORUS) {
+        t = vec2(-1e30, 1e30);
+        return false;
+    }
+    return base_plane_span(k - p.y, dir.y, t);
 }
 )glsl"),
             { { "SPHERE_KIND", ov::itos(int(Kind::SPHERE)) }, { "TORUS_KIND", ov::itos(int(Kind::TORUS)) },

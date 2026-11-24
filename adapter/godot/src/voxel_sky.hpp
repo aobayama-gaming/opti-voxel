@@ -32,6 +32,8 @@ public:
     // The atmosphere's per-frame uniforms, global (every page material and the sky read them): the camera volume's
     // range (VoxelTerrain) and the sun's light (VoxelSky). Before a shader that declares them compiles (once).
     static void add_atmosphere_globals();
+    // atmo_sun_dir until a sun sets it (towards the sun, unit).
+    static inline const Vector3 DEFAULT_SUN_DIR = Vector3(0.3f, 0.8f, 0.5f).normalized();
 
     void set_cloud_texture(const Ref<Texture2D> &p_texture);
     Ref<Texture2D> get_cloud_texture() const;
@@ -87,6 +89,7 @@ private:
     Dictionary atmosphere; // set_atmosphere's
     float atmosphere_gain = 3.14159265f;
     Vector3 sun_light_sent; // the last atmo_sun_light set
+    Vector3 sun_dir_sent; // the last atmo_sun_dir set
 
     DirectionalLight3D *sun = nullptr; // the sibling the sky's sun is (LIGHT0)
     Ref<Environment> environment;

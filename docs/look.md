@@ -43,8 +43,8 @@ The shared environment and the page shader's surface detail.
   (rare: `rebase_distance_m`); cloud shadows read three planes there (three fetches). The sky is drawn in the
   camera's local frame (its up on +y), so the horizon is the ground's and the global sun sets as the camera goes
   round.
-  `tools/shot_diff.py` compares two shots of one pose (a fly far out and back with `--still=1`). Not done yet, in order: water (a sea plane with a
-  depth shader), triplanar image textures per material, grass, time of day.
+  `tools/shot_diff.py` compares two shots of one pose (a fly far out and back with `--still=1`). The sea and its shore:
+  below ("Sea"). Not done yet, in order: triplanar image textures per material, grass, time of day.
 
 ## Atmosphere
 
@@ -76,12 +76,14 @@ render contract (`BaseSurface::glsl_render`, `docs/terrain.md`), so another base
 - **Hosts** (`Atmosphere::glsl_lookup`): `atmo_at(camera, dir, dist)` (the slices around dist, linear between them) and
   `atmo_sky`. The sky shader draws the sky slice, or from above the atmosphere marches per pixel (24 steps:
   `atmo_integrate`, the volume's texels too coarse for the limb), plus the sun's disk through the air; the cloud layer
-  is lit by the sun's transmittance at the cloud and hazed by the air in front of it. The page shader writes Godot's
+  is lit by the sun's transmittance at the cloud and hazed by the air in front of it; the sea pass (below) reflects
+  `atmo_sky_radiance` and hazes its surface with `atmo_at`. The page shader writes Godot's
   `FOG` = (S / (1 - T), 1 - T), i.e. colour T + S, and `light()` takes the sun through an 8-step march from the
   fragment (red at dusk, none past the base's terminator). The sun's light is the `DirectionalLight3D`'s colour times
   its energy times `VoxelSky.atmosphere_gain` (pi: Godot's lights carry it, so the sky over the ground keeps
-  Hillaire's physical ratio). Per frame two global shader uniforms (`atmo_range_m` from VoxelTerrain, `atmo_sun_light`
-  from VoxelSky, which also hands the terrain the sun's direction); the textures reach the materials through
+  Hillaire's physical ratio). Per frame three global shader uniforms (`atmo_range_m` from VoxelTerrain, `atmo_sun_light`
+  and `atmo_sun_dir` from VoxelSky, which also hands the terrain the sun's direction; without a VoxelSky, as in the
+  mixer's view, VoxelTerrain sets `atmo_sun_dir` from its DirectionalLight3D sibling); the textures reach the materials through
   `texture_rd_create` (the pages) and the sky material's RID. With the atmosphere on, the environment's fog stays
   enabled at density 0 (Godot drops a shader's `FOG` without it): the atmosphere is the haze.
 - **Checked:** `AtmosphereCheck` (in `frame_test.sh`'s report, `atmosphere_check`): the passes against a CPU reference
@@ -172,7 +174,8 @@ that follow it (the climate's map below is 3D for the same reason).
   of the base shape) from where its line leaves the base towards the sun, its transmittance through the octaves.
 - **Hosts** (`Clouds::glsl_lookup`): `cloud_at(camera, dir, dist)` (the grid at dir; a cloud starting past dist left
   out, one dist enters partly) and `cloud_sun_shadow(p)` (one fetch). The sky shader puts the whole ray's clouds over
-  the sky; the page shader puts the clouds in front of a fragment over its `FOG` (combined: T = T_air T_clouds,
+  the sky; the sea pass (below) puts them in its reflection and in front of its surface and shades its surface with the
+  shadow map; the page shader puts the clouds in front of a fragment over its `FOG` (combined: T = T_air T_clouds,
   S = S_air T_clouds + S_clouds) and its `light()` takes the sun through the shadow map. The grid's and the shadow map's
   textures reach the materials like the atmosphere's (`VoxelTerrain::_rt_share_textures`); the shadow map's frame is
   four global uniforms per frame (`cloud_shadow_origin_m`, `_u`, `_v`, `_extent_m`). `VoxelSky` hands the terrain the
@@ -201,3 +204,43 @@ that follow it (the climate's map below is 3D for the same reason).
   frame; no shadow past the shadow map (faded over its last tenth); the clouds take the scene's sun
   colour, warm here, through the air (no white balance); no cloud shadows on the atmosphere (light shafts), no
   lightning, no precipitation. The Dawn viewer has no clouds yet.
+
+## Sea
+
+A world file's `"sea"` (`WorldFile::Sea`: `level_m` above the base, `water` {`deep`, `shallow`, `clarity_m`}, `shore`
+{`below_m`, `above_m`, `sand`}; `docs/terrain.md`) drawn by a full-screen pass over the scene, and its shore on the
+ground. The look is core (`src/sea.*`, `Sea`): its GLSL (`glsl_water`, `glsl_shore`) and its uniforms (`Sea::Render`,
+`World::sea_render`, set again on every rebase like the base's); a host splices the text and draws the pass.
+- **The surface:** the level along each pixel's ray in closed form, `base_level_span_k` (`BaseSurface::glsl_render`),
+  its `k` from double on the CPU (`BaseSurface::level_k`: a sphere's |c|^2 - (R + h)^2, so the level keeps its bits at
+  Earth's radius where `base_level_span`'s h (2 R + h) term would not; the flat base's level plane). The water along the
+  ray: from the camera, or the surface, to the scene's depth or the far side of the level. A torus has no closed form:
+  the world file refuses a sea on one (TODO: a root solver; `base_traced_span` is too costly per pixel).
+- **The water:** Beer-Lambert per channel over the ray's length in it, its extinction `-ln(shallow) / clarity_m` (a
+  column of `clarity_m` metres passes `shallow`), the light it scatters `deep` times what it takes, lit by the sun (its
+  transmittance through the air, the clouds' shadow map) and the sky above. The surface: Fresnel (Schlick, F0 0.02)
+  times the sky in the reflected direction (`atmo_sky_radiance` and `cloud_at` with the atmosphere, else `sea_sky`,
+  VoxelSky's fog colour), a GGX glint of the sun (`atmo_sun_dir`, `atmo_sun_light`), 5 Gerstner waves in the normals only
+  (24 m down to 2.5 m, read through the shading frame: they stay put on a rebase), each faded into the glint's roughness
+  where it is under 4 pixels (Bruneton's filtering in spirit: the waves under a pixel become roughness). Foam where the
+  water is under 0.5 m deep, a drifting value noise. The air and its clouds in front of the surface (`atmo_at`,
+  `cloud_at`) over the water's light; the scene behind already carries its own.
+- **Under water** (the camera below the level): the water from the camera to the scene, or to the surface over it,
+  absorbs and scatters as a fog, lit through the water above the camera. No surface seen from below (no total internal
+  reflection, no Snell window) yet.
+- **The shore** (the page shader, `sea_shore` on `v_height`): the sand colour over [level - `below_m`, level +
+  `above_m`] with soft edges, darker up to 0.6 m above the waterline (wet; its roughness lowered too, which shows once
+  `light()` takes a specular lobe). Neutral without a sea (`sea_on` 0). No tree or rock stands under level + `above_m`
+  (the world file's site floor, `SDFTable::set_site_floor_m`).
+- **Godot host** (`GodotPageHost::set_sea`, made when the world has a sea): one quad over the whole screen (its vertex
+  stage writes `POSITION = vec4(VERTEX.xy, 1, 1)`; ignored by culling), drawn with the transparent objects (unshaded,
+  no depth test or write, no fog). It reads the scene's depth (`hint_depth_texture`, Godot's reverse z: 0 is the far
+  plane, the sky) and colour (`hint_screen_texture`) and replaces the colour where its ray meets water (`ALPHA` 1), so the
+  transmittance is per channel. Its material takes every page uniform (`set_material_param`: the decode's origin and
+  voxel, the base, the atmosphere and clouds, the sea), so the mixer's 3D view shows it too.
+  `VoxelTerrain.get_sea_height_at(pos)` (`World::sea_height_at`: the base's altitude in double minus the level, NAN
+  without a sea): the player's HUD says "under water".
+- **Limits:** Dawn draws no sea yet (flat only there, no depth binding, a display-encoded target); waves are in the
+  normals only (no displacement: the silhouette against the sky stays a smooth level; near-field swell is the next
+  step); the reflection reads the sky only (no terrain, no screen-space reflection); no refraction offset, no caustics;
+  the water's light is one scattering colour (`deep`), not a phase function. Cost unmeasured.

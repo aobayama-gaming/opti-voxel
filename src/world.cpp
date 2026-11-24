@@ -636,6 +636,19 @@ BaseSurface::Render World::base_render() const {
     return sdf->get_base().render(config.chunk_param.origin_voxel(), double(config.chunk_param.voxel_size));
 }
 
+Sea::Render World::sea_render() const {
+    return Sea::render(content.sea, sdf->get_base(), config.chunk_param.origin_voxel(), double(config.chunk_param.voxel_size));
+}
+
+double World::sea_height_at(const double p_render_pos[3]) const {
+    if (!started || !content.sea.on) {
+        return NAN;
+    }
+    const double vs = double(config.chunk_param.voxel_size);
+    const double offset[3] = { p_render_pos[0] / vs, p_render_pos[1] / vs, p_render_pos[2] / vs };
+    return Sea::height_at(sdf->get_base(), WorldCoord::offset_pos(config.chunk_param.origin_voxel(), offset), vs, content.sea.level_m);
+}
+
 void World::set_cloud_weather(float p_cover, const Float3 &p_wind_mps) {
     cloud_cover = p_cover;
     cloud_wind = p_wind_mps;

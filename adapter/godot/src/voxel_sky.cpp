@@ -96,14 +96,16 @@ vec3 wind_sway(vec3 p) {
 // The atmosphere's and the volumetric clouds' uniforms in both shaders (after GLSL_CLOUDS: the base), then the core's
 // lookups (Atmosphere::glsl_lookup, Clouds::glsl_lookup). VoxelTerrain sets them once its world starts with an
 // atmosphere (off until then): the camera volume and the multiple-scattering table, the medium, the clouds' grid, shadow map
-// and layer; per frame the globals atmo_range_m and the shadow map's frame (VoxelTerrain) and atmo_sun_light (VoxelSky:
-// the sun's colour times its energy times atmosphere_gain).
+// and layer; per frame the globals atmo_range_m and the shadow map's frame (VoxelTerrain), atmo_sun_light (VoxelSky:
+// the sun's colour times its energy times atmosphere_gain) and atmo_sun_dir (VoxelSky: towards the sun; VoxelTerrain
+// from its DirectionalLight3D sibling where no VoxelSky is: the sea pass's glint).
 static constexpr const char GLSL_ATMOSPHERE[] = R"glsl(
 uniform bool atmo_enabled = false;
 uniform sampler2D atmo_volume : filter_linear, repeat_enable;
 uniform sampler2D atmo_multiscatter : filter_linear;
 global uniform float atmo_range_m;
 global uniform vec3 atmo_sun_light;
+global uniform vec3 atmo_sun_dir;
 uniform bool cloud_enabled = false;
 uniform sampler2D cloud_light : filter_linear, repeat_enable;
 uniform sampler2D cloud_depth : filter_linear, repeat_enable;
@@ -214,6 +216,7 @@ void VoxelSky::add_atmosphere_globals() {
     RenderingServer *rs = RenderingServer::get_singleton();
     rs->global_shader_parameter_add("atmo_range_m", RenderingServer::GLOBAL_VAR_TYPE_FLOAT, 1.0);
     rs->global_shader_parameter_add("atmo_sun_light", RenderingServer::GLOBAL_VAR_TYPE_VEC3, Vector3(1.0f, 1.0f, 1.0f));
+    rs->global_shader_parameter_add("atmo_sun_dir", RenderingServer::GLOBAL_VAR_TYPE_VEC3, DEFAULT_SUN_DIR);
     // The clouds' shadow map frame (Clouds::visit_host_frame: vec3s and a float).
     struct AddGlobal {
         RenderingServer *rs;
@@ -367,6 +370,10 @@ void VoxelSky::_process(double) {
         RenderingServer::get_singleton()->global_shader_parameter_set("atmo_sun_light", light);
     }
     const Vector3 towards = sun->get_global_transform().basis.get_column(2).normalized();
+    if (towards != sun_dir_sent) {
+        sun_dir_sent = towards;
+        RenderingServer::get_singleton()->global_shader_parameter_set("atmo_sun_dir", towards);
+    }
     Node *parent = get_parent();
     for (int i = 0; parent && i < parent->get_child_count(); i++) {
         if (VoxelTerrain *terrain = Object::cast_to<VoxelTerrain>(parent->get_child(i))) {
@@ -386,6 +393,11 @@ Dictionary VoxelSky::cloud_params() const {
     params["cloud_wind"] = cloud_wind;
     params["cloud_shadow"] = cloud_shadow;
     params["wind_sway_m"] = wind_sway_m;
+    // The sea's sky without the atmosphere (the pass's reflection, Sea::glsl_water): the fog's colour, the horizon's.
+    if (environment.is_valid()) {
+        const Color fog = environment->get_fog_light_color().srgb_to_linear();
+        params["sea_sky"] = Vector3(fog.r, fog.g, fog.b);
+    }
     return params;
 }
 

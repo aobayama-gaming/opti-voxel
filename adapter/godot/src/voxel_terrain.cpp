@@ -8,6 +8,7 @@
 #include "voxel_sky.hpp"
 #include <cmath>
 #include <fstream>
+#include <godot_cpp/classes/directional_light3d.hpp>
 #include <godot_cpp/classes/engine.hpp>
 #include <godot_cpp/classes/mesh.hpp>
 #include <godot_cpp/classes/project_settings.hpp>
@@ -58,6 +59,7 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_load_radius"), &VoxelTerrain::get_load_radius);
     ClassDB::bind_method(D_METHOD("get_half_chunk_voxels"), &VoxelTerrain::get_half_chunk_voxels);
     ClassDB::bind_method(D_METHOD("get_sdf_at", "render_pos"), &VoxelTerrain::get_sdf_at);
+    ClassDB::bind_method(D_METHOD("get_sea_height_at", "render_pos"), &VoxelTerrain::get_sea_height_at);
     ClassDB::bind_method(D_METHOD("get_tangent_position", "tangent_m"), &VoxelTerrain::get_tangent_position);
     ClassDB::bind_method(D_METHOD("get_up_at", "render_pos"), &VoxelTerrain::get_up_at);
     ClassDB::bind_method(D_METHOD("get_scene_shift"), &VoxelTerrain::get_scene_shift);
@@ -559,6 +561,11 @@ double VoxelTerrain::get_sdf_at(const Vector3 &p_render_pos) const {
     return world->sdf_at(pos);
 }
 
+double VoxelTerrain::get_sea_height_at(const Vector3 &p_render_pos) const {
+    const double pos[3] = { double(p_render_pos.x), double(p_render_pos.y), double(p_render_pos.z) };
+    return world->sea_height_at(pos);
+}
+
 Vector3 VoxelTerrain::get_tangent_position(const Vector2 &p_tangent_m) const {
     double pos[3];
     world->tangent_position(double(p_tangent_m.x), double(p_tangent_m.y), pos);
@@ -651,6 +658,22 @@ struct SetChangedGlobal {
     void operator()(const char *p_name, float p_v) { set(p_name, p_v); }
 };
 
+void VoxelTerrain::_push_sun_without_sky() {
+    Node *parent = get_parent();
+    DirectionalLight3D *light = nullptr;
+    for (int i = 0; parent && i < parent->get_child_count(); i++) {
+        if (Object::cast_to<VoxelSky>(parent->get_child(i))) {
+            return; // VoxelSky::_process sets it
+        }
+        light = light ? light : Object::cast_to<DirectionalLight3D>(parent->get_child(i));
+    }
+    const Vector3 towards = light ? light->get_global_transform().basis.get_column(2).normalized() : VoxelSky::DEFAULT_SUN_DIR;
+    if (towards != sun_dir_sent) {
+        sun_dir_sent = towards;
+        RenderingServer::get_singleton()->global_shader_parameter_set("atmo_sun_dir", towards);
+    }
+}
+
 void VoxelTerrain::_push_atmosphere(const Dictionary &p_params) {
     set_page_params(p_params);
     Node *parent = get_parent();
@@ -694,6 +717,9 @@ void VoxelTerrain::_push_render_frame() {
     Dictionary base;
     world->base_render().visit(ShaderParams{ base });
     set_page_params(base);
+    Dictionary sea;
+    world->sea_render().visit(ShaderParams{ sea });
+    set_page_params(sea);
     const Vector3i origin_lo = godot_v3i(WorldCoord::lo32_i(param.origin_voxel()));
     Node *parent = get_parent();
     for (int i = 0; parent && i < parent->get_child_count(); i++) {
@@ -839,6 +865,9 @@ bool VoxelTerrain::_start_world() {
     const Float3 camera_forward = camera != nullptr ? ov_f3(_camera_forward()) : Float3();
     const double camera_far = _camera_far();
     if (!world->start(projection, hosts, camera != nullptr ? &camera_pos : nullptr, camera != nullptr ? &camera_forward : nullptr, camera_far)) {
+        if (page_host) {
+            page_host->set_sea(false); // a refused world draws no sea (a restart's last one had one)
+        }
         return false;
     }
     if (page_host) {
@@ -850,6 +879,7 @@ bool VoxelTerrain::_start_world() {
             skirt_depths.set(l, l < get_lod_numbers() ? sdf.skirt_depth_m(l) : 0.0f);
         }
         page_host->set_material_param("skirt_depth_m", skirt_depths);
+        page_host->set_sea(world->world_file().sea.on);
         set_page_params(page_params); // set before the pool existed (VoxelSky's clouds)
     }
     _push_render_frame();
@@ -999,6 +1029,9 @@ void VoxelTerrain::_process(double) {
     if (const Clouds *clouds = world->get_clouds()) {
         // The shadow map's frame, as the pass of this frame takes it (the globals that changed).
         Clouds::visit_host_frame(clouds->last_frame(), SetChangedGlobal{ cloud_globals_sent });
+    }
+    if (world->world_file().sea.on) {
+        _push_sun_without_sky();
     }
     // Tracing reads every captured frame (the GPU track).
     if ((debug_gpu_profile && world->frames() % 15 == 0) || debug_gpu_profile_frames || Trace::enabled()) {

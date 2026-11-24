@@ -454,6 +454,7 @@ func _frozen_path() -> String:
 		if stem.ends_with(ext):
 			stem = stem.trim_suffix(ext)
 			break
+	stem = stem.trim_suffix(".frozen")  # a frozen world freezes onto itself
 	return path.get_base_dir().path_join(stem + ".frozen.world.json")
 
 

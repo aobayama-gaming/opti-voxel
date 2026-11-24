@@ -239,6 +239,11 @@ ov::str parse_sea(const ov::Value &p_data, WorldFile &r_world) {
     if (!err.empty() || !p_data.has("sea")) {
         return err;
     }
+    if (r_world.planet_ring_m > 0.0) {
+        // TODO: the sea pass finds the level along a ray in closed form (base_level_span_k); a torus's level is a quartic,
+        // sphere-traced per pixel (base_traced_span), too costly for every water pixel. A root solver would close it.
+        return "world: sea: a sea on a torus isn't drawn yet (its level along a ray has no closed form): give it a sphere or a flat shape.";
+    }
     ov::Value level = sea, clarity = water, band = shore; // their numbers alone
     level.erase("water");
     level.erase("shore");
