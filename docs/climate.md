@@ -121,6 +121,10 @@ macro layer in double on the CPU, `BaseSurface`'s region machinery).
 - **Clouds** (a biome's `"clouds": {"cover": 0..1, "type": 0..1}`, `Climate::BiomeClouds`): the volumetric clouds' cover
   and type over the biome, blended by the weights on a coarse map round the camera (`CloudClimate`, `docs/look.md`).
   They touch no cascade pass or shader.
+- **Weather** (a biome's `"weather": {"wind", "drag", "heat", "moisture", "gust", "storms"}`, `Climate::BiomeWeather`):
+  how the biome pushes the simulated weather (`docs/weather.md` "Forcing"); every key optional, the neutral biome's
+  values by default. It touches no cascade pass or shader either: the weather is read by what is drawn, never by the
+  ground.
 - **Worlds** (`adapter/godot/project/climate/`): `world.json` with `engine.json` and `climate.json` (eight biomes on
   temperature x humidity x wind, 6.5-26 km octaves, 15 LODs: the top, LOD 14, is the ground's largest note; each
   biome's notes once fitted to a real Copernicus heightmap, see git history of `tools/landforms/`; dunes and mountain

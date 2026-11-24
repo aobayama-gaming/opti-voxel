@@ -2,6 +2,7 @@
 
 #include "base_surface.hpp"
 #include "chunk_math.hpp"
+#include "weather_grid.hpp"
 
 #include "ov/files.hpp"
 #include "ov/format.hpp"
@@ -270,6 +271,44 @@ ov::str parse_sea(const ov::Value &p_data, WorldFile &r_world) {
     colour(shore, "sand", "sea shore", s.sand, err);
     r_world.sea = s;
     return err;
+}
+
+// "weather" into r_world.weather: on over a sphere unless "on" is false; refused over a flat shape or a torus.
+ov::str parse_weather(const ov::Value &p_data, WorldFile &r_world) {
+    ov::str err;
+    const ov::Value d = section(p_data, "weather", { "on", "grid", "tick_hz", "time_scale", "prevailing_mps", "storm_m", "spin_up_s" }, err);
+    if (!err.empty()) {
+        return err;
+    }
+    const bool sphere = r_world.planet_radius_m > 0.0 && r_world.planet_ring_m == 0.0;
+    WorldFile::Weather w;
+    if (d.has("on") && d["on"].get_type() != ov::Value::BOOL) {
+        return "world: weather: 'on' is true or false.";
+    }
+    w.on = sphere && d.get("on", true).as_bool();
+    if (!sphere) {
+        return p_data.has("weather") ? ov::str("world: weather: the weather is simulated over a sphere only (give the shape a sphere, or drop \"weather\").") : ov::str();
+    }
+    ov::Value numbers = d;
+    numbers.erase("on");
+    err = not_a_number(numbers, "weather");
+    if (!err.empty()) {
+        return err;
+    }
+    const double grid = d.get("grid", double(w.grid)).as_double();
+    w.tick_hz = d.get("tick_hz", w.tick_hz).as_double();
+    w.time_scale = d.get("time_scale", w.time_scale).as_double();
+    w.prevailing_mps = d.get("prevailing_mps", w.prevailing_mps).as_double();
+    w.storm_m = d.get("storm_m", w.storm_m).as_double();
+    w.spin_up_s = d.get("spin_up_s", w.spin_up_s).as_double();
+    const bool ok = grid >= WeatherGrid::MIN_N && grid <= WeatherGrid::MAX_N && grid == std::floor(grid) && w.tick_hz > 0.0 && w.tick_hz <= 120.0 && w.time_scale > 0.0 && w.time_scale <= 10000.0 && w.prevailing_mps >= 0.0 && w.prevailing_mps <= 200.0 && w.storm_m >= 0.0 && std::isfinite(w.storm_m) && w.spin_up_s >= 0.0 && w.spin_up_s <= 86400.0;
+    if (!ok) {
+        return ov::format("world: weather: grid a whole number in [%d, %d], tick_hz in (0, 120], time_scale in (0, 10000], prevailing_mps in [0, 200], storm_m >= 0, spin_up_s in [0, 86400].",
+                WeatherGrid::MIN_N, WeatherGrid::MAX_N);
+    }
+    w.grid = int(grid);
+    r_world.weather = w;
+    return ov::str();
 }
 
 // "atmosphere" into r_world: the air's density and its Rayleigh tint.
@@ -555,13 +594,14 @@ ov::str parse_climate(const ov::Value &p_data, const ov::str &p_dir, WorldFile &
 ov::str WorldFile::parse(const ov::Value &p_data, const ov::str &p_dir, WorldFile &r_world) {
     // "planet" is known only to be refused with its new name (parse_shape).
     ov::str err = unknown_key(p_data, "file",
-            { "engine", "seed", "shape", "planet", "sea", "climate", "atmosphere", "look", "instances", "features", "feature_region", "species", "biomes", "instance_band", "edits" });
+            { "engine", "seed", "shape", "planet", "sea", "climate", "atmosphere", "weather", "look", "instances", "features", "feature_region", "species", "biomes", "instance_band", "edits" });
     WorldFile w;
     err = err.empty() ? parse_engine(p_data, p_dir, w) : err;
     err = err.empty() ? parse_shape(p_data, w) : err;
     err = err.empty() ? parse_seed(p_data, w) : err;
     err = err.empty() ? parse_sea(p_data, w) : err;
     err = err.empty() ? parse_air(p_data, w) : err;
+    err = err.empty() ? parse_weather(p_data, w) : err;
     err = err.empty() ? parse_look(p_data, w) : err;
     err = err.empty() ? parse_contents(p_data, p_dir, w) : err;
     err = err.empty() ? parse_climate(p_data, p_dir, w) : err;

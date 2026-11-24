@@ -34,6 +34,7 @@ namespace Climate {
 //             "graph": { "nodes": [ node... ] },
 //             "surface": { "flat": "#2a2420", "steep": "#1a1614" (optional, else flat), "roughness": 1 },
 //             "clouds": { "cover": 0.6, "type": 0.5 } (optional),
+//             "weather": { "wind": 1, "drag": 1, "heat": 0, "moisture": 0.7, "gust": 0.5, "storms": 0 } (optional, each key too),
 //             "instances": [ { "species": "conifer", "cell_m": 5, "share": 2 } ] (optional), "features": [ { "kind": "lava_lake", "cell_m": 640, "chance": 0.6, "radius_m": [18, 45] } ]
 //             (optional),
 //             "debug_color": "#c04020" }
@@ -43,7 +44,8 @@ namespace Climate {
 //     default: no "at", it fills what the others leave. "surface": the biome's ground colours (sRGB) on gentle and
 //     steep slopes; without it, the procedural ground's. "clouds": the sky over the biome, its cover and cloud type in
 //     [0, 1] (stratus 0, stratocumulus 0.5, cumulus 1; Climate::BiomeClouds); without it, the sky's cover and the
-//     weather noise's type. "instances": the world's species (species.hpp) its sites grow, one site per cell of cell_m
+//     weather noise's type. "weather": how the biome pushes the
+//     simulated weather (Climate::BiomeWeather, docs/weather.md); without it, the neutral biome's. "instances": the world's species (species.hpp) its sites grow, one site per cell of cell_m
 //     metres, each by its integer share among the biome's entries of its kind and cell (BiomePick); without the key
 //     the world's "instances", [] none. "features": the features standing on it
 //     (biome_features.hpp: a kind, its cell, the chance a cell holds one, its radius range); without the key the
@@ -544,8 +546,26 @@ private:
         r_c.type = float(type);
     }
 
+    // A biome's "weather" (Climate::BiomeWeather): every key optional, its default the neutral biome's.
+    void weather(const ov::Value &p_d, const ov::str &p_where, Climate::BiomeWeather &r_w) {
+        if (!keys(p_d, p_where, { "wind", "drag", "heat", "moisture", "gust", "storms" })) {
+            return;
+        }
+        const double wind = number(p_d, "wind", p_where, r_w.wind);
+        const double drag = number(p_d, "drag", p_where, r_w.drag);
+        const double heat = number(p_d, "heat", p_where, r_w.heat);
+        const double moisture = number(p_d, "moisture", p_where, r_w.moisture);
+        const double gust = number(p_d, "gust", p_where, r_w.gust);
+        const double storms = number(p_d, "storms", p_where, r_w.storms);
+        const bool ok = wind >= 0.0 && wind <= 10.0 && drag >= 0.0 && drag <= 100.0 && heat >= -1.0 && heat <= 1.0 && moisture >= 0.0 && moisture <= 2.0 && gust >= 0.0 && gust <= 10.0 && storms >= 0.0 && storms <= 1000.0;
+        if (error.empty() && !ok) {
+            fail(p_where, "wind in [0, 10], drag in [0, 100], heat in [-1, 1], moisture in [0, 2], gust in [0, 10], storms in [0, 1000].");
+        }
+        r_w = Climate::BiomeWeather{ float(wind), float(drag), float(heat), float(moisture), float(gust), float(storms) };
+    }
+
     void biome(const ov::Value &p_d, int64_t p_i) {
-        if (!keys(p_d, ov::format("biome %d", p_i), { "name", "at", "graph", "surface", "clouds", "debug_color", "instances", "features" })) {
+        if (!keys(p_d, ov::format("biome %d", p_i), { "name", "at", "graph", "surface", "clouds", "weather", "debug_color", "instances", "features" })) {
             return;
         }
         Climate::Biome b;
@@ -565,6 +585,9 @@ private:
         }
         if (p_d.has("clouds")) {
             clouds(dict(p_d["clouds"], where + ov::str(" clouds")), where + ov::str(" clouds"), b.clouds);
+        }
+        if (p_d.has("weather")) {
+            weather(dict(p_d["weather"], where + ov::str(" weather")), where + ov::str(" weather"), b.weather);
         }
         content(p_d, where, b);
         b.debug_color = p_d.has("debug_color") ? hex_color(p_d, "debug_color", where) : name_hash(b.name) & 0xFFFFFFu;

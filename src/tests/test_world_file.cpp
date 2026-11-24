@@ -179,6 +179,21 @@ TEST_CASE("WorldFile: a planet file's seed, shape, sea, climate offsets and air"
     CHECK(w.sea.sand == Float3{ 1.0f, 0.9f, 0.8f });
     CHECK(w.atmosphere_density == 0.5);
     CHECK(w.atmosphere_tint == Float3{ 1.0f, 0.8f, 0.6f });
+    CHECK(w.weather.on); // a sphere's weather is on by default
+    CHECK(w.weather.grid == 64);
+    CHECK(parse(R"({"shape": {"kind": "sphere", "radius_m": 2000}, "weather": {"grid": 32, "time_scale": 6, "storm_m": 300}, "biomes": [{"name": "a"}]})", w) == ov::str());
+    CHECK(w.weather.on);
+    CHECK(w.weather.grid == 32);
+    CHECK(w.weather.time_scale == 6.0);
+    CHECK(w.weather.storm_m == 300.0);
+    CHECK(w.weather.tick_hz == WorldFile::Weather().tick_hz);
+    CHECK(parse(R"({"shape": {"kind": "sphere", "radius_m": 2000}, "weather": {"on": false}, "biomes": [{"name": "a"}]})", w) == ov::str());
+    CHECK(!w.weather.on);
+    CHECK(parse(R"({"engine": {"voxel_m": 0.05}, "seed": 48211, "shape": {"kind": "sphere", "radius_m": 2000},
+        "sea": {"level_m": -4, "water": {"deep": [0, 0.1, 0.2], "clarity_m": 8}, "shore": {"above_m": 1.5, "sand": [1, 0.9, 0.8]}},
+        "climate": {"fields": [{"name": "temperature"}, {"name": "humidity"}], "temperature": {"mean": 0.4, "poles": -0.9}, "humidity": {"mean": -0.3}},
+        "atmosphere": {"density": 0.5, "tint": [1, 0.8, 0.6]}, "biomes": [{"name": "a"}]})",
+                  w) == ov::str());
     const ov::Value &fields = w.climate_table["fields"];
     CLIMATE_REQUIRE(fields.size() == 2);
     CHECK(fields[size_t(0)]["mean"].as_double() == 0.4);
@@ -191,6 +206,7 @@ TEST_CASE("WorldFile: a planet file's seed, shape, sea, climate offsets and air"
     CHECK(!w.sea.on);
     CHECK(w.atmosphere_density == 1.0);
     CHECK(w.atmosphere_tint == Float3{ 1.0f, 1.0f, 1.0f });
+    CHECK(!w.weather.on); // the flat default: no weather
     // A flat shape is the default datum; the old climate file object (its fields only) still reads.
     CHECK(parse(R"({"shape": {"kind": "flat"}, "climate": {"fields": [{"name": "t"}]}, "biomes": [{"name": "a"}]})", w) == ov::str());
     CHECK(w.planet_radius_m == 0.0);
@@ -212,6 +228,12 @@ TEST_CASE("WorldFile: a planet file's refusals say why") {
     CHECK(ov::contains(parse(R"({"sea": {"level_m": 0, "shore": {"above_m": -1}}})", w), ">= 0"));
     CHECK(ov::contains(parse(R"({"shape": {"kind": "torus", "radius_m": 2000, "ring_m": 9000}, "sea": {"level_m": 0}})", w), "a sea on a torus"));
     CHECK(ov::contains(parse(R"({"atmosphere": {"density": -1}})", w), "'density' is a number >= 0"));
+    CHECK(ov::contains(parse(R"({"weather": {}})", w), "over a sphere only"));
+    CHECK(ov::contains(parse(R"({"shape": {"kind": "torus", "radius_m": 2000, "ring_m": 9000}, "weather": {"grid": 32}})", w), "over a sphere only"));
+    CHECK(ov::contains(parse(R"({"shape": {"kind": "sphere", "radius_m": 2000}, "weather": {"grid": 3}})", w), "grid a whole number"));
+    CHECK(ov::contains(parse(R"({"shape": {"kind": "sphere", "radius_m": 2000}, "weather": {"time_scale": 0}})", w), "time_scale in"));
+    CHECK(ov::contains(parse(R"({"shape": {"kind": "sphere", "radius_m": 2000}, "weather": {"on": 1}})", w), "'on' is true or false"));
+    CHECK(ov::contains(parse(R"({"shape": {"kind": "sphere", "radius_m": 2000}, "weather": {"rain": 1}})", w), "unknown key 'rain'"));
     CHECK(ov::contains(parse(R"({"climate": {"fields": [{"name": "t"}], "humidity": {"mean": 1}}, "biomes": [{"name": "a"}]})", w), "'humidity' is not a field"));
     CHECK(ov::contains(parse(R"({"climate": {"fields": [{"name": "t"}], "t": {"median": 1}}, "biomes": [{"name": "a"}]})", w), "unknown key 'median'"));
     CHECK(ov::contains(parse(R"({"climate": {"fields": [{"name": "t"}], "t": {"poles": 1}}, "biomes": [{"name": "a"}]})", w), "poles need a planet"));
