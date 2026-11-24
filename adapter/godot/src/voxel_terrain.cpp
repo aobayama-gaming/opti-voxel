@@ -60,6 +60,7 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_half_chunk_voxels"), &VoxelTerrain::get_half_chunk_voxels);
     ClassDB::bind_method(D_METHOD("get_sdf_at", "render_pos"), &VoxelTerrain::get_sdf_at);
     ClassDB::bind_method(D_METHOD("get_sea_height_at", "render_pos"), &VoxelTerrain::get_sea_height_at);
+    ClassDB::bind_method(D_METHOD("get_weather_at", "render_pos"), &VoxelTerrain::get_weather_at);
     ClassDB::bind_method(D_METHOD("get_tangent_position", "tangent_m"), &VoxelTerrain::get_tangent_position);
     ClassDB::bind_method(D_METHOD("get_up_at", "render_pos"), &VoxelTerrain::get_up_at);
     ClassDB::bind_method(D_METHOD("get_scene_shift"), &VoxelTerrain::get_scene_shift);
@@ -564,6 +565,22 @@ double VoxelTerrain::get_sdf_at(const Vector3 &p_render_pos) const {
 double VoxelTerrain::get_sea_height_at(const Vector3 &p_render_pos) const {
     const double pos[3] = { double(p_render_pos.x), double(p_render_pos.y), double(p_render_pos.z) };
     return world->sea_height_at(pos);
+}
+
+Dictionary VoxelTerrain::get_weather_at(const Vector3 &p_render_pos) const {
+    Dictionary d;
+    const double pos[3] = { double(p_render_pos.x), double(p_render_pos.y), double(p_render_pos.z) };
+    Weather::Sample s;
+    if (!world->weather_at(pos, s)) {
+        return d;
+    }
+    d["wind"] = Vector3(s.wind_mps.x, s.wind_mps.y, s.wind_mps.z);
+    d["cover"] = s.cover;
+    d["type"] = s.type;
+    d["rain"] = s.rain;
+    d["temp"] = s.temp;
+    d["vapour"] = s.vapour;
+    return d;
 }
 
 Vector3 VoxelTerrain::get_tangent_position(const Vector2 &p_tangent_m) const {

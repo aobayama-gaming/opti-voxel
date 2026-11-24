@@ -193,6 +193,9 @@ public:
     // The height of a render-space position above the world's sea (metres, World::sea_height_at): negative under water,
     // NAN without a sea or before the world starts.
     double get_sea_height_at(const Vector3 &p_render_pos) const;
+    // The weather at a render-space position (World::weather_at, docs/weather.md): { wind (m/s, render axes), cover, type,
+    // rain, temp, vapour }; empty without a weather or before its first state.
+    Dictionary get_weather_at(const Vector3 &p_render_pos) const;
     // The render-space point (u, v) metres along the base's reference tangent plane (BaseSurface::tangent_point; flat: x,
     // z from the world's (0, 0) column at the datum): the player's --spawn and the climate report's coordinates.
     Vector3 get_tangent_position(const Vector2 &p_tangent_m) const;

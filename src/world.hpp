@@ -12,6 +12,7 @@
 #include "page_host.hpp"
 #include "sdf_cascade.hpp"
 #include "sea.hpp"
+#include "weather.hpp"
 #include "world_file.hpp"
 
 #include "ov/value.hpp"
@@ -168,6 +169,10 @@ public:
     // The height of a render-space position above the sea's level in metres (Sea::height_at), negative under water; NAN
     // without a sea or before start.
     double sea_height_at(const double p_render_pos[3]) const;
+    // The weather at a render-space point (docs/weather.md): false without one (not a planet, "weather" off) or before its
+    // first state.
+    bool weather_at(const double p_render_pos[3], Weather::Sample &r_sample) const;
+    const Weather *get_weather() const { return weather.get(); }
 
     // Render-origin rebasing. Render space (every Float3 the host passes or gets) is metres from the render origin,
     // which starts at the world origin. Called by the host before frame(): when the camera is farther than
@@ -230,6 +235,7 @@ private:
     QuadPagePool *reused_pages = nullptr; // reuse's, until start's mesher takes it
     std::unique_ptr<LocalGpuThread> points_gpu; // the GPU discoverer's device (reuse's or start's), outlives the discoverer
     Atmosphere *atmosphere = nullptr; // deletes itself on the device's thread (destroy)
+    std::unique_ptr<Weather> weather; // its worker ticks the weather (WorldFile::Weather on)
     Clouds *clouds = nullptr; // the same; reads the atmosphere's textures, so goes first
     float cloud_cover = 0.5f;
     Float3 cloud_wind;

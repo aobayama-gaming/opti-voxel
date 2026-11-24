@@ -4,6 +4,7 @@
 #include "climate_report.hpp"
 #include "godot_conv.hpp"
 #include "sdf_cascade.hpp"
+#include "weather_report.hpp"
 #include "world_file.hpp"
 
 #include "ov/json.hpp"
@@ -19,6 +20,7 @@ void ClimateReportNode::_bind_methods() {
     ClassDB::bind_method(D_METHOD("run", "out_dir", "world_path", "extent_km", "size", "surface", "center", "lattice"),
             &ClimateReportNode::run);
     ClassDB::bind_static_method("ClimateReportNode", D_METHOD("check", "json", "dir"), &ClimateReportNode::check);
+    ClassDB::bind_static_method("ClimateReportNode", D_METHOD("weather", "out_dir", "world_path", "minutes", "width"), &ClimateReportNode::weather);
     ClassDB::bind_static_method("ClimateReportNode", D_METHOD("curve", "points", "xs", "voxel_m"), &ClimateReportNode::curve);
     ClassDB::bind_static_method("ClimateReportNode", D_METHOD("graph_kinds"), &ClimateReportNode::graph_kinds);
     ClassDB::bind_static_method("ClimateReportNode", D_METHOD("shape", "node", "ns"), &ClimateReportNode::shape);
@@ -32,6 +34,14 @@ Dictionary ClimateReportNode::run(const String &p_out_dir, const String &p_world
         bool p_surface, const Vector2 &p_center, int p_lattice) {
     return godot_dict(ClimateReport::run(ov_str(p_out_dir), ov_str(p_world_path), p_extent_km, p_size, p_surface, p_center.x,
             p_center.y, p_lattice));
+}
+
+Dictionary ClimateReportNode::weather(const String &p_out_dir, const String &p_world_path, const PackedFloat32Array &p_minutes, int p_width) {
+    std::vector<double> minutes;
+    for (int64_t i = 0; i < p_minutes.size(); i++) {
+        minutes.push_back(double(p_minutes[i]));
+    }
+    return godot_dict(WeatherReport::run(ov_str(p_out_dir), ov_str(p_world_path), minutes, p_width));
 }
 
 String ClimateReportNode::check(const String &p_json, const String &p_dir) {

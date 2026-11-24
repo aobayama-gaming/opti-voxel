@@ -204,6 +204,16 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
         direct_mesher->set_debug_view(config.debug_view);
     }
     last_dispatch_times = DispatchTimes(); // the new mesher's start from 0
+    if (content.weather.on) {
+        // The table and the spec stay as they are while the world runs (configure is before start).
+        const Climate::Table *climate = sdf->get_climate();
+        const SDFCascade *cascade = sdf.get();
+        Weather::ForcingFn forcing;
+        if (climate != nullptr) {
+            forcing = [climate, cascade](const VoxelPos &p_voxel, int p_m) { return Weather::forcing_at(*climate, cascade->program(), p_voxel, p_m); };
+        }
+        weather = std::make_unique<Weather>(content.weather, sdf->get_base(), double(chunk_param.voxel_size), content.seed, forcing);
+    }
     // Only for a host that draws them (binds their textures).
     if (content.atmosphere && hosts.atmosphere_textures) {
         atmosphere = new Atmosphere();
@@ -321,6 +331,9 @@ void World::frame(const Float3 *p_camera_pos, const Float3 *p_camera_forward, do
         chunk_discoverer->set_camera(ChunkMath::chunk_at_render(centre, config.chunk_param), *p_camera_forward, p_camera_far_m * far_reach, config.lod_view_min);
         last_load_centre = centre;
         has_camera = true;
+    }
+    if (weather) {
+        weather->update(now_usec());
     }
     if (atmosphere && p_camera_pos != nullptr) {
         const BaseSurface::Render base = base_render();
@@ -649,6 +662,17 @@ double World::sea_height_at(const double p_render_pos[3]) const {
     return Sea::height_at(sdf->get_base(), WorldCoord::offset_pos(config.chunk_param.origin_voxel(), offset), vs, content.sea.level_m);
 }
 
+bool World::weather_at(const double p_render_pos[3], Weather::Sample &r_sample) const {
+    if (!started || !weather) {
+        return false;
+    }
+    const double vs = double(config.chunk_param.voxel_size);
+    const double offset[3] = { p_render_pos[0] / vs, p_render_pos[1] / vs, p_render_pos[2] / vs };
+    const UpAxis up = sdf->get_base().up_dir(WorldCoord::offset_pos(config.chunk_param.origin_voxel(), offset).voxel);
+    const double dir[3] = { up[0], up[1], up[2] };
+    return weather->at(dir, r_sample);
+}
+
 void World::set_cloud_weather(float p_cover, const Float3 &p_wind_mps) {
     cloud_cover = p_cover;
     cloud_wind = p_wind_mps;
@@ -794,6 +818,9 @@ ov::Value World::debug_stats() {
     destroy["handoff_frames"] = to_value(vs.handoff_frames);
     d["destroy"] = destroy;
 
+    if (weather) {
+        d["weather"] = weather->get_stats();
+    }
     d["discoverer"] = chunk_discoverer->get_stats();
     d["mesher"] = direct_mesher->get_stats();
 
@@ -852,6 +879,7 @@ void World::stop(Kept *r_kept) {
         state.loaded_chunk.clear();
     }
 
+    weather.reset(); // its tick running finishes
     if (clouds) {
         clouds->destroy(); // deletes itself on the device's thread, before the atmosphere's textures go
         clouds = nullptr;
