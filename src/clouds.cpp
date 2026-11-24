@@ -177,10 +177,12 @@ float cloud_height_fraction(float altitude) {
 }
 
 // The simulation's cover at p, height fraction hf: its levels' cloud (Weather: the atlas's slice per level), linear
-// between their middles, the lowest's down to the ground, the top's up to the top; its two states blended.
+// between their middles, the lowest's down to the ground, the top's fading to none at the top (an empty level above:
+// no cloud ends flat at the layer's top); its two states blended.
 float cloud_sim_cover(vec3 p, float hf) {
     vec4 m = textureLod($MAP, vec3(weather_uv(p), clamp(hf, $HALF_LEVEL, 1.0 - $HALF_LEVEL)), 0.0);
-    return m.r + (m.g - m.r) * cloud_weather_blend;
+    float fade = clamp((1.0 - hf) / $HALF_LEVEL, 0.0, 1.0);
+    return (m.r + (m.g - m.r) * cloud_weather_blend) * fade;
 }
 
 // The weather noise at a point: the shape noise's R read at the weather scale, which breaks the simulation's cover into

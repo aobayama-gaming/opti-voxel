@@ -133,7 +133,7 @@ the 3D point in the shading frame (no 2D weather map, which a curved base would 
   `SHAPE_CELLS` 4, `DETAIL_CELLS` 0.5), so the clouds' places, bases and tops are the simulation's and the noise only
   shapes them. The march knows nothing of the terrain: a hill reaching into a cloud is hidden behind its front part.
 - **3D from the levels:** the weather texture is the grid's atlas a slice per level (R the previous state's cloud, G the
-  latest's), read at the altitude over the top (linear between the levels' middles, clamped to them), so a column's
+  latest's), read at the altitude over the top (linear between the levels' middles, the lowest's down to the ground, the top's fading to none at the top), so a column's
   cloud has the simulation's base and top; the coverage is the cover there past its threshold on the coverage noise,
   then Schneider's remap of the shape noise (no per-type height gradient: the levels give the profile). The light
   towards the sun and the shadow map read the levels along their rays.

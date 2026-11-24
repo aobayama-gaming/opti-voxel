@@ -67,8 +67,8 @@ WeatherSim::WeatherSim(std::shared_ptr<const WeatherGrid> p_grid, const Params &
                     l[WIND_X] = c.target[0];
                     l[WIND_Y] = c.target[1];
                     l[WIND_Z] = c.target[2];
-                    l[TEMP] = float(k == 0 ? c.weather.heat : INVERSION_TEMP * z);
-                    l[VAPOUR] = float(GROUND_HUMIDITY * c.weather.moisture * (k == 0 ? 1.0 : 1.0 - z));
+                    l[TEMP] = float(k == 0 ? c.weather.heat : ambient_temp(k));
+                    l[VAPOUR] = float(GROUND_HUMIDITY * c.weather.moisture * (z < INVERSION_BASE ? 1.0 : 0.0));
                 }
             }
         }
@@ -202,7 +202,7 @@ void WeatherSim::pass_air(double p_dt) {
                     o[TEMP] = float(s[TEMP] + (c.weather.heat - s[TEMP]) * heat_a);
                     o[VAPOUR] = float(s[VAPOUR] + ov::max(GROUND_HUMIDITY * c.weather.moisture - s[VAPOUR], 0.0) * moist_a);
                 } else {
-                    o[TEMP] = float(s[TEMP] + (INVERSION_TEMP * level_m(k) / params.top_m - s[TEMP]) * radiate_a);
+                    o[TEMP] = float(s[TEMP] + (ambient_temp(k) - s[TEMP]) * radiate_a);
                     o[VAPOUR] = s[VAPOUR];
                 }
                 o[CLOUD] = s[CLOUD];
@@ -389,13 +389,17 @@ void WeatherSim::convect(double p_dt, double *r_v) const {
     }
 }
 
+double WeatherSim::ambient_temp(int p_level) const {
+    const double z = level_m(p_level) / params.top_m;
+    return INVERSION_TEMP * ov::max(0.0, z - INVERSION_BASE) / (1.0 - INVERSION_BASE);
+}
+
 double WeatherSim::saturation(int p_level, double p_temp) const {
-    return 1.0 + SATURATION_HEAT * p_temp - SATURATION_LAPSE * level_m(p_level) / params.top_m;
+    return std::exp(SATURATION_RATE * (p_temp - LAPSE * level_m(p_level) / params.top_m));
 }
 
 void WeatherSim::condense(double p_dt, double *r_v, double &r_rain, double &r_cover, double &r_type) const {
     const double condense_a = relax(p_dt, CONDENSE_TAU_S);
-    const double evaporate_a = relax(p_dt, EVAPORATE_TAU_S);
     const double rain_a = relax(p_dt, RAIN_TAU_S);
     double rain = 0.0;
     double most = 0.0;
@@ -403,7 +407,7 @@ void WeatherSim::condense(double p_dt, double *r_v, double &r_rain, double &r_co
     for (int k = 0; k < level_count; k++) {
         double *l = r_v + level_offset(k);
         const double excess = l[VAPOUR] - saturation(k, l[TEMP]);
-        const double moved = excess > 0.0 ? excess * condense_a : -ov::min(l[CLOUD], -excess) * evaporate_a;
+        const double moved = excess > 0.0 ? excess * condense_a : -ov::min(l[CLOUD], -excess); // evaporates at once
         l[VAPOUR] -= moved;
         l[CLOUD] += moved;
         const double out = ov::max(l[CLOUD] - RAIN_CLOUD, 0.0) * rain_a;

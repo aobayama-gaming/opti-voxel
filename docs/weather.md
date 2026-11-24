@@ -50,7 +50,7 @@ ways) is the next, nothing else changes for it.
 and rotating, carrying vapour and cloud water. Every column is written from the previous state only, so `parallel_for`
 over the rows (LOW priority) gives the same bits on any thread count; the halos are refilled between passes.
 - **Levels:** the planet file's `top_m` over about `cell_m` (`levels = round(top_m / cell_m)`, at most 32), so the
-  cells are near cubes: on `ocean_test` (45 m cells, top 200 m) 4 levels of 50 m. A level's cells share their column's
+  cells are near cubes: on `ocean_test` (45 m cells, top 400 m) 9 levels of 44 m. A level's cells share their column's
   surface metric (the shallow-atmosphere approximation: on the 2 km planets a cell 300 m up is 15% wider than its
   metric says, which a look doesn't show).
 - **State** per padded cell (`stride()` floats): per level (`Field`) the wind, a 3D vector tangent to the surface in the
@@ -64,7 +64,8 @@ over the rows (LOW priority) gives the same bits on any thread count; the halos 
      an exact rotation of the wind about the up by `-f dt` (`f = 2 Omega n_y`), the wind relaxed towards its target.
      The ground touches the lowest level only: its drag, its temperature relaxed to the biome's heat, its vapour raised
      towards `GROUND_HUMIDITY` times the biome's moisture. The levels above relax towards an inversion
-     (`INVERSION_TEMP` times the altitude over the top: warmer with height).
+     (`ambient_temp`: the potential temperature even up to `INVERSION_BASE` (half the top: a neutral layer a
+     thermal rises freely through), then rising to `INVERSION_TEMP` at the top (a stable layer: thermals stop in it)).
   2. The pressure: each level's wind pushed by `-grad(phi)`, `phi = c^2 ETA - BUOYANCY` (the warmth above the level,
      its own half included): hydrostatic, so a warm column is a low at the ground and a high aloft. Central
      differences through each cell's dual vectors (made once from its neighbours' surface points, so the cube's
@@ -76,15 +77,19 @@ over the rows (LOW priority) gives the same bits on any thread count; the halos 
      vapour past each level's saturation condensing into latent warmth (`LATENT`: moist thermals punch higher); the
      levels it rises through mix their air (wind, vapour, cloud; not the temperature, the forcing's profile) towards
      their mean (`CONVECT_TAU_S`), and above its top the air sinks and dries (`DRY_TAU_S`). Then each level's vapour
-     past its saturation (`1 + SATURATION_HEAT TEMP - SATURATION_LAPSE altitude / top`) condenses, cloud under it
-     evaporates (fast: cloud mixed below its base goes, the base stays sharp), cloud past `RAIN_CLOUD` rains out; a
+     past its saturation (`exp(SATURATION_RATE (TEMP - LAPSE altitude / top))`: Clausius-Clapeyron in the actual
+     temperature, the potential one less the cooling with height; cold air aloft holds little) condenses, cloud under
+     it evaporates at once (cloud mixed below its base goes, the base stays sharp), cloud past `RAIN_CLOUD` rains out; a
      little horizontal diffusion (`DIFFUSION`, a stabiliser).
-- **What makes a cloud:** a mixed layer holds its water less each level's saturation, which falls with height. Warm
-  ground (a warm sea, hot land, a storm's warm core) carries the thermals up to the inversion and its cloud has a base
-  where the saturation meets the layer's vapour and a top where the thermals stop; cool ground stays under a shallow
-  clear layer; cold moist ground saturates its lowest level (fog). On `ocean_test` (warm sea, hotter dry land): a
-  cloudy tropical belt and some high polar cloud, the subtropics clear, every cloud between 100 and 200 m, cover
-  ~0.5 after 20 game minutes, no fog (`tools/weather_report.sh`, its cross-section).
+- **What makes a cloud:** the air gets colder with height, so its saturation falls: a thermal's mixed layer, the
+  ground's warmth and vapour through it, saturates at a base (the lifting condensation level) and its cloud goes up
+  to where the thermals stop, in the stable layer above `INVERSION_BASE`. The sky above is clear because no thermal
+  reaches it and its sinking air dries (`DRY_TAU_S`), not because it is warm: so `top_m` must leave room above the
+  clouds (about twice their tops). Hot ground or a storm's warm core punches higher; dry ground's base is above the
+  inversion (no cloud); cold moist ground saturates its lowest level (fog). The renderer fades the top level to none at
+  `top_m` (`docs/look.md`), so even a cloud reaching it has no flat top. On `ocean_test` (warm sea, hotter dry land,
+  top 400 m): a tropical deck and bands, every cloud in levels 3 to 6 (155 to 290 m), the three above clear, cover
+  0.09 at load growing to ~0.3 after 20 game minutes, no fog (`tools/weather_report.sh`, its cross-section).
 - **Coriolis:** a game value from the storm radius: `Omega = c / (storm_m sqrt 2)`, so the Rossby radius at 45 degrees
   is the planet file's `storm_m` (a quarter of the radius by default). The real Omega on a 2 km planet makes no storm;
   on it the default gives a 222 s rotation of the weather (not the sun's day).
@@ -93,9 +98,9 @@ over the rows (LOW priority) gives the same bits on any thread count; the halos 
 - **Storms:** each substep a cell starts one with its biome's chance (`storms`: what a whole planet of that biome
   starts in an hour), drawn from a hash of the seed, the tick, the substep and the cell; a storm is a warm, moist low of
   the storm radius (`inject_storm`) which the Coriolis spins up: counterclockwise in the north, clockwise in the south.
-- **Cost** (`tools/weather_report.sh`, this laptop, 2026-11-24): `ocean_test`'s 29.4k columns of 4 levels take ~4 ms a
-  0.1 s tick on the worker (7 levels to 300 m: ~7.5 ms), its 10 game minutes of spin-up ~3 s at load. At 10 ticks a
-  second that is under 8% of a core, off the frame.
+- **Cost** (`tools/weather_report.sh`, this laptop, 2026-11-24): `ocean_test`'s 29.4k columns of 9 levels take ~8-10 ms a
+  0.1 s tick on the worker (4 levels: ~4 ms), its 20 game minutes of spin-up ~14 s at load (TODO: start the columns
+  nearer their balance, which the spin-up only waits for). At 10 ticks a second that is ~10% of a core, off the frame.
 
 ## Forcing
 Each cell's biome weather (`Climate::BiomeWeather`, a biome's `"weather"` block, `docs/climate.md`): the cell's biome
@@ -163,7 +168,7 @@ Agreed with the user (2026-11-24). Stacked PRs, `feature/weather-*`:
 6. **Grid interface:** `WeatherGrid` an interface over a base, the cube sphere one implementation, positions in
    metres; the planet file's `grid` becomes `cell_m`.
 7. **Levels:** the simulation in levels up to `top_m` (hydrostatic pressure, vertical wind, parcel convection under an
-   inversion, latent heat, drying aloft), the report's cross-section.
+   inversion, latent heat, drying aloft, saturation from the actual temperature), the report's cross-section.
 8. **3D clouds:** the cloud layer from the ground to `top_m`, each level's cloud a slice of the texture (`docs/look.md`). Then
    the torus's grid.
 

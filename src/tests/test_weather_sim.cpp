@@ -151,7 +151,7 @@ TEST_CASE("WeatherSim: the prevailing wind, easterly trades, westerlies, calm at
 
 TEST_CASE("WeatherSim: still air stays still") {
     const auto grid = std::make_shared<CubeSphereGrid>(16, 2000.0);
-    WeatherSim sim(grid, small_planet(4), std::vector<Climate::BiomeWeather>(grid->cells(), still(0.5f)));
+    WeatherSim sim(grid, small_planet(4), std::vector<Climate::BiomeWeather>(grid->cells(), still(0.3f)));
     for (int t = 0; t < 50; t++) {
         sim.step(0.1);
     }
@@ -189,7 +189,7 @@ TEST_CASE("WeatherSim: a storm spins cyclonically, each hemisphere its way, and 
 TEST_CASE("WeatherSim: moist ground makes cloud, dry ground none") {
     const auto grid = std::make_shared<CubeSphereGrid>(16, 2000.0);
     WeatherSim wet(grid, small_planet(), std::vector<Climate::BiomeWeather>(grid->cells(), still(1.3f)));
-    WeatherSim dry(grid, small_planet(), std::vector<Climate::BiomeWeather>(grid->cells(), still(0.5f)));
+    WeatherSim dry(grid, small_planet(), std::vector<Climate::BiomeWeather>(grid->cells(), still(0.3f)));
     for (int t = 0; t < 3000; t++) { // 300 s
         wet.step(0.1);
         dry.step(0.1);

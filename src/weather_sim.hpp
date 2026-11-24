@@ -21,7 +21,7 @@
 //      Coriolis turns the wind (an exact rotation about the up by -f dt, f = 2 Omega n_y), the wind relaxes towards the
 //      prevailing wind times the biome's `wind`. The ground touches the lowest level only: it drags it (quadratic, times
 //      `drag`), warms it towards `heat` and gives it vapour up to GROUND_HUMIDITY `moisture`; the levels above relax
-//      towards an inversion (INVERSION_TEMP).
+//      towards the ambient profile (ambient_temp): neutral up to INVERSION_BASE of the top, stable above it.
 //   2. The pressure pushes each level's wind: -grad(phi), phi = c^2 ETA - BUOYANCY (the warmth above the level, the
 //      level's half included; hydrostatic: a warm column is a low at the ground).
 //   3. The column: the top follows the column's mean divergence; the levels' divergences make the vertical wind through
@@ -31,9 +31,10 @@
 //      through mix their air towards its mean (CONVECT_TAU_S; the temperature stays the forcing's profile; cloud mixed
 //      into the drier levels below evaporates, so each level holds the layer's water less its saturation), and above its top the air sinks and dries (DRY_TAU_S): clouds
 //      live in the convecting layer, as deep as the ground's warmth (a storm's) carries it; a little horizontal
-//      diffusion. Vapour past the level's saturation
-//      (1 + SATURATION_HEAT TEMP - SATURATION_LAPSE altitude / top_m: rising air condenses) becomes cloud and warms
-//      the air (LATENT), cloud under it evaporates and cools it, cloud past RAIN_CLOUD rains out. The cover is the
+//      diffusion. Vapour past the level's saturation (saturation(): exponential in the air's actual temperature, which
+//      falls with height: cold air aloft holds little) becomes cloud, cloud under it evaporates, cloud past RAIN_CLOUD
+//      rains out. The sky above the clouds is clear because no thermal reaches it and its sinking air dries, not
+//      because it is warm. The cover is the
 //      column's largest cloud over FULL_CLOUD, the type its cloudy depth (stratus 0, a tower 1).
 // - Storms: in each substep a cell starts one with the chance its `storms` gives (a whole planet of storms 1 starts one
 //   an hour; hash of the seed, the tick and the cell), a warm, moist low of the storm radius that the Coriolis spins up.
@@ -71,22 +72,24 @@ public:
     static constexpr double DRY_TAU_S = 300.0;
     static constexpr double MOISTURE_TAU_S = 120.0;
     static constexpr double CONDENSE_TAU_S = 20.0;
-    static constexpr double EVAPORATE_TAU_S = 10.0;
     static constexpr double RAIN_TAU_S = 120.0;
     static constexpr double CONVECT_TAU_S = 30.0;
     // A thermal from the ground rises through the levels it is at least this much cooler than (its overshoot).
     static constexpr double CONVECT_EXCESS = 0.05;
-    // The air aloft relaxes to INVERSION_TEMP times its altitude over top_m: warmer with height (an inversion), so the
-    // ground's convection stops where its air is no longer the warmer (cloud tops); a storm's warmth and the latent heat
-    // carry it through.
-    static constexpr double INVERSION_TEMP = 0.3;
+    // The ambient potential temperature (TEMP is one: what the air's temperature would be brought to the ground): even
+    // up to INVERSION_BASE of the top (a neutral layer: a thermal rises freely through it), then rising to
+    // INVERSION_TEMP at the top (a stable layer: a thermal stops where it is no longer the warmer, the cloud tops); a
+    // storm's warmth and the latent heat carry it further. Its actual temperature still falls with height (LAPSE).
+    static constexpr double INVERSION_BASE = 0.5;
+    static constexpr double INVERSION_TEMP = 0.6;
     // Quadratic drag per metre at drag 1: 10 m/s of wind loses it over ~1000 s.
     static constexpr double DRAG_PER_M = 1e-4;
     // The ground's vapour: its moisture times this (the air over water is not saturated).
-    static constexpr double GROUND_HUMIDITY = 0.75;
-    // The saturation: 1 + SATURATION_HEAT TEMP - SATURATION_LAPSE altitude / top_m.
-    static constexpr double SATURATION_HEAT = 0.3;
-    static constexpr double SATURATION_LAPSE = 0.9;
+    static constexpr double GROUND_HUMIDITY = 0.85;
+    // The saturation: exp(SATURATION_RATE (TEMP - LAPSE altitude / top_m)), Clausius-Clapeyron's growth with the actual
+    // temperature (the potential one less the cooling with height, LAPSE at the top): 1 at the ground at TEMP 0.
+    static constexpr double SATURATION_RATE = 2.0;
+    static constexpr double LAPSE = 1.2;
     // Condensing a unit of vapour warms a rising parcel by LATENT (convect: its buoyancy, not the air round it).
     static constexpr double LATENT = 0.1;
     // Cloud water raining out over RAIN_CLOUD; the cover full at FULL_CLOUD.
@@ -124,6 +127,8 @@ public:
     // A level's thickness and its centre's altitude (metres).
     double level_thickness_m() const { return dz; }
     double level_m(int p_level) const { return (p_level + 0.5) * dz; }
+    // The ambient potential temperature at a level (INVERSION_BASE, INVERSION_TEMP).
+    double ambient_temp(int p_level) const;
     // The state's floats per padded cell, a level's fields' offset in it and the column's ETA's.
     int stride() const { return level_count * FIELDS + 1; }
     static int level_offset(int p_level) { return p_level * FIELDS; }
