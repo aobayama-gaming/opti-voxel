@@ -132,6 +132,7 @@ to every change, and a reviewer may reject a PR on any of them.
 | `docs/look.md` | sky, fog, the atmosphere, volumetric clouds, the sea and shores, surface detail, wind | scenes, page shader, `atmosphere*`, `clouds*`, `sea*` |
 | `docs/climate.md` | the climate's model (fields, weights, biome graphs), its implementation, the biome mixer | `climate*`, `graph_compile*`, `debug/biome_mixer/` |
 | `docs/caves.md` | caves as a 3D noise carve density in depth bands (plan: model, where it plugs in, stages) | |
+| `docs/weather.md` | weather over the whole planet: the cube-sphere grid, the simulation forced by the climate (plan), what reads it | `weather*` |
 | `docs/discovery-lod.md` | discoverer (CPU / GPU, cache), view-dependent LOD and view memory, destroy check, coverage | `chunk_discoverer*`, `local_points_gpu*`, `chunk_memory*`, `subcube.hpp` |
 | `docs/testing.md` | every check tool and bench flag in detail, debug views, hole hunting | `tools/`, `adapter/godot/project/debug/` |
 | `docs/perf.md` | perf target, baselines, where the frame goes | |
