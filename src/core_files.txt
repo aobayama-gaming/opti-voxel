@@ -167,3 +167,5 @@ src/world_file.hpp
 src/world_file.cpp
 src/sea.hpp
 src/sea.cpp
+src/weather_grid.hpp
+src/weather_grid.cpp
