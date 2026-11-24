@@ -8,33 +8,42 @@ the sea and rain). It never feeds the SDF: the terrain stays a function of the a
 Status: the grid (`src/weather_grid.*`), the simulation (`src/weather_sim.*`), its worker in `World`
 (`src/weather.*`) with a report (`tools/weather_report.sh`), and the clouds drawn from it (`docs/look.md` "Weather") are
 in, and the mixer edits a biome's weather and plays a world's as a time-lapse. Later steps at the end. Planets only: the weather is simulated over a sphere, never over a
-flat shape or a torus (decided with the user, 2026-11-24: the engine is for planets).
+flat shape (decided with the user, 2026-11-24: the engine is for planets); a torus gets its grid next.
 
 ## Grid
-`WeatherGrid` (`src/weather_grid.*`, engine-free, double): the planet's directions as an equiangular cube sphere, 6 faces
-of N x N cells.
-- **A face** is a cube axis (`MAJOR`) with two tangent axes (`U`, `V`, `U x V = MAJOR`, the table `WeatherGrid::FACE`).
-  A direction belongs to the face of its largest |component| (x before y before z on a tie), at the angles
-  `a = atan(d.U / d.MAJOR)`, `b = atan(d.V / d.MAJOR)` in [-pi/4, pi/4]; its cell coordinates are `x = (a / (pi/2) + 1/2) N`
-  and `y` likewise. Equal angles keep the cells' areas within a factor ~1.4 (unit test; a gnomonic grid's: ~5).
-- **Size:** N in [4, 1024]. On the 2 km planets N = 64 gives ~49 m cells (24.6k cells), N = 128 ~25 m (98k).
+`WeatherGrid` (`src/weather_grid.*`, engine-free, double) is the interface the simulation, the worker and the clouds
+see: a planet's surface as faces of width x height cells, positions in metres from the base's centre. A base's shape is
+one implementation (`WeatherGrid::for_base`): `CubeSphereGrid` for a sphere; a torus's grid (one face wrapping both
+ways) is the next, nothing else changes for it.
+- **What a grid gives:** its faces and their cells, the padded layout (`index`), each cell's surface point and up
+  (`surface`, also at the halo's coordinates), the surface point under a position (`locate`), its halo and bilinear
+  sampling, and its GLSL lookup. The simulation builds its metric (the gradients' dual vectors) from the surface
+  points, so it holds no shape of its own.
+- **Size:** the planet file's `cell_m`, the cells' width (0: 64 a cube face's side). On the 2 km planets 45 m gives 70
+  a side (29.4k cells), the default 64 ~49 m (24.6k).
 - **Layout:** each face padded with a halo of 1 cell; x fastest, then y, then the face (`index`). A field has `comps`
-  floats per padded cell, interleaved. The same layout is a 3D texture (N + 2 wide and high, one layer per face).
-- **The halo** (`fill_halo`): each halo cell along an edge is a bilinear read of the neighbouring face's interior at the
-  halo cell's centre extended past the edge (a table of 4 sources and weights, made once). A cube corner's halo cell,
-  which no face holds (three faces meet there), is linear in its own face's chart: the two edge halo cells beside it
-  minus the interior corner cell, filled after the edges. A smooth field read through the halo (`sample`, bilinear
-  between the 4 centres round a point) is second order everywhere, edges and corners included (unit test: worst error
-  under 0.01 at N = 32 for a field of unit-scale gradients, divided by ~4 at N = 64; reading a corner from a third face's
-  nearest cells was first order, 0.015 at N = 32).
-- **Positions:** the grid is directions only. A cell's place is its direction at an altitude over a SPHERE
-  (`cell_voxel`: the centre plus the direction times radius + altitude, rounded to a LOD0 voxel), so the climate can be
-  sampled under it with the integer frame (`SDFCascade::climate_at`).
-- **GLSL:** `glsl_lookup` gives `vec3 weather_uvw(vec3 dir, float n)`: the padded texel coordinates over [0, 1] and the
-  face's index, its face table generated from `WeatherGrid::FACE` (one source). It is float and not bit-exact with
-  `sample` (atan in float32, hardware filtering): the weather is a look, not a terrain input, so the float-mirror rule
-  (`docs/gotchas.md`) does not apply. The direction a shader passes is the base's up at the point (`base_up`), never an
-  absolute position.
+  floats per padded cell, interleaved. The same layout is the renderer's atlas: a 2D texture of `stride_x` texels by
+  `faces * stride_y` rows, each face a block of rows.
+- **The halo** (`fill_halo`, built by the base class from `surface` and `locate`): each halo cell along an edge is a
+  bilinear read of the interior at its surface point (the neighbouring face's across a seam, the face's own across a
+  wrap), a table of 4 sources and weights made once. A corner's halo cell, which no face may hold (three cube faces
+  meet there), is linear in its own face's chart: the two edge halo cells beside it minus the interior corner cell,
+  filled after the edges. A smooth field read through the halo (`sample`, bilinear between the 4 centres round a
+  point) is second order everywhere, edges and corners included (unit test: worst error under 0.01 at N = 32 for a
+  field of unit-scale gradients, divided by ~4 at N = 64; reading a corner from a third face's nearest cells was first
+  order, 0.015 at N = 32).
+- **The cube sphere:** a face is a cube axis (`MAJOR`) with two tangent axes (`U`, `V`, `U x V = MAJOR`, the table
+  `CubeSphereGrid::FACE`). A direction belongs to the face of its largest |component| (x before y before z on a tie),
+  at the angles `a = atan(d.U / d.MAJOR)`, `b = atan(d.V / d.MAJOR)` in [-pi/4, pi/4]; its cell coordinates are
+  `x = (a / (pi/2) + 1/2) N` and `y` likewise. Equal angles keep the cells' areas within a factor ~1.4 (unit test; a
+  gnomonic grid's: ~5). A position's cell is its direction's.
+- **The climate under a cell:** its surface point rounded to a LOD0 voxel (`Weather::build`), sampled with the integer
+  frame (`SDFCascade::climate_at`).
+- **GLSL:** `glsl_lookup` gives `vec2 weather_uv(vec3 p)`: the atlas coordinates of the column under a render-space
+  point, from the base's render functions (the cube's: `base_up(p)`, its face table generated from
+  `CubeSphereGrid::FACE`, one source; its sizes substituted). A face's coordinates stay within its padded block, so
+  bilinear filtering never mixes two faces. It is float and not bit-exact with `sample` (atan in float32, hardware
+  filtering): the weather is a look, not a terrain input, so the float-mirror rule (`docs/gotchas.md`) does not apply.
 
 ## Simulation
 `WeatherSim` (`src/weather_sim.*`, engine-free, CPU): one layer of rotating shallow water over the whole planet on the
@@ -74,8 +83,9 @@ itself; under, cloud only where air converges), `gust` the look's gusts, `storms
 sampled once when the weather starts (the climate never changes); the weather never changes the ground.
 
 ## Planet file
-`"weather"`: on by default over a sphere (`"on": false` turns it off), refused over a flat shape or a torus. `grid`
-(cells a face side, 64), `tick_hz` (10), `time_scale` (game seconds a real second simulates, 1), `prevailing_mps` (8),
+`"weather"`: on by default over a sphere (`"on": false` turns it off), refused over a flat shape or a torus (until its
+grid lands). `cell_m` (the cells' width in metres; 0 or absent: 64 cells a cube face's side; refused where the side
+would leave [4, 1024]), `tick_hz` (10), `time_scale` (game seconds a real second simulates, 1), `prevailing_mps` (8),
 `storm_m` (0: a quarter of the radius), `spin_up_s` (game seconds simulated before the first frame, 60). At
 `time_scale` 1 and the default prevailing wind a 2 km planet's weather crosses its half circumference in ~10 minutes.
 
@@ -124,7 +134,10 @@ Agreed with the user (2026-11-24). Stacked PRs, `feature/weather-*`:
 4. **Clouds** (#181): the clouds read cover and type from the weather texture (two states blended), their noises drift with
    the wind at the camera, the leaves' sway reads it too; `CloudClimate`, a biome's `"clouds"` block, the flat 2D cloud
    layer and the clouds over a flat shape or a torus are removed (one path: the simulation's).
-5. **Mixer:** a biome's weather edited in the mixer, a time-lapse of the world's weather.
+5. **Mixer** (#182): a biome's weather edited in the mixer, a time-lapse of the world's weather.
+6. **Grid interface:** `WeatherGrid` an interface over a base, the cube sphere one implementation, positions in
+   metres; the planet file's `grid` becomes `cell_m`. Then the layered simulation and the 3D clouds read from it, then
+   the torus's grid.
 
 Later: curl-noise gusts, the FFT sea reading the wind (U10, fetch, swell), rain and ground wetness, saving the weather,
 the GPU if the CPU tick is too slow.

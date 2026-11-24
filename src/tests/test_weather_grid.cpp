@@ -37,9 +37,9 @@ void smooth(const double p_d[3], float r_v[2]) {
 }
 
 // The field at every interior cell centre, the halo filled.
-std::vector<float> smooth_field(const WeatherGrid &p_grid) {
+std::vector<float> smooth_field(const CubeSphereGrid &p_grid) {
     std::vector<float> field(p_grid.padded_cells() * 2, 0.0f);
-    for (int f = 0; f < WeatherGrid::FACES; f++) {
+    for (int f = 0; f < CubeSphereGrid::FACES; f++) {
         for (int j = 0; j < p_grid.size(); j++) {
             for (int i = 0; i < p_grid.size(); i++) {
                 double d[3];
@@ -55,7 +55,7 @@ std::vector<float> smooth_field(const WeatherGrid &p_grid) {
 // The worst error of a smooth field read through the halo on a grid of p_n: random points, every face's edges (just
 // inside each face, both sides of each seam) and the cube's 8 corners.
 double worst_read_error(int p_n) {
-    const WeatherGrid grid(p_n);
+    const CubeSphereGrid grid(p_n, 1.0);
     const std::vector<float> field = smooth_field(grid);
     double worst = 0.0;
     auto check_at = [&](const double p_d[3]) {
@@ -72,7 +72,7 @@ double worst_read_error(int p_n) {
         check_at(d);
     }
     const double n = double(p_n);
-    for (int f = 0; f < WeatherGrid::FACES; f++) {
+    for (int f = 0; f < CubeSphereGrid::FACES; f++) {
         for (int s = 0; s <= 256; s++) {
             const double t = n * s / 256.0;
             const double edge[4][2] = { { 1e-7, t }, { n - 1e-7, t }, { t, 1e-7 }, { t, n - 1e-7 } };
@@ -94,14 +94,15 @@ double worst_read_error(int p_n) {
 } // namespace
 
 TEST_CASE("WeatherGrid: the padded layout and the faces' axes") {
-    const WeatherGrid grid(16);
+    const CubeSphereGrid grid(16, 1.0);
     CHECK(grid.size() == 16);
-    CHECK(grid.stride() == 16 + 2 * WeatherGrid::HALO);
+    CHECK(grid.stride_x() == 16 + 2 * WeatherGrid::HALO);
+    CHECK(grid.stride_y() == grid.stride_x());
     CHECK(grid.cells() == size_t(6 * 16 * 16));
     CHECK(grid.index(0, -WeatherGrid::HALO, -WeatherGrid::HALO) == 0);
-    CHECK(grid.index(WeatherGrid::FACES - 1, 16 + WeatherGrid::HALO - 1, 16 + WeatherGrid::HALO - 1) == grid.padded_cells() - 1);
+    CHECK(grid.index(CubeSphereGrid::FACES - 1, 16 + WeatherGrid::HALO - 1, 16 + WeatherGrid::HALO - 1) == grid.padded_cells() - 1);
     CHECK(grid.index(2, 1, 0) == grid.index(2, 0, 0) + 1); // x fastest
-    for (const WeatherGrid::Face &f : WeatherGrid::FACE) {
+    for (const CubeSphereGrid::Face &f : CubeSphereGrid::FACE) {
         // U x V = MAJOR.
         const int c[3] = { f.u[1] * f.v[2] - f.u[2] * f.v[1], f.u[2] * f.v[0] - f.u[0] * f.v[2], f.u[0] * f.v[1] - f.u[1] * f.v[0] };
         CHECK(c[0] == f.major[0]);
@@ -111,7 +112,7 @@ TEST_CASE("WeatherGrid: the padded layout and the faces' axes") {
 }
 
 TEST_CASE("WeatherGrid: a direction and its cell coordinates round-trip") {
-    const WeatherGrid grid(32);
+    const CubeSphereGrid grid(32, 1.0);
     Directions dirs;
     for (int k = 0; k < 2000; k++) {
         double d[3];
@@ -126,7 +127,7 @@ TEST_CASE("WeatherGrid: a direction and its cell coordinates round-trip") {
         CHECK(distance(d, back) < 1e-12);
     }
     // Every cell centre locates to its own cell.
-    for (int f = 0; f < WeatherGrid::FACES; f++) {
+    for (int f = 0; f < CubeSphereGrid::FACES; f++) {
         for (int j = 0; j < 32; j++) {
             for (int i = 0; i < 32; i++) {
                 double d[3];
@@ -141,7 +142,7 @@ TEST_CASE("WeatherGrid: a direction and its cell coordinates round-trip") {
 }
 
 TEST_CASE("WeatherGrid: equal angles keep the cells' areas within a factor 1.5") {
-    const WeatherGrid grid(32);
+    const CubeSphereGrid grid(32, 1.0);
     double lo = 1e30;
     double hi = 0.0;
     for (int j = 0; j < 32; j++) {
@@ -171,36 +172,44 @@ TEST_CASE("WeatherGrid: a smooth field reads smoothly across the seams and corne
     CHECK(at64 < 0.35 * at32);
 }
 
-// A cell's voxel on a 2 km planet at 5 cm: on the sphere at its altitude within a voxel, its up the cell's direction.
-TEST_CASE("WeatherGrid: a cell's voxel stands over its direction at its altitude") {
+// A sphere's grid from the planet: its cells about the width asked for, each surface point on the sphere under its up;
+// another base has none.
+TEST_CASE("WeatherGrid::for_base: a sphere's cube of about cell_m, its surface points on the sphere") {
     const double vs = 0.05;
     const BaseSurface base = BaseSurface::planet(2000.0, vs);
-    CHECK(base.kind() == BaseSurface::Kind::SPHERE);
-    if (base.kind() != BaseSurface::Kind::SPHERE) {
-        return;
-    }
-    const WeatherGrid grid(64);
-    for (int f = 0; f < WeatherGrid::FACES; f++) {
-        for (int j = 0; j < 64; j += 9) {
-            for (int i = 0; i < 64; i += 7) {
-                double d[3];
-                grid.cell_direction(f, i, j, d);
-                const double alt = 500.0 / vs;
-                const VoxelPos v = WeatherGrid::cell_voxel(base, d, alt);
-                CHECK(std::fabs(base.altitude(v) - alt) < 1.0);
-                const UpAxis up = base.up_dir(v);
-                const double u[3] = { up[0], up[1], up[2] };
-                CHECK(distance(u, d) < 1e-4);
+    CHECK_OR_RETURN(base.kind() == BaseSurface::Kind::SPHERE);
+    ov::str why;
+    const std::unique_ptr<WeatherGrid> grid = WeatherGrid::for_base(base, vs, 45.0, &why);
+    CHECK_OR_RETURN(grid != nullptr);
+    CHECK(grid->faces() == 6);
+    CHECK(grid->width() == 70); // a quarter of 2 pi 2 km over 45 m
+    CHECK(grid->cell_m() == doctest::Approx(45.0).epsilon(0.01));
+    for (int f = 0; f < grid->faces(); f++) {
+        for (int j = 0; j < grid->height(); j += 9) {
+            for (int i = 0; i < grid->width(); i += 7) {
+                double pos[3], up[3];
+                grid->cell_surface(f, i, j, pos, up);
+                const double r = std::sqrt(pos[0] * pos[0] + pos[1] * pos[1] + pos[2] * pos[2]);
+                CHECK(r == doctest::Approx(2000.0));
+                CHECK(distance(up, std::vector<double>{ pos[0] / r, pos[1] / r, pos[2] / r }.data()) < 1e-12);
+                const WeatherGrid::Point p = grid->locate(pos);
+                CHECK(p.face == f);
+                CHECK(std::fabs(p.x - (i + 0.5)) < 1e-9);
             }
         }
     }
+    CHECK(WeatherGrid::for_base(base, vs, 1.0, &why) == nullptr); // 3142 cells a side
+    CHECK(ov::contains(why, "outside"));
+    CHECK(WeatherGrid::for_base(BaseSurface(), vs, 45.0, &why) == nullptr);
+    CHECK(ov::contains(why, "sphere only"));
 }
 
 TEST_CASE("WeatherGrid: the GLSL lookup is substituted from the faces' table") {
-    const ov::str code = WeatherGrid::glsl_lookup();
+    const ov::str code = CubeSphereGrid(16, 1.0).glsl_lookup();
     CHECK(code.find('$') == ov::str::npos);
-    CHECK(ov::contains(code, "vec3 weather_uvw(vec3 dir, float n)"));
-    for (int f = 0; f < WeatherGrid::FACES - 1; f++) {
+    CHECK(ov::contains(code, "vec2 weather_uv(vec3 p)"));
+    CHECK(ov::contains(code, "* 16.0, 0.0, 16.0)"));
+    for (int f = 0; f < CubeSphereGrid::FACES - 1; f++) {
         CHECK(ov::contains(code, ov::format("if (face == %d)", f)));
     }
     CHECK(ov::contains(code, "} else {"));

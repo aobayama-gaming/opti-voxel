@@ -43,19 +43,19 @@ uint64_t mix64(uint64_t p_x) {
 
 } // namespace
 
-WeatherSim::WeatherSim(const WeatherGrid &p_grid, const Params &p_params, const std::vector<Climate::BiomeWeather> &p_weather) :
-        cells(p_grid), params(p_params) {
+WeatherSim::WeatherSim(std::shared_ptr<const WeatherGrid> p_grid, const Params &p_params, const std::vector<Climate::BiomeWeather> &p_weather) :
+        cells(std::move(p_grid)), params(p_params) {
     const double storm_m = params.storm_m > 0.0 ? params.storm_m : 0.25 * params.radius_m;
     omega_rad_s = WAVE_MPS / (storm_m * std::sqrt(2.0));
     make_cells(p_weather);
-    cur.assign(cells.padded_cells() * F, 0.0f);
-    diag.assign(cells.padded_cells() * D, 0.0f);
-    const int n = cells.size();
-    for (int face = 0; face < WeatherGrid::FACES; face++) {
-        for (int j = 0; j < n; j++) {
-            for (int i = 0; i < n; i++) {
-                const Cell &c = cell[interior(face, i, j)];
-                float *s = &cur[cells.index(face, i, j) * F];
+    const WeatherGrid &g = *cells;
+    cur.assign(g.padded_cells() * F, 0.0f);
+    diag.assign(g.padded_cells() * D, 0.0f);
+    for (int face = 0; face < g.faces(); face++) {
+        for (int j = 0; j < g.height(); j++) {
+            for (int i = 0; i < g.width(); i++) {
+                const Cell &c = cell[g.interior(face, i, j)];
+                float *s = &cur[g.index(face, i, j) * F];
                 s[WIND_X] = c.target[0];
                 s[WIND_Y] = c.target[1];
                 s[WIND_Z] = c.target[2];
@@ -64,36 +64,30 @@ WeatherSim::WeatherSim(const WeatherGrid &p_grid, const Params &p_params, const 
             }
         }
     }
-    cells.fill_halo(cur.data(), F);
+    g.fill_halo(cur.data(), F);
     next = cur;
-}
-
-size_t WeatherSim::interior(int p_face, int p_i, int p_j) const {
-    const size_t n = size_t(cells.size());
-    return (size_t(p_face) * n + size_t(p_j)) * n + size_t(p_i);
 }
 
 // Each cell's up, its central differences' dual vectors and its forcing; the substep and the diffusion from the smallest
 // spacing.
 void WeatherSim::make_cells(const std::vector<Climate::BiomeWeather> &p_weather) {
-    const int n = cells.size();
-    const double r = params.radius_m;
-    cell.assign(cells.cells(), Cell{});
+    const WeatherGrid &g = *cells;
+    cell.assign(g.cells(), Cell{});
     double spacing = 1e30;
-    for (int face = 0; face < WeatherGrid::FACES; face++) {
-        for (int j = 0; j < n; j++) {
-            for (int i = 0; i < n; i++) {
-                Cell &c = cell[interior(face, i, j)];
-                double up[3], xp[3], xm[3], yp[3], ym[3];
-                cells.cell_direction(face, i, j, up);
-                cells.cell_direction(face, i + 1, j, xp);
-                cells.cell_direction(face, i - 1, j, xm);
-                cells.cell_direction(face, i, j + 1, yp);
-                cells.cell_direction(face, i, j - 1, ym);
+    for (int face = 0; face < g.faces(); face++) {
+        for (int j = 0; j < g.height(); j++) {
+            for (int i = 0; i < g.width(); i++) {
+                Cell &c = cell[g.interior(face, i, j)];
+                double pos[3], up[3], xp[3], xm[3], yp[3], ym[3], ignored[3];
+                g.cell_surface(face, i, j, pos, up);
+                g.cell_surface(face, i + 1, j, xp, ignored);
+                g.cell_surface(face, i - 1, j, xm, ignored);
+                g.cell_surface(face, i, j + 1, yp, ignored);
+                g.cell_surface(face, i, j - 1, ym, ignored);
                 double ex[3], ey[3];
                 for (int k = 0; k < 3; k++) {
-                    ex[k] = r * (xp[k] - xm[k]);
-                    ey[k] = r * (yp[k] - ym[k]);
+                    ex[k] = xp[k] - xm[k];
+                    ey[k] = yp[k] - ym[k];
                 }
                 tangent(up, ex);
                 tangent(up, ey);
@@ -105,9 +99,10 @@ void WeatherSim::make_cells(const std::vector<Climate::BiomeWeather> &p_weather)
                 cross3(ey, up, ax);
                 cross3(up, ex, ay);
                 double wind[3];
-                const Climate::BiomeWeather &w = p_weather.size() == cell.size() ? p_weather[interior(face, i, j)] : Climate::BiomeWeather();
+                const Climate::BiomeWeather &w = p_weather.size() == cell.size() ? p_weather[g.interior(face, i, j)] : Climate::BiomeWeather();
                 prevailing(up, params.prevailing_mps * w.wind, wind);
                 for (int k = 0; k < 3; k++) {
+                    c.pos[k] = pos[k];
                     c.up[k] = float(up[k]);
                     c.ax[k] = float(ax[k] / det);
                     c.ay[k] = float(ay[k] / det);
@@ -160,30 +155,29 @@ void WeatherSim::step(double p_dt) {
 
 // 1. The air from upstream, turned by the Coriolis, pulled towards its forcing: cur into next.
 void WeatherSim::pass_air(double p_dt) {
-    const int n = cells.size();
+    const WeatherGrid &g = *cells;
     const double wind_a = relax(p_dt, WIND_TAU_S);
     const double heat_a = relax(p_dt, HEAT_TAU_S);
     const double moist_a = relax(p_dt, MOISTURE_TAU_S);
-    const double step_r = p_dt / params.radius_m;
-    parallel_for(uint32_t(WeatherGrid::FACES * n), "WeatherSim::air", [&](uint32_t p_row) {
-        const int face = int(p_row) / n;
-        const int j = int(p_row) % n;
-        for (int i = 0; i < n; i++) {
-            const Cell &c = cell[interior(face, i, j)];
-            const float *here = &cur[cells.index(face, i, j) * F];
+    parallel_for(uint32_t(g.faces() * g.height()), "WeatherSim::air", [&](uint32_t p_row) {
+        const int face = int(p_row) / g.height();
+        const int j = int(p_row) % g.height();
+        for (int i = 0; i < g.width(); i++) {
+            const Cell &c = cell[g.interior(face, i, j)];
+            const float *here = &cur[g.index(face, i, j) * F];
             const double up[3] = { c.up[0], c.up[1], c.up[2] };
             double from[3];
             for (int k = 0; k < 3; k++) {
-                from[k] = up[k] - here[WIND_X + k] * step_r;
+                from[k] = c.pos[k] - here[WIND_X + k] * p_dt;
             }
             float s[F];
-            cells.sample(cur.data(), F, from, s);
+            g.sample(cur.data(), F, from, s);
             double u[3] = { s[WIND_X], s[WIND_Y], s[WIND_Z] };
             tangent(up, u);
             coriolis(up, c.f, p_dt, u);
             const double speed = std::sqrt(dot3(u, u));
             const double drag = 1.0 / (1.0 + c.weather.drag * DRAG_PER_M * speed * p_dt);
-            float *out = &next[cells.index(face, i, j) * F];
+            float *out = &next[g.index(face, i, j) * F];
             for (int k = 0; k < 3; k++) {
                 out[WIND_X + k] = float((u[k] + (c.target[k] - u[k]) * wind_a) * drag);
             }
@@ -192,32 +186,32 @@ void WeatherSim::pass_air(double p_dt) {
             out[VAPOUR] = float(s[VAPOUR] + ov::max(double(c.weather.moisture) - s[VAPOUR], 0.0) * moist_a);
             out[CLOUD] = s[CLOUD];
         } }, ov::Priority::LOW);
-    cells.fill_halo(next.data(), F);
+    g.fill_halo(next.data(), F);
 }
 
 // 2. The pressure pushes the wind: next into cur.
 void WeatherSim::pass_pressure(double p_dt) {
-    const int n = cells.size();
+    const WeatherGrid &g = *cells;
     const double c2 = WAVE_MPS * WAVE_MPS;
-    parallel_for(uint32_t(WeatherGrid::FACES * n), "WeatherSim::pressure", [&](uint32_t p_row) {
-        const int face = int(p_row) / n;
-        const int j = int(p_row) % n;
+    parallel_for(uint32_t(g.faces() * g.height()), "WeatherSim::pressure", [&](uint32_t p_row) {
+        const int face = int(p_row) / g.height();
+        const int j = int(p_row) % g.height();
         auto phi = [&](int p_i, int p_j) {
-            const float *s = &next[cells.index(face, p_i, p_j) * F];
+            const float *s = &next[g.index(face, p_i, p_j) * F];
             return c2 * s[ETA] - BUOYANCY * s[TEMP];
         };
-        for (int i = 0; i < n; i++) {
-            const Cell &c = cell[interior(face, i, j)];
+        for (int i = 0; i < g.width(); i++) {
+            const Cell &c = cell[g.interior(face, i, j)];
             const double dx = phi(i + 1, j) - phi(i - 1, j);
             const double dy = phi(i, j + 1) - phi(i, j - 1);
             const double up[3] = { c.up[0], c.up[1], c.up[2] };
-            const float *in = &next[cells.index(face, i, j) * F];
+            const float *in = &next[g.index(face, i, j) * F];
             double u[3];
             for (int k = 0; k < 3; k++) {
                 u[k] = in[WIND_X + k] - p_dt * (c.ax[k] * dx + c.ay[k] * dy);
             }
             tangent(up, u);
-            float *out = &cur[cells.index(face, i, j) * F];
+            float *out = &cur[g.index(face, i, j) * F];
             for (int k = 0; k < F; k++) {
                 out[k] = in[k];
             }
@@ -225,27 +219,27 @@ void WeatherSim::pass_pressure(double p_dt) {
                 out[WIND_X + k] = float(u[k]);
             }
         } }, ov::Priority::LOW);
-    cells.fill_halo(cur.data(), F);
+    g.fill_halo(cur.data(), F);
 }
 
 // 3. The column: the thickness follows the divergence, the lift condenses vapour, cloud rains out, a little diffusion;
 // the diagnostics. cur into next, then swapped.
 void WeatherSim::pass_column(double p_dt) {
-    const int n = cells.size();
+    const WeatherGrid &g = *cells;
     const double diffuse = ov::min(0.2, diffusion_k * p_dt);
     const double condense_a = relax(p_dt, CONDENSE_TAU_S);
     const double evaporate_a = relax(p_dt, EVAPORATE_TAU_S);
     const double rain_a = relax(p_dt, RAIN_TAU_S);
-    parallel_for(uint32_t(WeatherGrid::FACES * n), "WeatherSim::column", [&](uint32_t p_row) {
-        const int face = int(p_row) / n;
-        const int j = int(p_row) % n;
-        for (int i = 0; i < n; i++) {
-            const Cell &c = cell[interior(face, i, j)];
-            const float *here = &cur[cells.index(face, i, j) * F];
-            const float *xp = &cur[cells.index(face, i + 1, j) * F];
-            const float *xm = &cur[cells.index(face, i - 1, j) * F];
-            const float *yp = &cur[cells.index(face, i, j + 1) * F];
-            const float *ym = &cur[cells.index(face, i, j - 1) * F];
+    parallel_for(uint32_t(g.faces() * g.height()), "WeatherSim::column", [&](uint32_t p_row) {
+        const int face = int(p_row) / g.height();
+        const int j = int(p_row) % g.height();
+        for (int i = 0; i < g.width(); i++) {
+            const Cell &c = cell[g.interior(face, i, j)];
+            const float *here = &cur[g.index(face, i, j) * F];
+            const float *xp = &cur[g.index(face, i + 1, j) * F];
+            const float *xm = &cur[g.index(face, i - 1, j) * F];
+            const float *yp = &cur[g.index(face, i, j + 1) * F];
+            const float *ym = &cur[g.index(face, i, j - 1) * F];
             double div = 0.0;
             for (int k = 0; k < 3; k++) {
                 div += c.ax[k] * (xp[WIND_X + k] - xm[WIND_X + k]) + c.ay[k] * (yp[WIND_X + k] - ym[WIND_X + k]);
@@ -263,67 +257,66 @@ void WeatherSim::pass_column(double p_dt) {
             v[CLOUD] += moved;
             const double rain = ov::max(v[CLOUD] - RAIN_CLOUD, 0.0) * rain_a;
             v[CLOUD] -= rain;
-            float *out = &next[cells.index(face, i, j) * F];
+            float *out = &next[g.index(face, i, j) * F];
             for (int k = 0; k < F; k++) {
                 out[k] = float(v[k]);
             }
-            float *d = &diag[cells.index(face, i, j) * D];
+            float *d = &diag[g.index(face, i, j) * D];
             d[COVER] = float(ov::clamp(v[CLOUD] / FULL_CLOUD, 0.0, 1.0));
             d[TYPE] = float(ov::clamp(0.3 + 0.7 * lift + 0.3 * v[TEMP], 0.0, 1.0));
             d[RAIN] = float(rain / p_dt);
         } }, ov::Priority::LOW);
-    cells.fill_halo(next.data(), F);
-    cells.fill_halo(diag.data(), D);
+    g.fill_halo(next.data(), F);
+    g.fill_halo(diag.data(), D);
     cur.swap(next);
 }
 
 // Each cell starts a storm with its biome's chance, from the seed, the tick, the substep and the cell (serial: storms
 // overlap, so their order is fixed).
 void WeatherSim::start_storms(double p_dt, uint32_t p_substep) {
-    const int n = cells.size();
-    const double per_cell = p_dt / (STORM_PERIOD_S * double(cells.cells()));
+    const WeatherGrid &g = *cells;
+    const double per_cell = p_dt / (STORM_PERIOD_S * double(g.cells()));
     const uint64_t key = mix64((uint64_t(params.seed) << 32) ^ (tick << 8) ^ uint64_t(p_substep));
-    for (int face = 0; face < WeatherGrid::FACES; face++) {
-        for (int j = 0; j < n; j++) {
-            for (int i = 0; i < n; i++) {
-                const size_t ci = interior(face, i, j);
+    for (int face = 0; face < g.faces(); face++) {
+        for (int j = 0; j < g.height(); j++) {
+            for (int i = 0; i < g.width(); i++) {
+                const size_t ci = g.interior(face, i, j);
                 const double chance = cell[ci].weather.storms * per_cell;
                 if (chance <= 0.0) {
                     continue;
                 }
                 const double u = double(mix64(key ^ (uint64_t(ci) * 0xD1B54A32D192ED03ull)) >> 11) * (1.0 / 9007199254740992.0);
                 if (u < chance) {
-                    double dir[3];
-                    cells.cell_direction(face, i, j, dir);
-                    inject_storm(dir, 1.0);
+                    inject_storm(cell[ci].pos, 1.0);
                 }
             }
         }
     }
 }
 
-void WeatherSim::inject_storm(const double p_dir[3], double p_strength) {
-    const int n = cells.size();
-    const double len = std::sqrt(dot3(p_dir, p_dir));
-    const double centre[3] = { p_dir[0] / len, p_dir[1] / len, p_dir[2] / len };
-    const double radius = (params.storm_m > 0.0 ? params.storm_m : 0.25 * params.radius_m) / params.radius_m; // radians
-    for (int face = 0; face < WeatherGrid::FACES; face++) {
-        for (int j = 0; j < n; j++) {
-            for (int i = 0; i < n; i++) {
-                const Cell &c = cell[interior(face, i, j)];
-                const double d[3] = { c.up[0] - centre[0], c.up[1] - centre[1], c.up[2] - centre[2] };
+void WeatherSim::inject_storm(const double p_pos[3], double p_strength) {
+    const WeatherGrid &g = *cells;
+    const WeatherGrid::Point at = g.locate(p_pos);
+    double centre[3], centre_up[3];
+    g.surface(at.face, at.x, at.y, centre, centre_up);
+    const double radius = params.storm_m > 0.0 ? params.storm_m : 0.25 * params.radius_m;
+    for (int face = 0; face < g.faces(); face++) {
+        for (int j = 0; j < g.height(); j++) {
+            for (int i = 0; i < g.width(); i++) {
+                const Cell &c = cell[g.interior(face, i, j)];
+                const double d[3] = { c.pos[0] - centre[0], c.pos[1] - centre[1], c.pos[2] - centre[2] };
                 const double r2 = dot3(d, d) / (radius * radius);
                 if (r2 > 9.0) {
                     continue;
                 }
-                const double g = p_strength * std::exp(-r2);
-                float *s = &cur[cells.index(face, i, j) * F];
-                s[ETA] += float(STORM_ETA * g);
-                s[TEMP] += float(STORM_TEMP * g);
-                s[VAPOUR] += float(STORM_VAPOUR * g);
+                const double gauss = p_strength * std::exp(-r2);
+                float *s = &cur[g.index(face, i, j) * F];
+                s[ETA] += float(STORM_ETA * gauss);
+                s[TEMP] += float(STORM_TEMP * gauss);
+                s[VAPOUR] += float(STORM_VAPOUR * gauss);
             }
         }
     }
-    cells.fill_halo(cur.data(), F);
+    g.fill_halo(cur.data(), F);
     storms++;
 }

@@ -128,7 +128,6 @@ public:
         float shadow_extent_m = 0.0f;
         float reach_m = 0.0f;
         float cover_max = 0.0f; // the largest cover in the weather's two states (0: no cloud, the passes skip)
-        float weather_n = 1.0f; // the weather grid's cells a side (WeatherGrid::size)
         float weather_blend = 0.0f; // between its previous state (0) and its latest (1)
         int frame = 0;
         int reset = 1;
@@ -149,7 +148,6 @@ public:
             p_f("cloud_shadow_extent_m", shadow_extent_m);
             p_f("cloud_reach_m", reach_m);
             p_f("cloud_cover_max", cover_max);
-            p_f("cloud_weather_n", weather_n);
             p_f("cloud_weather_blend", weather_blend);
             p_f("cloud_frame", frame);
             p_f("cloud_reset", reset);
@@ -202,8 +200,9 @@ public:
     static ov::str glsl_lookup();
     // The passes' compute shaders.
     static ov::str glsl_pass_noise();
-    static ov::str glsl_pass_march();
-    static ov::str glsl_pass_shadow();
+    // The passes over a weather grid (its lookup, WeatherGrid::glsl_lookup).
+    static ov::str glsl_pass_march(const WeatherGrid &p_weather);
+    static ov::str glsl_pass_shadow(const WeatherGrid &p_weather);
     // A camera at p_camera_m's Frame over p_base with the sun towards p_sun (frame() adds the history, the wind, the
     // weather and the origin): the march's reach over a sphere of p_curvature_m (Atmosphere::ms_radius_m) and the shadow map.
     static Frame make_frame(const CloudLayer &p_layer, double p_curvature_m, const Float3 &p_camera_m, const Float3 &p_sun,
@@ -213,7 +212,14 @@ public:
             const CloudLayer &p_layer, const Frame &p_frame);
 
 private:
-    void _rt_start(uint32_t p_stride);
+    // The weather's atlas (WeatherGrid's padded layout as a texture) and the passes' text over its grid.
+    struct Atlas {
+        uint32_t width;
+        uint32_t height;
+        ov::str march;
+        ov::str shadow;
+    };
+    void _rt_start(const Atlas &p_atlas);
     void _rt_frame(const ov::bytes &p_block, bool p_noise);
     void _rt_destroy();
 

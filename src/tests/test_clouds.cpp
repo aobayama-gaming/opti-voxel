@@ -50,11 +50,12 @@ TEST_CASE("CloudLayer::for_base: Earth's layer over low ground; lifted over a hi
 }
 
 TEST_CASE("Clouds: every constant of the passes' and the hosts' GLSL substituted") {
-    for (const ov::str &glsl : { Clouds::glsl_pass_noise(), Clouds::glsl_pass_march(), Clouds::glsl_pass_shadow(), Clouds::glsl_lookup() }) {
+    const CubeSphereGrid grid(16, 2000.0);
+    for (const ov::str &glsl : { Clouds::glsl_pass_noise(), Clouds::glsl_pass_march(grid), Clouds::glsl_pass_shadow(grid), Clouds::glsl_lookup() }) {
         CHECK(glsl.find('$') == ov::str::npos);
     }
-    CHECK(Clouds::glsl_pass_march().find("vec3 cloud_camera_m;") != ov::str::npos);
-    CHECK(Clouds::glsl_pass_shadow().find("float cloud_shadow_extent_m;") != ov::str::npos);
+    CHECK(Clouds::glsl_pass_march(grid).find("vec3 cloud_camera_m;") != ov::str::npos);
+    CHECK(Clouds::glsl_pass_shadow(grid).find("float cloud_shadow_extent_m;") != ov::str::npos);
 }
 
 TEST_CASE("Clouds::block_bytes: std140, the base first, padded to 16") {

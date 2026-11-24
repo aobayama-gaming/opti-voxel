@@ -4,6 +4,7 @@
 #include "weather_grid.hpp"
 
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 // The weather's simulation (docs/weather.md "Simulation"): one layer of rotating shallow water over the whole planet on
@@ -82,15 +83,15 @@ public:
         uint32_t seed = 0;
     };
 
-    // p_weather: each interior cell's biome weather (cell index face * N^2 + j * N + i), the climate under its centre.
-    WeatherSim(const WeatherGrid &p_grid, const Params &p_params, const std::vector<Climate::BiomeWeather> &p_weather);
+    // p_weather: each interior cell's biome weather (WeatherGrid::interior), the climate under its centre.
+    WeatherSim(std::shared_ptr<const WeatherGrid> p_grid, const Params &p_params, const std::vector<Climate::BiomeWeather> &p_weather);
 
     // p_dt game seconds, in substeps of at most the CFL's.
     void step(double p_dt);
-    // A storm of p_strength (1: a biome storm's) centred on a direction.
-    void inject_storm(const double p_dir[3], double p_strength);
+    // A storm of p_strength (1: a biome storm's) centred under a position (metres from the base's centre).
+    void inject_storm(const double p_pos[3], double p_strength);
 
-    const WeatherGrid &grid() const { return cells; }
+    const WeatherGrid &grid() const { return *cells; }
     // The state and the diagnostics, FIELDS and DIAGS floats per padded cell, halos filled.
     const std::vector<float> &state() const { return cur; }
     const std::vector<float> &diagnostics() const { return diag; }
@@ -107,8 +108,9 @@ public:
     static void prevailing(const double p_up[3], double p_speed, double r_wind[3]);
 
 private:
-    // Per interior cell: its up, the dual vectors of its central differences (grad = ax d_i + ay d_j, 1/m) and its forcing.
+    // Per interior cell: its surface point (metres), its up, the dual vectors of its central differences (grad = ax d_i + ay d_j, 1/m) and its forcing.
     struct Cell {
+        double pos[3];
         float up[3];
         float ax[3];
         float ay[3];
@@ -117,7 +119,7 @@ private:
         Climate::BiomeWeather weather;
     };
 
-    WeatherGrid cells;
+    std::shared_ptr<const WeatherGrid> cells;
     Params params;
     std::vector<Cell> cell;
     std::vector<float> cur;
@@ -130,7 +132,6 @@ private:
     uint64_t tick = 0;
     uint64_t storms = 0;
 
-    size_t interior(int p_face, int p_i, int p_j) const;
     void make_cells(const std::vector<Climate::BiomeWeather> &p_weather);
     void substep(double p_dt);
     void pass_air(double p_dt);

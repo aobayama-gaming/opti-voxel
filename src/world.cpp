@@ -672,9 +672,9 @@ bool World::weather_at(const double p_render_pos[3], Weather::Sample &r_sample) 
     }
     const double vs = double(config.chunk_param.voxel_size);
     const double offset[3] = { p_render_pos[0] / vs, p_render_pos[1] / vs, p_render_pos[2] / vs };
-    const UpAxis up = sdf->get_base().up_dir(WorldCoord::offset_pos(config.chunk_param.origin_voxel(), offset).voxel);
-    const double dir[3] = { up[0], up[1], up[2] };
-    return weather->at(dir, r_sample);
+    const VoxelPos d = WorldCoord::offset_pos(config.chunk_param.origin_voxel(), offset).voxel - sdf->get_base().centre();
+    const double pos[3] = { double(d.x) * vs, double(d.y) * vs, double(d.z) * vs };
+    return weather->at(pos, r_sample);
 }
 
 bool World::recenter(const Float3 &p_camera_pos, Float3 &r_shift) {

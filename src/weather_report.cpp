@@ -52,8 +52,10 @@ WeatherReport::Frame map_state(const Weather &p_weather, int p_w, double p_full_
         for (int x = 0; x < p_w; x++) {
             double d[3];
             pixel_dir(x, y, p_w, h, d);
+            const double r = p_weather.radius_m();
+            const double pos[3] = { d[0] * r, d[1] * r, d[2] * r };
             Weather::Sample s;
-            p_weather.at(d, s);
+            p_weather.at(pos, s);
             const size_t o = (size_t(y) * size_t(p_w) + size_t(x)) * 3;
             const double rain = ov::clamp(double(s.rain) * 100.0, 0.0, 1.0);
             cover[o + 0] = byte(s.cover * (1.0 - rain));
@@ -167,8 +169,8 @@ ov::Value WeatherReport::run(const ov::str &p_out_dir, const ov::str &p_world_pa
         maps.push_back(m);
     }
     const ov::Value &stats = f.stats;
-    ov::str md = ov::format("# Weather report: %s\n\nGrid %d (%d cells), time scale %g, %g ticks a second, storm radius %s, Omega %.4f rad/s, substep %.3f s.\n\n",
-            p_world_path, int(world.weather.grid), int(stats["cells"].as_int()), world.weather.time_scale, world.weather.tick_hz,
+    ov::str md = ov::format("# Weather report: %s\n\nGrid %s, cells of %g m (%d cells), time scale %g, %g ticks a second, storm radius %s, Omega %.4f rad/s, substep %.3f s.\n\n",
+            p_world_path, stats["grid"].as_str(), stats["cell_m"].as_double(), int(stats["cells"].as_int()), world.weather.time_scale, world.weather.tick_hz,
             world.weather.storm_m > 0.0 ? ov::format("%g m", world.weather.storm_m) : ov::str("a quarter of the radius"), stats["omega_rad_s"].as_double(),
             stats["substep_s"].as_double());
     md += "| game min | storms | mean cover | max wind (m/s) | raining |\n|---|---|---|---|---|\n";

@@ -180,10 +180,10 @@ TEST_CASE("WorldFile: a planet file's seed, shape, sea, climate offsets and air"
     CHECK(w.atmosphere_density == 0.5);
     CHECK(w.atmosphere_tint == Float3{ 1.0f, 0.8f, 0.6f });
     CHECK(w.weather.on); // a sphere's weather is on by default
-    CHECK(w.weather.grid == 64);
-    CHECK(parse(R"({"shape": {"kind": "sphere", "radius_m": 2000}, "weather": {"grid": 32, "time_scale": 6, "storm_m": 300}, "biomes": [{"name": "a"}]})", w) == ov::str());
+    CHECK(w.weather.cell_m == 0.0); // the default grid's
+    CHECK(parse(R"({"shape": {"kind": "sphere", "radius_m": 2000}, "weather": {"cell_m": 98, "time_scale": 6, "storm_m": 300}, "biomes": [{"name": "a"}]})", w) == ov::str());
     CHECK(w.weather.on);
-    CHECK(w.weather.grid == 32);
+    CHECK(w.weather.cell_m == 98.0);
     CHECK(w.weather.time_scale == 6.0);
     CHECK(w.weather.storm_m == 300.0);
     CHECK(w.weather.tick_hz == WorldFile::Weather().tick_hz);
@@ -229,8 +229,8 @@ TEST_CASE("WorldFile: a planet file's refusals say why") {
     CHECK(ov::contains(parse(R"({"shape": {"kind": "torus", "radius_m": 2000, "ring_m": 9000}, "sea": {"level_m": 0}})", w), "a sea on a torus"));
     CHECK(ov::contains(parse(R"({"atmosphere": {"density": -1}})", w), "'density' is a number >= 0"));
     CHECK(ov::contains(parse(R"({"weather": {}})", w), "over a sphere only"));
-    CHECK(ov::contains(parse(R"({"shape": {"kind": "torus", "radius_m": 2000, "ring_m": 9000}, "weather": {"grid": 32}})", w), "over a sphere only"));
-    CHECK(ov::contains(parse(R"({"shape": {"kind": "sphere", "radius_m": 2000}, "weather": {"grid": 3}})", w), "grid a whole number"));
+    CHECK(ov::contains(parse(R"({"shape": {"kind": "torus", "radius_m": 2000, "ring_m": 9000}, "weather": {"cell_m": 98}})", w), "over a sphere only"));
+    CHECK(ov::contains(parse(R"({"shape": {"kind": "sphere", "radius_m": 2000}, "weather": {"cell_m": 1000}})", w), "cell_m giving a cube face"));
     CHECK(ov::contains(parse(R"({"shape": {"kind": "sphere", "radius_m": 2000}, "weather": {"time_scale": 0}})", w), "time_scale in"));
     CHECK(ov::contains(parse(R"({"shape": {"kind": "sphere", "radius_m": 2000}, "weather": {"on": 1}})", w), "'on' is true or false"));
     CHECK(ov::contains(parse(R"({"shape": {"kind": "sphere", "radius_m": 2000}, "weather": {"rain": 1}})", w), "unknown key 'rain'"));

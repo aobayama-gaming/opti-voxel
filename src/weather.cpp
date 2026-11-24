@@ -8,13 +8,20 @@
 #include <cmath>
 
 Weather::Weather(const WorldFile::Weather &p_weather, const BaseSurface &p_base, double p_voxel_m, uint32_t p_seed, ForcingFn p_forcing) :
-        settings(p_weather), cells(p_weather.grid), base(p_base), voxel_m(p_voxel_m), forcing(std::move(p_forcing)) {
+        settings(p_weather), base(p_base), voxel_m(p_voxel_m), forcing(std::move(p_forcing)) {
+    ov::str why;
+    cells = WeatherGrid::for_base(p_base, p_voxel_m, p_weather.cell_m, &why);
+    if (!cells) {
+        // The world file refuses such a weather: a grid of the fewest cells keeps the worker's loops valid.
+        OV_ERR_PRINT("Weather: " + why);
+        cells = std::make_shared<CubeSphereGrid>(WeatherGrid::MIN_N, p_base.get_radius() * p_voxel_m);
+    }
     params.radius_m = p_base.get_radius() * p_voxel_m;
     params.prevailing_mps = p_weather.prevailing_mps;
     params.storm_m = p_weather.storm_m;
     params.seed = p_seed;
-    // The climate read at the level whose cells are about the grid's (a quarter turn of the radius over N cells).
-    const double cell_vox = 1.5707963267948966 * p_base.get_radius() / double(cells.size());
+    // The climate read at the level whose cells are about the grid's.
+    const double cell_vox = cells->cell_m() / p_voxel_m;
     forcing_level = ov::max(0, int(std::floor(std::log2(ov::max(cell_vox, 1.0)))));
     worker = ov::executor().start_worker("weather", *this);
     worker->wake(); // the forcing and the spin-up start now
@@ -52,16 +59,17 @@ Climate::BiomeWeather Weather::forcing_at(const Climate::Table &p_table, const T
 void Weather::build() {
     OV_TRACE("weather", "forcing");
     const uint64_t t0 = ov::now_usec();
-    std::vector<Climate::BiomeWeather> cell_weather(cells.cells());
-    const int n = cells.size();
+    const WeatherGrid &g = *cells;
+    std::vector<Climate::BiomeWeather> cell_weather(g.cells());
     if (forcing) {
-        parallel_for(uint32_t(WeatherGrid::FACES * n), "Weather::forcing", [&](uint32_t p_row) {
-            const int face = int(p_row) / n;
-            const int j = int(p_row) % n;
-            for (int i = 0; i < n; i++) {
-                double dir[3];
-                cells.cell_direction(face, i, j, dir);
-                cell_weather[(size_t(face) * size_t(n) + size_t(j)) * size_t(n) + size_t(i)] = forcing(WeatherGrid::cell_voxel(base, dir, 0.0), forcing_level);
+        parallel_for(uint32_t(g.faces() * g.height()), "Weather::forcing", [&](uint32_t p_row) {
+            const int face = int(p_row) / g.height();
+            const int j = int(p_row) % g.height();
+            for (int i = 0; i < g.width(); i++) {
+                double pos[3], up[3];
+                g.cell_surface(face, i, j, pos, up);
+                const VoxelPos ground = base.centre() + VoxelPos(std::llround(pos[0] / voxel_m), std::llround(pos[1] / voxel_m), std::llround(pos[2] / voxel_m));
+                cell_weather[g.interior(face, i, j)] = forcing(ground, forcing_level);
             } }, ov::Priority::LOW);
     }
     sim = std::make_unique<WeatherSim>(cells, params, cell_weather);
@@ -75,10 +83,10 @@ void Weather::build() {
 }
 
 std::vector<float> Weather::look() const {
-    std::vector<float> out(cells.padded_cells() * LOOK);
+    std::vector<float> out(cells->padded_cells() * LOOK);
     const std::vector<float> &s = sim->state();
     const std::vector<float> &d = sim->diagnostics();
-    for (size_t c = 0; c < cells.padded_cells(); c++) {
+    for (size_t c = 0; c < cells->padded_cells(); c++) {
         const float *sc = &s[c * WeatherSim::FIELDS];
         const float *dc = &d[c * WeatherSim::DIAGS];
         float *o = &out[c * LOOK];
@@ -179,12 +187,12 @@ float Weather::blend() const {
     return has_live ? float(ov::clamp(clock_ticks - double(live_done), 0.0, 1.0)) : 1.0f;
 }
 
-bool Weather::at(const double p_dir[3], Sample &r_sample) const {
+bool Weather::at(const double p_pos[3], Sample &r_sample) const {
     if (!has_live) {
         return false;
     }
     float v[LOOK];
-    cells.sample(live_look.data(), LOOK, p_dir, v);
+    cells->sample(live_look.data(), LOOK, p_pos, v);
     r_sample.wind_mps = Float3{ v[WIND_X], v[WIND_Y], v[WIND_Z] };
     r_sample.cover = v[COVER];
     r_sample.type = v[TYPE];
@@ -197,8 +205,9 @@ bool Weather::at(const double p_dir[3], Sample &r_sample) const {
 ov::Value Weather::get_stats() const {
     ov::Value d = ov::Value::object();
     std::lock_guard<std::mutex> lock(mutex);
-    d["grid"] = int64_t(cells.size());
-    d["cells"] = int64_t(cells.cells());
+    d["grid"] = ov::format("%d faces of %d x %d", cells->faces(), cells->width(), cells->height());
+    d["cell_m"] = cells->cell_m();
+    d["cells"] = int64_t(cells->cells());
     d["ready"] = has_live;
     d["ticks"] = int64_t(live_tick);
     d["game_s"] = live_time_s;

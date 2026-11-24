@@ -45,9 +45,9 @@ Climate::BiomeWeather still(float p_moisture) {
 
 // The largest |field| over the interior cells, and whether every value is finite.
 double largest(const WeatherSim &p_sim, int p_field, bool &r_finite) {
-    const WeatherGrid &g = p_sim.grid();
+    const auto &g = static_cast<const CubeSphereGrid &>(p_sim.grid());
     double m = 0.0;
-    for (int f = 0; f < WeatherGrid::FACES; f++) {
+    for (int f = 0; f < CubeSphereGrid::FACES; f++) {
         for (int j = 0; j < g.size(); j++) {
             for (int i = 0; i < g.size(); i++) {
                 const float v = p_sim.state()[g.index(f, i, j) * WeatherSim::FIELDS + p_field];
@@ -60,9 +60,9 @@ double largest(const WeatherSim &p_sim, int p_field, bool &r_finite) {
 }
 
 double mean_diag(const WeatherSim &p_sim, int p_diag) {
-    const WeatherGrid &g = p_sim.grid();
+    const auto &g = static_cast<const CubeSphereGrid &>(p_sim.grid());
     double sum = 0.0;
-    for (int f = 0; f < WeatherGrid::FACES; f++) {
+    for (int f = 0; f < CubeSphereGrid::FACES; f++) {
         for (int j = 0; j < g.size(); j++) {
             for (int i = 0; i < g.size(); i++) {
                 sum += p_sim.diagnostics()[g.index(f, i, j) * WeatherSim::DIAGS + p_diag];
@@ -75,10 +75,10 @@ double mean_diag(const WeatherSim &p_sim, int p_diag) {
 // The circulation round a centre: the mean of ((up - centre) x wind) . up over the cells within p_radius radians,
 // positive counterclockwise seen from above.
 double circulation(const WeatherSim &p_sim, const double p_centre[3], double p_radius) {
-    const WeatherGrid &g = p_sim.grid();
+    const auto &g = static_cast<const CubeSphereGrid &>(p_sim.grid());
     double sum = 0.0;
     int count = 0;
-    for (int f = 0; f < WeatherGrid::FACES; f++) {
+    for (int f = 0; f < CubeSphereGrid::FACES; f++) {
         for (int j = 0; j < g.size(); j++) {
             for (int i = 0; i < g.size(); i++) {
                 double up[3];
@@ -133,8 +133,8 @@ TEST_CASE("WeatherSim: the prevailing wind, easterly trades, westerlies, calm at
 }
 
 TEST_CASE("WeatherSim: still air stays still") {
-    const WeatherGrid grid(16);
-    WeatherSim sim(grid, small_planet(), std::vector<Climate::BiomeWeather>(grid.cells(), still(0.5f)));
+    const auto grid = std::make_shared<CubeSphereGrid>(16, 2000.0);
+    WeatherSim sim(grid, small_planet(), std::vector<Climate::BiomeWeather>(grid->cells(), still(0.5f)));
     for (int t = 0; t < 50; t++) {
         sim.step(0.1);
     }
@@ -149,9 +149,9 @@ TEST_CASE("WeatherSim: still air stays still") {
 // A storm's low pulls the air in and the Coriolis turns it: counterclockwise seen from above in the north, clockwise in
 // the south (a cyclone); the pressure waves it sends round stay bounded.
 TEST_CASE("WeatherSim: a storm spins cyclonically, each hemisphere its way, and stays bounded") {
-    const WeatherGrid grid(32);
+    const auto grid = std::make_shared<CubeSphereGrid>(32, 2000.0);
     for (const double y : { 0.7, -0.7 }) {
-        WeatherSim sim(grid, small_planet(), std::vector<Climate::BiomeWeather>(grid.cells(), still(0.5f)));
+        WeatherSim sim(grid, small_planet(), std::vector<Climate::BiomeWeather>(grid->cells(), still(0.5f)));
         double centre[3] = { 0.5, y, 0.3 };
         unit(centre);
         sim.inject_storm(centre, 1.0);
@@ -168,9 +168,9 @@ TEST_CASE("WeatherSim: a storm spins cyclonically, each hemisphere its way, and 
 }
 
 TEST_CASE("WeatherSim: moist ground makes cloud, dry ground none") {
-    const WeatherGrid grid(16);
-    WeatherSim wet(grid, small_planet(), std::vector<Climate::BiomeWeather>(grid.cells(), still(1.3f)));
-    WeatherSim dry(grid, small_planet(), std::vector<Climate::BiomeWeather>(grid.cells(), still(0.5f)));
+    const auto grid = std::make_shared<CubeSphereGrid>(16, 2000.0);
+    WeatherSim wet(grid, small_planet(), std::vector<Climate::BiomeWeather>(grid->cells(), still(1.3f)));
+    WeatherSim dry(grid, small_planet(), std::vector<Climate::BiomeWeather>(grid->cells(), still(0.5f)));
     for (int t = 0; t < 3000; t++) { // 300 s
         wet.step(0.1);
         dry.step(0.1);
@@ -182,10 +182,10 @@ TEST_CASE("WeatherSim: moist ground makes cloud, dry ground none") {
 
 // Storms and the prevailing wind on: the same seed gives the same bits, another seed other storms.
 TEST_CASE("WeatherSim: deterministic for a seed") {
-    const WeatherGrid grid(16);
+    const auto grid = std::make_shared<CubeSphereGrid>(16, 2000.0);
     Climate::BiomeWeather stormy;
     stormy.storms = 1000.0f;
-    std::vector<Climate::BiomeWeather> w(grid.cells(), stormy);
+    std::vector<Climate::BiomeWeather> w(grid->cells(), stormy);
     WeatherSim::Params other = small_planet();
     other.seed = 8;
     WeatherSim a(grid, small_planet(), w);
@@ -205,8 +205,8 @@ TEST_CASE("WeatherSim: deterministic for a seed") {
 
 // A long step is cut into substeps the gravity waves' CFL allows: 60 game seconds at once stay finite and bounded.
 TEST_CASE("WeatherSim: a long step takes substeps and stays stable") {
-    const WeatherGrid grid(32);
-    WeatherSim sim(grid, small_planet(), std::vector<Climate::BiomeWeather>(grid.cells(), Climate::BiomeWeather()));
+    const auto grid = std::make_shared<CubeSphereGrid>(32, 2000.0);
+    WeatherSim sim(grid, small_planet(), std::vector<Climate::BiomeWeather>(grid->cells(), Climate::BiomeWeather()));
     CHECK(sim.max_substep_s() > 0.0);
     const double dir[3] = { 0.0, 1.0, 0.0 };
     sim.inject_storm(dir, 1.0);

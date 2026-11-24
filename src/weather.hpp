@@ -52,7 +52,8 @@ public:
         float vapour = 0.0f;
     };
 
-    // The weather p_weather (WorldFile::Weather, on) over the SPHERE p_base (voxel p_voxel_m), seeded by the planet's seed.
+    // The weather p_weather (WorldFile::Weather, on) over p_base (voxel p_voxel_m) on its grid (WeatherGrid::for_base, which
+    // the world file checked), seeded by the planet's seed.
     Weather(const WorldFile::Weather &p_weather, const BaseSurface &p_base, double p_voxel_m, uint32_t p_seed, ForcingFn p_forcing);
     ~Weather() override;
     Weather(const Weather &) = delete;
@@ -71,12 +72,14 @@ public:
     bool ready() const { return has_live; }
     // Where the frame stands between the previous state (0) and the latest (1).
     float blend() const;
-    // The latest state at a direction from the planet's centre (false before the first).
-    bool at(const double p_dir[3], Sample &r_sample) const;
+    // The latest state under a position (metres from the base's centre; false before the first).
+    bool at(const double p_pos[3], Sample &r_sample) const;
     // The last two states (LOOK floats per padded cell of grid()): previous, latest.
     const std::vector<float> &previous() const { return prev_look; }
     const std::vector<float> &latest() const { return live_look; }
-    const WeatherGrid &grid() const { return cells; }
+    const WeatherGrid &grid() const { return *cells; }
+    // The sphere's radius (metres): the report's maps are equirectangular over it.
+    double radius_m() const { return params.radius_m; }
     // The latest state's game time (the spin-up's included) and the storms started up to it.
     double game_s() const { return live_time_s; }
     uint64_t storms() const { return live_storms; }
@@ -88,7 +91,7 @@ public:
 
 private:
     WorldFile::Weather settings;
-    WeatherGrid cells;
+    std::shared_ptr<const WeatherGrid> cells;
     WeatherSim::Params params;
     BaseSurface base;
     double voxel_m = 1.0;

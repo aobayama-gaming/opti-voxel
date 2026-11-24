@@ -22,7 +22,7 @@
 //     "climate": "climate.json" or { "fields": "fields.json" or [ field... ],
 //                                    "<field name>": { "mean": 0.4, "poles": -0.9 }... },
 //     "atmosphere": { "density": 1, "tint": [1, 1, 1] },
-//     "weather": { "on": true, "grid": 64, "tick_hz": 10, "time_scale": 1, "prevailing_mps": 8, "storm_m": 500,
+//     "weather": { "on": true, "cell_m": 0, "tick_hz": 10, "time_scale": 1, "prevailing_mps": 8, "storm_m": 500,
 //                  "spin_up_s": 60 },
 //     "look": { "atmosphere": true, "atmosphere_scale": 0, "clouds": true, "cloud_bottom_m": 0, "cloud_top_m": 0 },
 //     "instances": [ { "species": "conifer", "cell_m": 5, "share": 1 }... ],
@@ -47,7 +47,7 @@
 // equator, 1 at the poles; refused on a flat base and a torus), merged into the fields (climate_parse.cpp); a field name
 // that isn't one is refused. "atmosphere": the air's density (times every scattering and absorption coefficient) and the
 // tint of its Rayleigh scattering (AtmosphereMedium::for_base); "weather" the simulated weather over a sphere (on there
-// by default, refused on a flat shape or a torus; docs/weather.md): its grid's cells a cube face's side, its ticks a
+// by default, refused on a flat shape or a torus; docs/weather.md): its grid's cells' width in metres (0 or absent: 64 a cube face's side), its ticks a
 // second, the game seconds a real one simulates, the prevailing wind's speed, a storm's radius (the Coriolis comes from
 // it; 0 or absent: a quarter of the radius) and the game seconds simulated before the first frame; "look" whether there is air and clouds, and their scale.
 // A path is relative to the file naming it, or absolute (res://, /...); "species" and "biomes" files hold the list, a
@@ -104,7 +104,7 @@ struct WorldFile {
     // "weather" (docs/weather.md): on by default over a sphere, never over a flat shape or a torus.
     struct Weather {
         bool on = false;
-        int grid = 64;
+        double cell_m = 0.0; // the grid's cells' width (WeatherGrid::for_base; 0: DEFAULT_SIDE cells a face side)
         double tick_hz = 10.0;
         double time_scale = 1.0;
         double prevailing_mps = 8.0;

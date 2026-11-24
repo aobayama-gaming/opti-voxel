@@ -22,7 +22,7 @@ namespace {
 WorldFile::Weather small_weather() {
     WorldFile::Weather w;
     w.on = true;
-    w.grid = 16;
+    w.cell_m = 196.0; // 16 cells a face side over 2 km
     w.tick_hz = 10.0;
     w.spin_up_s = 5.0;
     return w;
@@ -79,9 +79,9 @@ TEST_CASE("Weather: the worker's states follow the clock") {
     CHECK(weather.blend() <= 1.0f);
     CHECK(weather.latest().size() == weather.grid().padded_cells() * Weather::LOOK);
     CHECK(weather.previous().size() == weather.latest().size());
-    const double dir[3] = { 0.3, 0.8, -0.5 };
+    const double pos[3] = { 600.0, 1600.0, -1000.0 };
     Weather::Sample s;
-    CHECK(weather.at(dir, s));
+    CHECK(weather.at(pos, s));
     CHECK(std::isfinite(s.wind_mps.x));
     CHECK(s.cover >= 0.0f);
     CHECK(s.cover <= 1.0f);
@@ -123,9 +123,10 @@ TEST_CASE("ov::float_to_half: the nearest half, back through half_to_float") {
 
 // The clouds read the weather (Clouds' passes): its lookup is in their text, every placeholder substituted.
 TEST_CASE("Clouds: the passes read the weather texture, every placeholder substituted") {
-    for (const ov::str &glsl : { Clouds::glsl_pass_march(), Clouds::glsl_pass_shadow() }) {
-        CHECK(glsl.find("vec3 weather_uvw(") != ov::str::npos);
-        CHECK(glsl.find("weather_uvw(base_up(p), cloud_weather_n)") != ov::str::npos);
+    const CubeSphereGrid grid(16, 2000.0);
+    for (const ov::str &glsl : { Clouds::glsl_pass_march(grid), Clouds::glsl_pass_shadow(grid) }) {
+        CHECK(glsl.find("vec2 weather_uv(vec3 p)") != ov::str::npos);
+        CHECK(glsl.find("weather_uv(p)") != ov::str::npos);
         CHECK(glsl.find("cloud_weather_blend") != ov::str::npos);
         CHECK_MESSAGE(glsl.find('$') == ov::str::npos, glsl.substr(glsl.find('$'), 40));
         CHECK(glsl.find("cloud_map") == ov::str::npos);
@@ -139,7 +140,7 @@ TEST_CASE("WeatherReport::frames: a planet's maps from its text, none without we
     CHECK_OR_RETURN(ov::read_file("res://worlds/ocean_test.planet.json", text));
     ov::Value world;
     CHECK_OR_RETURN(WorldFile::parse_object(text, "ocean_test", world).empty());
-    world["weather"] = json(R"({"grid": 16, "spin_up_s": 5})");
+    world["weather"] = json(R"({"cell_m": 196, "spin_up_s": 5})");
     const WeatherReport::Frames f = WeatherReport::frames(ov::to_json(world), "res://worlds", { 0.0, 0.1 }, 64);
     CHECK_MESSAGE(f.error.empty(), f.error);
     CHECK_OR_RETURN(f.frames.size() == 2);
