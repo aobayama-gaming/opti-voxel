@@ -222,8 +222,10 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
         // The clouds are the weather's: none without it (a flat world, a torus, "weather" off).
         if (content.clouds && weather && hosts.cloud_textures) {
             clouds = new Clouds();
-            clouds->start(hosts.device, atmosphere, sdf->get_base(), double(chunk_param.voxel_size), sdf->ground_top_m(), content.atmosphere_scale,
-                    weather->grid(), hosts.cloud_textures);
+            const double vm = double(chunk_param.voxel_size);
+            const CloudLayer layer = content.cloud_top_m > 0.0 ? CloudLayer::between(content.cloud_bottom_m, content.cloud_top_m, vm)
+                                                               : CloudLayer::for_base(sdf->get_base().curvature_radius_m(vm), sdf->ground_top_m(), vm, content.atmosphere_scale);
+            clouds->start(hosts.device, atmosphere, sdf->get_base(), vm, layer, weather->grid(), hosts.cloud_textures);
         }
     }
 
