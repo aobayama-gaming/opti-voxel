@@ -531,20 +531,20 @@ private:
 
     // A biome's "weather" (Climate::BiomeWeather): every key optional, its default the neutral biome's.
     void weather(const ov::Value &p_d, const ov::str &p_where, Climate::BiomeWeather &r_w) {
-        if (!keys(p_d, p_where, { "wind", "drag", "heat", "moisture", "gust", "storms" })) {
+        std::vector<const char *> names;
+        for (const Climate::WeatherKey &k : Climate::WEATHER_KEYS) {
+            names.push_back(k.name);
+        }
+        if (!keys_in(p_d, p_where, names)) {
             return;
         }
-        const double wind = number(p_d, "wind", p_where, r_w.wind);
-        const double drag = number(p_d, "drag", p_where, r_w.drag);
-        const double heat = number(p_d, "heat", p_where, r_w.heat);
-        const double moisture = number(p_d, "moisture", p_where, r_w.moisture);
-        const double gust = number(p_d, "gust", p_where, r_w.gust);
-        const double storms = number(p_d, "storms", p_where, r_w.storms);
-        const bool ok = wind >= 0.0 && wind <= 10.0 && drag >= 0.0 && drag <= 100.0 && heat >= -1.0 && heat <= 1.0 && moisture >= 0.0 && moisture <= 2.0 && gust >= 0.0 && gust <= 10.0 && storms >= 0.0 && storms <= 1000.0;
-        if (error.empty() && !ok) {
-            fail(p_where, "wind in [0, 10], drag in [0, 100], heat in [-1, 1], moisture in [0, 2], gust in [0, 10], storms in [0, 1000].");
+        for (const Climate::WeatherKey &k : Climate::WEATHER_KEYS) {
+            const double v = number(p_d, k.name, p_where, r_w.*k.member);
+            if (error.empty() && !(v >= k.min && v <= k.max)) {
+                fail(p_where, ov::format("%s is in [%g, %g].", k.name, double(k.min), double(k.max)));
+            }
+            r_w.*k.member = float(v);
         }
-        r_w = Climate::BiomeWeather{ float(wind), float(drag), float(heat), float(moisture), float(gust), float(storms) };
     }
 
     void biome(const ov::Value &p_d, int64_t p_i) {

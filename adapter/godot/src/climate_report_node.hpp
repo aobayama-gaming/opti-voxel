@@ -25,6 +25,12 @@ public:
     // The weather report (WeatherReport::run, tools/weather_report.sh): a world's weather run on the CPU, mapped at the game
     // minutes asked for into p_out_dir.
     static Dictionary weather(const String &p_out_dir, const String &p_world_path, const PackedFloat32Array &p_minutes, int p_width);
+    // WeatherReport::frames of a world file's text (its relative paths from p_dir), the mixer's time-lapse: { error,
+    // frames: [{ minutes, cover: Image, wind: Image (RGB8, equirectangular), game_s, storms, mean_cover, max_wind_mps,
+    // raining }], stats }.
+    static Dictionary weather_frames(const String &p_json, const String &p_dir, const PackedFloat32Array &p_minutes, int p_width);
+    // A biome's "weather" keys (Climate::WEATHER_KEYS): [{ name, min, max, default }], the mixer's rows.
+    static Array weather_keys();
     // ClimateReport::preview of a world file's text (its relative paths from p_dir), static: { error, size, lattice,
     // spacing_m, us_per_point, relief_m, biomes: Image, shaded: Image (RGB8), altitude_m: PackedFloat32Array, fields:
     // PackedFloat32Array (point-major), field_names, biome_names } (the biome mixer's maps). p_background: its loop at

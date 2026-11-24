@@ -2,6 +2,10 @@
 
 #include "clouds.hpp"
 #include "weather.hpp"
+#include "weather_report.hpp"
+
+#include "ov/files.hpp"
+#include "ov/json.hpp"
 
 #include "ov/half.hpp"
 
@@ -125,5 +129,50 @@ TEST_CASE("Clouds: the passes read the weather texture, every placeholder substi
         CHECK(glsl.find("cloud_weather_blend") != ov::str::npos);
         CHECK_MESSAGE(glsl.find('$') == ov::str::npos, glsl.substr(glsl.find('$'), 40));
         CHECK(glsl.find("cloud_map") == ov::str::npos);
+    }
+}
+
+// The mixer's time-lapse (WeatherReport::frames): a planet's maps at each minute asked for, the world's text as the
+// mixer sends it; no weather, no maps and why.
+TEST_CASE("WeatherReport::frames: a planet's maps from its text, none without weather") {
+    ov::str text;
+    CHECK_OR_RETURN(ov::read_file("res://worlds/ocean_test.planet.json", text));
+    ov::Value world;
+    CHECK_OR_RETURN(WorldFile::parse_object(text, "ocean_test", world).empty());
+    world["weather"] = json(R"({"grid": 16, "spin_up_s": 5})");
+    const WeatherReport::Frames f = WeatherReport::frames(ov::to_json(world), "res://worlds", { 0.0, 0.1 }, 64);
+    CHECK_MESSAGE(f.error.empty(), f.error);
+    CHECK_OR_RETURN(f.frames.size() == 2);
+    CHECK(f.width == 64);
+    CHECK(f.height == 32);
+    for (const WeatherReport::Frame &frame : f.frames) {
+        CHECK(frame.cover_rgb.size() == size_t(64 * 32 * 3));
+        CHECK(frame.wind_rgb.size() == frame.cover_rgb.size());
+        CHECK(frame.numbers["mean_cover"].as_double() >= 0.0);
+        CHECK(frame.numbers["mean_cover"].as_double() <= 1.0);
+    }
+    CHECK(f.frames[1].numbers["game_s"].as_double() == doctest::Approx(f.frames[0].numbers["game_s"].as_double() + 6.0));
+    world["weather"] = json(R"({"on": false})");
+    const WeatherReport::Frames off = WeatherReport::frames(ov::to_json(world), "res://worlds", { 0.0 }, 64);
+    CHECK(off.error.find("has none") != ov::str::npos);
+    CHECK(off.frames.empty());
+}
+
+// The parser and the mixer share one table of the weather block's keys and ranges.
+TEST_CASE("Climate::WEATHER_KEYS: every key parses at its bounds, refused past them") {
+    for (const Climate::WeatherKey &k : Climate::WEATHER_KEYS) {
+        for (const float v : { k.min, k.max }) {
+            ov::Value data;
+            CHECK(load_table("res://climate/example.json", data) == ov::str());
+            data["biomes"].at(0)["weather"] = json(ov::format(R"({"%s": %g})", k.name, double(v)));
+            ClimateSDF ok(data, 15);
+            CHECK_OR_RETURN(ok.sdf.get_climate() != nullptr);
+            CHECK(ok.sdf.get_climate()->biomes[0].weather.*k.member == doctest::Approx(v));
+        }
+        ov::Value data;
+        CHECK(load_table("res://climate/example.json", data) == ov::str());
+        data["biomes"].at(0)["weather"] = json(ov::format(R"({"%s": %g})", k.name, double(k.max) + 1.0));
+        ClimateSDF bad(data, 15);
+        CHECK_MESSAGE(bad.sdf.get_climate() == nullptr, k.name);
     }
 }

@@ -40,10 +40,13 @@ void hue_rgb(double p_hue, double p_value, uint8_t r_rgb[3]) {
 }
 
 // The cover and wind maps of the weather's latest state, and its numbers.
-ov::Value map_state(const Weather &p_weather, const ov::str &p_dir, const ov::str &p_tag, int p_w, double p_full_mps) {
+WeatherReport::Frame map_state(const Weather &p_weather, int p_w, double p_full_mps) {
     const int h = p_w / 2;
-    std::vector<uint8_t> cover(size_t(p_w) * size_t(h) * 3);
-    std::vector<uint8_t> wind(cover.size());
+    WeatherReport::Frame f;
+    std::vector<uint8_t> &cover = f.cover_rgb;
+    std::vector<uint8_t> &wind = f.wind_rgb;
+    cover.resize(size_t(p_w) * size_t(h) * 3);
+    wind.resize(cover.size());
     double cover_sum = 0.0, wind_max = 0.0, raining = 0.0, weight = 0.0;
     for (int y = 0; y < h; y++) {
         for (int x = 0; x < p_w; x++) {
@@ -72,34 +75,32 @@ ov::Value map_state(const Weather &p_weather, const ov::str &p_dir, const ov::st
             wind_max = ov::max(wind_max, speed);
         }
     }
-    const ov::bytes cover_png = ov::encode_png(uint32_t(p_w), uint32_t(h), 3, cover.data());
-    const ov::bytes wind_png = ov::encode_png(uint32_t(p_w), uint32_t(h), 3, wind.data());
-    ov::write_file(ov::path_join(p_dir, "cover_" + p_tag + ".png"), ov::str(cover_png.begin(), cover_png.end()));
-    ov::write_file(ov::path_join(p_dir, "wind_" + p_tag + ".png"), ov::str(wind_png.begin(), wind_png.end()));
     ov::Value m = ov::Value::object();
     m["game_s"] = p_weather.game_s();
     m["storms"] = int64_t(p_weather.storms());
     m["mean_cover"] = cover_sum / weight;
     m["max_wind_mps"] = wind_max;
     m["raining"] = raining / weight;
-    return m;
+    f.numbers = m;
+    return f;
 }
 
-} // namespace
+bool write_png(const ov::str &p_path, int p_w, int p_h, const std::vector<uint8_t> &p_rgb) {
+    const ov::bytes png = ov::encode_png(uint32_t(p_w), uint32_t(p_h), 3, p_rgb.data());
+    return ov::write_file(p_path, ov::str(png.begin(), png.end()));
+}
 
-ov::Value WeatherReport::run(const ov::str &p_out_dir, const ov::str &p_world_path, const std::vector<double> &p_minutes, int p_width) {
-    ov::Value report = ov::Value::object();
-    report["ok"] = false;
-    ov::make_dirs(p_out_dir);
-    WorldFile world;
+// p_world's weather mapped at p_minutes.
+WeatherReport::Frames run_world(const WorldFile &p_world, const std::vector<double> &p_minutes, int p_width) {
+    WeatherReport::Frames out;
     SDFCascade sdf;
     ChunkParam param;
-    ov::str err = WorldFile::load(p_world_path, world);
-    err = err.empty() ? sdf.configure_world(world, param) : err;
-    err = err.empty() && !world.weather.on ? ov::str("weather: the world has none (not a sphere, or \"weather\": {\"on\": false}).") : err;
-    if (!err.empty()) {
-        report["error"] = err;
-        return report;
+    out.error = sdf.configure_world(p_world, param);
+    if (out.error.empty() && !p_world.weather.on) {
+        out.error = "weather: the world has none (not a sphere, or \"weather\": {\"on\": false}).";
+    }
+    if (!out.error.empty()) {
+        return out;
     }
     const Climate::Table *climate = sdf.get_climate();
     const SDFCascade *cascade = &sdf;
@@ -107,28 +108,65 @@ ov::Value WeatherReport::run(const ov::str &p_out_dir, const ov::str &p_world_pa
     if (climate != nullptr) {
         forcing = [climate, cascade](const VoxelPos &p_voxel, int p_m) { return Weather::forcing_at(*climate, cascade->program(), p_voxel, p_m); };
     }
-    Weather weather(world.weather, sdf.get_base(), world.voxel_m, world.seed, forcing);
+    Weather weather(p_world.weather, sdf.get_base(), p_world.voxel_m, p_world.seed, forcing);
     // The report's own clock: one tick of real time per update, each waited for.
-    const uint64_t period_usec = uint64_t(std::llround(1e6 / world.weather.tick_hz));
+    const uint64_t period_usec = uint64_t(std::llround(1e6 / p_world.weather.tick_hz));
     uint64_t now = 1;
     weather.update(now);
     weather.finish();
     weather.update(now);
     const double start_s = weather.game_s();
-    const int width = ov::clamp(p_width, 64, 4096);
-    ov::Value maps = ov::Value::array();
+    out.width = ov::clamp(p_width, 64, 4096);
+    out.height = out.width / 2;
     for (const double minutes : p_minutes) {
         while (weather.game_s() < start_s + minutes * 60.0 - 1e-6) {
             now += period_usec;
-            weather.update(now);
+            weather.update(now); // asks for this period's tick
             weather.finish();
+            weather.update(now); // collects it (the clock didn't move: no new tick)
         }
-        weather.update(now);
-        ov::Value m = map_state(weather, p_out_dir, ov::format("%03d", int(std::lround(minutes))), width, 2.0 * ov::max(world.weather.prevailing_mps, 1.0));
-        m["minutes"] = minutes;
+        out.frames.push_back(map_state(weather, out.width, 2.0 * ov::max(p_world.weather.prevailing_mps, 1.0)));
+        out.frames.back().minutes = minutes;
+    }
+    out.stats = weather.get_stats();
+    return out;
+}
+
+} // namespace
+
+WeatherReport::Frames WeatherReport::frames(const ov::str &p_json, const ov::str &p_dir, const std::vector<double> &p_minutes, int p_width) {
+    ov::Value data;
+    WorldFile world;
+    Frames out;
+    out.error = WorldFile::parse_object(p_json, "the world's text", data);
+    out.error = out.error.empty() ? WorldFile::parse(data, p_dir, world) : out.error;
+    return out.error.empty() ? run_world(world, p_minutes, p_width) : out;
+}
+
+ov::Value WeatherReport::run(const ov::str &p_out_dir, const ov::str &p_world_path, const std::vector<double> &p_minutes, int p_width) {
+    ov::Value report = ov::Value::object();
+    report["ok"] = false;
+    ov::make_dirs(p_out_dir);
+    WorldFile world;
+    Frames f;
+    f.error = WorldFile::load(p_world_path, world);
+    if (f.error.empty()) {
+        f = run_world(world, p_minutes, p_width);
+    }
+    if (!f.error.empty()) {
+        report["error"] = f.error;
+        return report;
+    }
+    ov::Value maps = ov::Value::array();
+    for (const Frame &frame : f.frames) {
+        const ov::str tag = ov::format("%03d", int(std::lround(frame.minutes)));
+        write_png(ov::path_join(p_out_dir, "cover_" + tag + ".png"), f.width, f.height, frame.cover_rgb);
+        write_png(ov::path_join(p_out_dir, "wind_" + tag + ".png"), f.width, f.height, frame.wind_rgb);
+        ov::Value m = frame.numbers;
+        m["minutes"] = frame.minutes;
         maps.push_back(m);
     }
-    const ov::Value stats = weather.get_stats();
+    const ov::Value &stats = f.stats;
     ov::str md = ov::format("# Weather report: %s\n\nGrid %d (%d cells), time scale %g, %g ticks a second, storm radius %s, Omega %.4f rad/s, substep %.3f s.\n\n",
             p_world_path, int(world.weather.grid), int(stats["cells"].as_int()), world.weather.time_scale, world.weather.tick_hz,
             world.weather.storm_m > 0.0 ? ov::format("%g m", world.weather.storm_m) : ov::str("a quarter of the radius"), stats["omega_rad_s"].as_double(),
