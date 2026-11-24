@@ -2,7 +2,6 @@
 
 [ext_resource type="Script" path="res://debug/bench.gd" id="1_bench"]
 [ext_resource type="CompressedTexture3D" uid="uid://ds6l17gi5l72p" path="res://grade_lut.png" id="2_lut"]
-[ext_resource type="Texture2D" path="res://clouds.png" id="3_clouds"]
 
 [sub_resource type="PhysicalSkyMaterial" id="PhysicalSkyMaterial_b"]
 
@@ -42,7 +41,6 @@ directional_shadow_mode = 0
 directional_shadow_max_distance = 1000.0
 
 [node name="VoxelSky" type="VoxelSky" parent="."]
-cloud_texture = ExtResource("3_clouds")
 
 [node name="Camera3D" type="Camera3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -52.76399, 356.4202, -95.64208)

@@ -219,19 +219,11 @@ bool World::start(const Projection &p_projection, const Hosts &p_hosts, const Fl
         atmosphere = new Atmosphere();
         atmosphere->start(hosts.device, sdf->get_base(), double(chunk_param.voxel_size), sdf->ground_top_m(), content.atmosphere_scale,
                 hosts.atmosphere_textures, content.atmosphere_density, content.atmosphere_tint);
-        if (content.clouds && hosts.cloud_textures) {
+        // The clouds are the weather's: none without it (a flat world, a torus, "weather" off).
+        if (content.clouds && weather && hosts.cloud_textures) {
             clouds = new Clouds();
-            const Climate::Table *climate = sdf->get_climate();
-            if (climate && CloudClimate::any(*climate)) {
-                // The table and the spec stay as they are while the world runs (configure is before start).
-                const SDFCascade *cascade = sdf.get();
-                clouds->set_climate([climate, cascade](const VoxelPos &p_voxel, int p_m) {
-                    return CloudClimate::at(*climate, cascade->program(), p_voxel, p_m);
-                });
-            }
             clouds->start(hosts.device, atmosphere, sdf->get_base(), double(chunk_param.voxel_size), sdf->ground_top_m(), content.atmosphere_scale,
-                    hosts.cloud_textures);
-            clouds->set_weather(cloud_cover, cloud_wind);
+                    weather->grid(), hosts.cloud_textures);
         }
     }
 
@@ -333,7 +325,17 @@ void World::frame(const Float3 *p_camera_pos, const Float3 *p_camera_forward, do
         has_camera = true;
     }
     if (weather) {
-        weather->update(now_usec());
+        const bool landed = weather->update(now_usec());
+        Weather::Sample here;
+        if (p_camera_pos != nullptr) {
+            const double camera[3] = { double(p_camera_pos->x), double(p_camera_pos->y), double(p_camera_pos->z) };
+            wind_at_camera = weather_at(camera, here) ? here.wind_mps : Float3();
+        }
+        if (clouds) {
+            // The noises drift at the weather's pace: its wind times its time scale.
+            const float k = float(content.weather.time_scale);
+            clouds->set_weather(*weather, Float3{ wind_at_camera.x * k, wind_at_camera.y * k, wind_at_camera.z * k }, landed);
+        }
     }
     if (atmosphere && p_camera_pos != nullptr) {
         const BaseSurface::Render base = base_render();
@@ -671,14 +673,6 @@ bool World::weather_at(const double p_render_pos[3], Weather::Sample &r_sample) 
     const UpAxis up = sdf->get_base().up_dir(WorldCoord::offset_pos(config.chunk_param.origin_voxel(), offset).voxel);
     const double dir[3] = { up[0], up[1], up[2] };
     return weather->at(dir, r_sample);
-}
-
-void World::set_cloud_weather(float p_cover, const Float3 &p_wind_mps) {
-    cloud_cover = p_cover;
-    cloud_wind = p_wind_mps;
-    if (clouds) {
-        clouds->set_weather(p_cover, p_wind_mps);
-    }
 }
 
 bool World::recenter(const Float3 &p_camera_pos, Float3 &r_shift) {

@@ -86,8 +86,7 @@ float shade_voxel_m() {
 
 // The materials (page_shading_glsl.hpp: palettes, the quad's two materials, bark, leaves, ground detail).
 /*GLSL_PAGE_SHADING*/
-// The cloud layer's uniforms and functions (VoxelSky::glsl_clouds, the same text as the sky shader's): the sun's
-// light in light() is cut where a cloud lies between the fragment and the sun; the leaves' wind sway.
+// The base and the leaves' wind sway (VoxelSky::glsl_clouds, the same text as the sky shader's).
 /*GLSL_CLOUDS*/
 // The sea's uniforms and its shore (Sea::glsl_shore: sand and the wet band by altitude; neutral without a sea).
 /*GLSL_SEA_SHORE*/
@@ -270,8 +269,7 @@ void fragment() {
 }
 
 // Lambert (Godot's default diffuse: LIGHT_COLOR carries the PI; the albedo is applied after), with the sun cut by
-// the clouds on the fragment's ray to the sun (the volumetric ones' base shape, or the cloud layer's density where the
-// ray crosses it): the shadow of the clouds the sky shader draws. The terrain's materials have a roughness of 1, so the
+// the clouds on the fragment's ray to the sun (their shadow map): the shadow of the clouds the sky shader draws. The terrain's materials have a roughness of 1, so the
 // specular lobe is left out.
 void light() {
     vec3 sun = vec3(1.0);
@@ -282,13 +280,6 @@ void light() {
     }
     if (LIGHT_IS_DIRECTIONAL && cloud_enabled) {
         sun *= cloud_sun_shadow(v_world_pos);
-    } else if (LIGHT_IS_DIRECTIONAL && cloud_shadow > 0.0) {
-        vec3 hit;
-        // VERTEX is not readable in light(): the fragment's position comes through v_world_pos.
-        vec3 up = base_up(v_world_pos);
-        if (dot(to_sun, up) > 0.05 && cloud_hit(v_world_pos, to_sun, up, hit)) {
-            sun *= 1.0 - cloud_shadow * cloud_density(cloud_texel(hit, base_up(hit)));
-        }
     }
     DIFFUSE_LIGHT += clamp(dot(NORMAL, LIGHT), 0.0, 1.0) * ATTENUATION * LIGHT_COLOR * sun;
 }

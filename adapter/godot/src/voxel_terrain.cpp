@@ -31,7 +31,6 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_world_origin_y"), &VoxelTerrain::get_world_origin_y);
     ClassDB::bind_method(D_METHOD("set_world_origin_z", "voxel"), &VoxelTerrain::set_world_origin_z);
     ClassDB::bind_method(D_METHOD("get_world_origin_z"), &VoxelTerrain::get_world_origin_z);
-    ClassDB::bind_method(D_METHOD("set_cloud_weather", "cover", "wind_mps"), &VoxelTerrain::set_cloud_weather);
     ClassDB::bind_method(D_METHOD("set_sun_direction", "towards_sun"), &VoxelTerrain::set_sun_direction);
     ClassDB::bind_method(D_METHOD("get_planet_radius"), &VoxelTerrain::get_planet_radius);
     ClassDB::bind_method(D_METHOD("set_archetype_stream", "enabled"), &VoxelTerrain::set_archetype_stream);
@@ -322,10 +321,6 @@ int64_t VoxelTerrain::get_world_origin_z() const {
 
 double VoxelTerrain::get_planet_radius() const {
     return world->world_file().planet_radius_m;
-}
-
-void VoxelTerrain::set_cloud_weather(float p_cover, const Vector3 &p_wind_mps) {
-    world->set_cloud_weather(p_cover, ov_f3(p_wind_mps));
 }
 
 void VoxelTerrain::set_sun_direction(const Vector3 &p_towards_sun) {
@@ -1046,6 +1041,11 @@ void VoxelTerrain::_process(double) {
     if (const Clouds *clouds = world->get_clouds()) {
         // The shadow map's frame, as the pass of this frame takes it (the globals that changed).
         Clouds::visit_host_frame(clouds->last_frame(), SetChangedGlobal{ cloud_globals_sent });
+    }
+    if (const Vector3 wind = godot_v3(world->camera_wind()); wind != weather_wind_sent) {
+        // The leaves' sway (VoxelSky::glsl_clouds' wind_sway): the weather's wind here.
+        weather_wind_sent = wind;
+        RenderingServer::get_singleton()->global_shader_parameter_set("weather_wind", wind);
     }
     if (world->world_file().sea.on) {
         _push_sun_without_sky();

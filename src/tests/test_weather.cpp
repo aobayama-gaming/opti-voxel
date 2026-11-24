@@ -1,6 +1,9 @@
 #include "test_climate_common.hpp"
 
+#include "clouds.hpp"
 #include "weather.hpp"
+
+#include "ov/half.hpp"
 
 #include <cmath>
 
@@ -101,4 +104,26 @@ TEST_CASE("Weather: a clock far ahead drops ticks past MAX_BEHIND") {
     CHECK(stats["behind_ticks"].as_int() <= Weather::MAX_BEHIND);
     CHECK(stats["tick"]["count"].as_int() + stats["dropped_ticks"].as_int() + stats["behind_ticks"].as_int() >= 240);
     weather.finish();
+}
+
+// The weather texture's texels (Clouds) are halves.
+TEST_CASE("ov::float_to_half: the nearest half, back through half_to_float") {
+    for (const float v : { 0.0f, 1.0f, 0.5f, 0.25f, 0.3f, 0.65f, 0.999f, 2.0f, 1e-6f }) {
+        const float back = ov::half_to_float(ov::float_to_half(v));
+        CHECK(std::abs(back - v) <= std::ldexp(std::abs(v), -11) + 6.2e-5f); // half an ulp; 0 under the normals
+    }
+    CHECK(ov::float_to_half(1.0f) == 0x3C00u);
+    CHECK(ov::float_to_half(-2.0f) == 0xC000u);
+    CHECK(ov::float_to_half(1e6f) == 0x7C00u);
+}
+
+// The clouds read the weather (Clouds' passes): its lookup is in their text, every placeholder substituted.
+TEST_CASE("Clouds: the passes read the weather texture, every placeholder substituted") {
+    for (const ov::str &glsl : { Clouds::glsl_pass_march(), Clouds::glsl_pass_shadow() }) {
+        CHECK(glsl.find("vec3 weather_uvw(") != ov::str::npos);
+        CHECK(glsl.find("weather_uvw(base_up(p), cloud_weather_n)") != ov::str::npos);
+        CHECK(glsl.find("cloud_weather_blend") != ov::str::npos);
+        CHECK_MESSAGE(glsl.find('$') == ov::str::npos, glsl.substr(glsl.find('$'), 40));
+        CHECK(glsl.find("cloud_map") == ov::str::npos);
+    }
 }

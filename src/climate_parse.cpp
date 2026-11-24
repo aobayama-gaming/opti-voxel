@@ -33,7 +33,6 @@ namespace Climate {
 //             "at": { "temperature": [0.5, 0.3] (centre, span), "humidity": { "min": 0.1, "max": 0.5 } },
 //             "graph": { "nodes": [ node... ] },
 //             "surface": { "flat": "#2a2420", "steep": "#1a1614" (optional, else flat), "roughness": 1 },
-//             "clouds": { "cover": 0.6, "type": 0.5 } (optional),
 //             "weather": { "wind": 1, "drag": 1, "heat": 0, "moisture": 0.7, "gust": 0.5, "storms": 0 } (optional, each key too),
 //             "instances": [ { "species": "conifer", "cell_m": 5, "share": 2 } ] (optional), "features": [ { "kind": "lava_lake", "cell_m": 640, "chance": 0.6, "radius_m": [18, 45] } ]
 //             (optional),
@@ -42,10 +41,8 @@ namespace Climate {
 //     middle and half their gap); on each it is whole within 0.71 of the span and gone a span away, overlapping biomes
 //     blend by their kernels (climate.hpp, Weights), a field it doesn't name doesn't matter to it. The last biome is the
 //     default: no "at", it fills what the others leave. "surface": the biome's ground colours (sRGB) on gentle and
-//     steep slopes; without it, the procedural ground's. "clouds": the sky over the biome, its cover and cloud type in
-//     [0, 1] (stratus 0, stratocumulus 0.5, cumulus 1; Climate::BiomeClouds); without it, the sky's cover and the
-//     weather noise's type. "weather": how the biome pushes the
-//     simulated weather (Climate::BiomeWeather, docs/weather.md); without it, the neutral biome's. "instances": the world's species (species.hpp) its sites grow, one site per cell of cell_m
+//     steep slopes; without it, the procedural ground's. "weather": how the biome pushes the simulated weather (its
+//     clouds included) (Climate::BiomeWeather, docs/weather.md); without it, the neutral biome's. "instances": the world's species (species.hpp) its sites grow, one site per cell of cell_m
 //     metres, each by its integer share among the biome's entries of its kind and cell (BiomePick); without the key
 //     the world's "instances", [] none. "features": the features standing on it
 //     (biome_features.hpp: a kind, its cell, the chance a cell holds one, its radius range); without the key the
@@ -532,20 +529,6 @@ private:
         r_s.roughness = float(roughness);
     }
 
-    void clouds(const ov::Value &p_d, const ov::str &p_where, Climate::BiomeClouds &r_c) {
-        if (!keys(p_d, p_where, { "cover", "type" })) {
-            return;
-        }
-        const double cover = number(p_d, "cover", p_where);
-        const double type = number(p_d, "type", p_where);
-        if (error.empty() && !(cover >= 0.0 && cover <= 1.0 && type >= 0.0 && type <= 1.0)) {
-            fail(p_where, "cover and type are in [0, 1].");
-        }
-        r_c.set = true;
-        r_c.cover = float(cover);
-        r_c.type = float(type);
-    }
-
     // A biome's "weather" (Climate::BiomeWeather): every key optional, its default the neutral biome's.
     void weather(const ov::Value &p_d, const ov::str &p_where, Climate::BiomeWeather &r_w) {
         if (!keys(p_d, p_where, { "wind", "drag", "heat", "moisture", "gust", "storms" })) {
@@ -565,7 +548,7 @@ private:
     }
 
     void biome(const ov::Value &p_d, int64_t p_i) {
-        if (!keys(p_d, ov::format("biome %d", p_i), { "name", "at", "graph", "surface", "clouds", "weather", "debug_color", "instances", "features" })) {
+        if (!keys(p_d, ov::format("biome %d", p_i), { "name", "at", "graph", "surface", "weather", "debug_color", "instances", "features" })) {
             return;
         }
         Climate::Biome b;
@@ -582,9 +565,6 @@ private:
         }
         if (p_d.has("surface")) {
             surface(dict(p_d["surface"], where + ov::str(" surface")), where + ov::str(" surface"), b.surface);
-        }
-        if (p_d.has("clouds")) {
-            clouds(dict(p_d["clouds"], where + ov::str(" clouds")), where + ov::str(" clouds"), b.clouds);
         }
         if (p_d.has("weather")) {
             weather(dict(p_d["weather"], where + ov::str(" weather")), where + ov::str(" weather"), b.weather);

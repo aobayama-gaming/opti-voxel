@@ -86,6 +86,7 @@ private:
             const std::vector<const char *> &p_names, const std::vector<ov::gpu::Texture> &p_textures);
     float atmosphere_range_sent = -1.0f; // the last global atmo_range_m
     Dictionary cloud_globals_sent; // the last global uniforms of the clouds' shadow map frame
+    Vector3 weather_wind_sent; // the last weather_wind global set
 
 public:
     void _ready() override;
@@ -127,8 +128,6 @@ public:
 
     // The world's planet radius in metres; 0 the flat world.
     double get_planet_radius() const;
-    // Their weather (VoxelSky, every frame): the cover in [0, 1] and the wind (render metres per second).
-    void set_cloud_weather(float p_cover, const Vector3 &p_wind_mps);
     // The direction towards the sun (render space; VoxelSky, from its light): the atmosphere's camera volume.
     void set_sun_direction(const Vector3 &p_towards_sun);
     // The scatter and the forest stream (default on: their keys computed as the chunks ask for them,

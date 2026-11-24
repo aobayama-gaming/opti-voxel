@@ -5,9 +5,9 @@ rain. It is not the climate. The climate (`docs/climate.md`) is a fixed function
 and shapes the ground; the weather is simulated, forced by the climate, and read by what is drawn (clouds, leaves, later
 the sea and rain). It never feeds the SDF: the terrain stays a function of the absolute position.
 
-Status: the grid (`src/weather_grid.*`), the simulation (`src/weather_sim.*`) and its worker in `World`
-(`src/weather.*`) are in, with a report (`tools/weather_report.sh`). The clouds reading it are the next step (the plan at
-the end). Planets only: the weather is simulated over a sphere, never over a
+Status: the grid (`src/weather_grid.*`), the simulation (`src/weather_sim.*`), its worker in `World`
+(`src/weather.*`) with a report (`tools/weather_report.sh`), and the clouds drawn from it (`docs/look.md` "Weather") are
+in. The mixer's weather editing is the next step (the plan at the end). Planets only: the weather is simulated over a sphere, never over a
 flat shape or a torus (decided with the user, 2026-11-24: the engine is for planets).
 
 ## Grid
@@ -107,10 +107,10 @@ bands by the prevailing winds, one storm in ten minutes, a few percent of the pl
 Agreed with the user (2026-11-24). Stacked PRs, `feature/weather-*`:
 1. **Grid** (#178): the cube sphere, its halo and sampling, the GLSL lookup.
 2. **Simulation** (#179): `WeatherSim`, a biome's `"weather"` block and the planet file's.
-3. **Worker:** `Weather` in `World`, its queries and stats, the report.
-4. **Clouds:** the clouds read cover and type from the weather texture (two states blended), their noise drifts with the
-   wind at the camera, the leaves' sway and the 2D cloud layer read the local wind; `CloudClimate`, a biome's
-   `"clouds"` block and the clouds over a flat shape or a torus are removed (one path: the simulation's).
+3. **Worker** (#180): `Weather` in `World`, its queries and stats, the report.
+4. **Clouds:** the clouds read cover and type from the weather texture (two states blended), their noises drift with
+   the wind at the camera, the leaves' sway reads it too; `CloudClimate`, a biome's `"clouds"` block, the flat 2D cloud
+   layer and the clouds over a flat shape or a torus are removed (one path: the simulation's).
 5. **Mixer:** a biome's weather edited in the mixer, a time-lapse weather map in World mode.
 
 Later: curl-noise gusts, the FFT sea reading the wind (U10, fetch, swell), rain and ground wetness, saving the weather,

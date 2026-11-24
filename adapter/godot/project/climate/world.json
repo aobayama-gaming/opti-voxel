@@ -10,10 +10,6 @@
     "flat": "#8c8a80",
     "steep": "#a8a49a"
    },
-   "clouds": {
-    "cover": 0.7,
-    "type": 0.45
-   },
    "instances": [
     {
      "species": "broadleaf",
@@ -121,10 +117,6 @@
    "surface": {
     "flat": "#8c867c",
     "steep": "#5c564e"
-   },
-   "clouds": {
-    "cover": 0.6,
-    "type": 0.4
    },
    "instances": [
     {

@@ -136,7 +136,7 @@ Writing each op once is what makes keeping it cheap.
 
 | Backend | Used by | Form |
 |---|---|---|
-| CPU evaluator | `SDFCascade` CPU paths (`evaluate*`, `ground_field`, `ground_along`, `channels_at`), BiomePick, CloudClimate, ClimateReport, the tests | the program interpreted per box (and per point: `point_slots` on a one-point box, as today) |
+| CPU evaluator | `SDFCascade` CPU paths (`evaluate*`, `ground_field`, `ground_along`, `channels_at`), BiomePick, the weather's forcing, ClimateReport, the tests | the program interpreted per box (and per point: `point_slots` on a one-point box, as today) |
 | specialised GLSL | the game | per level, straight-line code, the values in the `ShaderParams` block (binding 12) |
 | generic GLSL | the biome mixer | a fixed interpreter over the program's records in `ShaderParams`: its text depends on the op set and the caps only, so no edit recompiles |
 

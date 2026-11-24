@@ -718,7 +718,7 @@ ov::str compile(const ov::Value &p_data, const Climate::Ground &p_ground, Mode p
     Node pick;
     pick.op = Op::PICK;
     pick.in = w;
-    // The ground and the pick, then the fields and the weights (read on the CPU: BiomePick, CloudClimate, ClimateReport).
+    // The ground and the pick, then the fields and the weights (read on the CPU: BiomePick, Weather::forcing_at, ClimateReport).
     std::vector<int> roots = { blend(g, w, out), w.size() == 1 ? g.constant(0.0f) : g.add(pick) };
     roots.insert(roots.end(), fields.begin(), fields.end());
     roots.insert(roots.end(), w.begin(), w.end());

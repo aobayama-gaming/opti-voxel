@@ -109,7 +109,7 @@ struct LevelProgram {
     int output = -1; // the ground height (LOD0 voxels): what height_sdf reads at a run's last level
     int pick = -1; // the biome (PICK, or a constant)
     int biomes = 1;
-    // The climate's nodes the CPU reads (BiomePick, CloudClimate, ClimateReport): each field's value, each biome's weight.
+    // The climate's nodes the CPU reads (BiomePick, Weather::forcing_at, ClimateReport): each field's value, each biome's weight.
     std::vector<int> fields, weights;
     bool generic = false; // compiled Mode::GENERIC: the GPU runs it through the interpreter (level_glsl.hpp)
     // What a stretched note stretches along and what `up` measures from (SDFCascade's base).

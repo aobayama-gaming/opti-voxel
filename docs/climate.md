@@ -100,7 +100,7 @@ macro layer in double on the CPU, `BaseSurface`'s region machinery).
   side, a carve's top only; `Ground::floor`: on a planet its low side above the centre; the blend's range is the hull of its biomes' outputs, its weights summing to 1, not their sum), a curve's slope within `MAX_CURVE_SLOPE` (4), a warp within `WARP_LIMIT`. Refusals name the biome and node.
 - **CPU** (`level_program.cpp`): `Terrain::run` / `Terrain::point` on the op table's CPU forms, through
   `SDFCascade::channels_at` on every path (chunk samples, point items, `ground_along`, the report); BiomePick,
-  CloudClimate and ClimateReport read the program's `fields` and `weights` nodes (`Terrain::point_nodes`, which
+  Weather::forcing_at and ClimateReport read the program's `fields` and `weights` nodes (`Terrain::point_nodes`, which
   subdivides a field the program carries no lower than its own level).
 - **GPU** (`level_glsl.cpp`): the same ops' GLSL forms, op for op (`precise`, the climate's flushed dual ops `cl_*`,
   `Climate::shared_helpers_glsl`).
@@ -118,9 +118,6 @@ macro layer in double on the CPU, `BaseSurface`'s region machinery).
   doesn't upload yet, so `SDFCascade` refuses such a climate on a sphere. Why: the ground is 3D, and moving up a column
   meets other noise (needles, folds where dh/dy passes 1); on the Mont Blanc match a stretch of 4 from 100 m up took the
   100 m octave's amplitude from 8.7 m to 2.3 m (real: 2.6 m) and the slopes over 75° from 0.4% to none.
-- **Clouds** (a biome's `"clouds": {"cover": 0..1, "type": 0..1}`, `Climate::BiomeClouds`): the volumetric clouds' cover
-  and type over the biome, blended by the weights on a coarse map round the camera (`CloudClimate`, `docs/look.md`).
-  They touch no cascade pass or shader.
 - **Weather** (a biome's `"weather": {"wind", "drag", "heat", "moisture", "gust", "storms"}`, `Climate::BiomeWeather`):
   how the biome pushes the simulated weather (`docs/weather.md` "Forcing"); every key optional, the neutral biome's
   values by default. It touches no cascade pass or shader either: the weather is read by what is drawn, never by the
