@@ -620,23 +620,35 @@ int period_vox(double p_m, double p_voxel_m) {
 
 } // namespace
 
-CloudLayer CloudLayer::for_base(double p_radius_m, double p_relief_m, double p_voxel_m, double p_scale) {
+// Every length of Earth's layer times p_s from p_bottom_m up (the noises' periods powers of two of voxels, each within the
+// next longer one: at tiny voxels the frame's longest period would clamp them together; the weather at most a quarter of
+// the warp, so the warp still moves weather tiles apart), the extinction over p_s.
+static CloudLayer scaled(double p_s, double p_bottom_m, double p_voxel_m) {
     CloudLayer l;
-    const double bottoms = RELIEF_BOTTOMS * p_relief_m / double(l.bottom_m);
+    l.top_m = float(p_bottom_m + double(l.top_m - l.bottom_m) * p_s);
+    l.bottom_m = float(p_bottom_m);
+    l.extinction = float(l.extinction / p_s);
+    l.shadow_reach_m = float(l.shadow_reach_m * p_s);
+    l.shadow_min_extent_m = float(l.shadow_min_extent_m * p_s);
+    l.warp_period_vox = period_vox(CloudLayer::EARTH_WARP_PERIOD_M * p_s, p_voxel_m);
+    l.weather_period_vox = ov::min(period_vox(CloudLayer::EARTH_WEATHER_PERIOD_M * p_s, p_voxel_m), l.warp_period_vox / 4);
+    l.shape_period_vox = ov::min(period_vox(CloudLayer::EARTH_SHAPE_PERIOD_M * p_s, p_voxel_m), l.weather_period_vox);
+    l.detail_period_vox = ov::min(period_vox(CloudLayer::EARTH_DETAIL_PERIOD_M * p_s, p_voxel_m), l.shape_period_vox);
+    return l;
+}
+
+CloudLayer CloudLayer::for_base(double p_radius_m, double p_relief_m, double p_voxel_m, double p_scale) {
+    const CloudLayer earth;
+    const double bottoms = RELIEF_BOTTOMS * p_relief_m / double(earth.bottom_m);
     const double s = p_scale > 0.0 ? p_scale : ov::min(1.0, ov::max(p_radius_m / AtmosphereMedium::EARTH_RADIUS_M, bottoms));
     // The grid's march knows nothing of the terrain: no cloud may reach into it.
-    const double bottom = ov::max(double(l.bottom_m) * s, RELIEF_BOTTOMS * p_relief_m);
-    l.top_m = float(bottom + double(l.top_m - l.bottom_m) * s);
-    l.bottom_m = float(bottom);
-    l.extinction = float(l.extinction / s);
-    l.shadow_reach_m = float(l.shadow_reach_m * s);
-    l.shadow_min_extent_m = float(l.shadow_min_extent_m * s);
-    // Each period within the next longer one (at tiny voxels the frame's longest period would clamp them together): the
-    // weather at most a quarter of the warp, so the warp still moves weather tiles apart.
-    l.warp_period_vox = period_vox(EARTH_WARP_PERIOD_M * s, p_voxel_m);
-    l.weather_period_vox = ov::min(period_vox(EARTH_WEATHER_PERIOD_M * s, p_voxel_m), l.warp_period_vox / 4);
-    l.shape_period_vox = ov::min(period_vox(EARTH_SHAPE_PERIOD_M * s, p_voxel_m), l.weather_period_vox);
-    l.detail_period_vox = ov::min(period_vox(EARTH_DETAIL_PERIOD_M * s, p_voxel_m), l.shape_period_vox);
+    return scaled(s, ov::max(double(earth.bottom_m) * s, RELIEF_BOTTOMS * p_relief_m), p_voxel_m);
+}
+
+CloudLayer CloudLayer::between(double p_bottom_m, double p_top_m, double p_voxel_m) {
+    const CloudLayer earth;
+    CloudLayer l = scaled((p_top_m - p_bottom_m) / double(earth.top_m - earth.bottom_m), p_bottom_m, p_voxel_m);
+    l.top_m = float(p_top_m);
     return l;
 }
 
@@ -665,12 +677,12 @@ ov::bytes Clouds::block_bytes(const BaseSurface::Render &p_base, const Atmospher
     return out;
 }
 
-void Clouds::start(ov::gpu::Device *p_device, const Atmosphere *p_atmosphere, const BaseSurface &p_base, double p_voxel_m, double p_relief_m,
-        double p_scale, const WeatherGrid &p_grid, TexturesFn p_textures) {
+void Clouds::start(ov::gpu::Device *p_device, const Atmosphere *p_atmosphere, const BaseSurface &p_base, double p_voxel_m, const CloudLayer &p_layer,
+        const WeatherGrid &p_grid, TexturesFn p_textures) {
     device = p_device;
     atmosphere = p_atmosphere;
     textures_fn = std::move(p_textures);
-    layer_params = CloudLayer::for_base(p_base.curvature_radius_m(p_voxel_m), p_relief_m, p_voxel_m, p_scale);
+    layer_params = p_layer;
     curvature_m = Atmosphere::ms_radius_m(p_base, p_voxel_m);
     frame_params.voxel_m = float(p_voxel_m);
     frame_params.weather_n = float(p_grid.size());

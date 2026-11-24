@@ -129,6 +129,11 @@ the 3D point in the shading frame (no 2D weather map, which a curved base would 
   them: the cover moves smoothly between ticks) and moves the type round the weather's (the noise's offset from 0.5
   moves it towards 0 or 1 by up to 0.4 of the way, `TYPE_SPREAD`, so it stays in [0, 1]). The noises drift with the
   weather's wind at the camera times its time scale (`World::camera_wind`: the pattern moves with the cells' cover).
+- **Layer set by the world** (`"look": {"cloud_bottom_m", "cloud_top_m"}`, `CloudLayer::between`): the layer's altitudes
+  given outright, every length (the noises' periods, the shadow's reach) times its thickness over Earth's 2.5 km and the
+  extinction over it, so the clouds keep Earth's shapes at that size. `ocean_test` sets 100 to 180 m: shapes ~15 to 50 m,
+  under the weather's 45 m cells, so the clouds' places are the simulation's. The relief rule below is off there: a hill
+  above the bottom would reach into the clouds.
 - **Layer** (`CloudLayer::for_base`): Earth's 1.5 to 4 km, extinction 0.04 /m at density 1 (Hillaire 2016's cumulus
   range is 0.05 to 0.12), albedo 0.99; under Earth's radius scaled like the atmosphere (lengths times s, extinction over
   s, s at least `RELIEF_BOTTOMS` reliefs over Earth's bottom), then lifted, its thickness kept, until its bottom is

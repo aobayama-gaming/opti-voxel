@@ -5,6 +5,7 @@
   "lods": 15
  },
  "seed": 48211,
+ "look": {"cloud_bottom_m": 100, "cloud_top_m": 180},
  "shape": {
   "kind": "sphere",
   "radius_m": 2000

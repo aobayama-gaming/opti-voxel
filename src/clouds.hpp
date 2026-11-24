@@ -69,6 +69,9 @@ struct CloudLayer {
     // Then the layer is lifted, its thickness kept, until its bottom is RELIEF_BOTTOMS reliefs up (Earth's 3.3 km relief:
     // 4.1 to 6.6 km).
     static CloudLayer for_base(double p_radius_m, double p_relief_m, double p_voxel_m, double p_scale = 0.0);
+    // A layer from p_bottom_m to p_top_m above the base (the world file's look): every length and the extinction scaled by
+    // its thickness over Earth's (s = thickness / 2.5 km), so its clouds keep Earth's shapes and optical depths at that size.
+    static CloudLayer between(double p_bottom_m, double p_top_m, double p_voxel_m);
 
     // The fields as the shaders' uniforms (GLSLUniforms).
     template <class F>
@@ -172,10 +175,10 @@ public:
         p_f("cloud_shadow_extent_m", p_frame.shadow_extent_m);
     }
 
-    // p_atmosphere (started, outliving this) lights the clouds and hazes them; the base's curvature radius, the ground's
-    // relief and p_scale set the layer (CloudLayer::for_base); the weather's texture is p_grid's.
-    void start(ov::gpu::Device *p_device, const Atmosphere *p_atmosphere, const BaseSurface &p_base, double p_voxel_m, double p_relief_m,
-            double p_scale, const WeatherGrid &p_grid, TexturesFn p_textures);
+    // p_atmosphere (started, outliving this) lights the clouds and hazes them in p_layer; the weather's texture is
+    // p_grid's.
+    void start(ov::gpu::Device *p_device, const Atmosphere *p_atmosphere, const BaseSurface &p_base, double p_voxel_m, const CloudLayer &p_layer,
+            const WeatherGrid &p_grid, TexturesFn p_textures);
     // Each frame before frame(): the weather (its blend; with p_landed, a new state: its last two uploaded) and the
     // wind the noises drift with (render metres per second).
     void set_weather(const Weather &p_weather, const Float3 &p_wind_mps, bool p_landed);
