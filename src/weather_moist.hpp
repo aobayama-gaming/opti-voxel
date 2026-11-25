@@ -23,12 +23,8 @@
 // - Radiation: the clear air cools CLEAR_COOLING K/day; the cloud's longwave flux is DYCOMS-II RF01's (Stevens et al.
 //   2005): F(z) = F0 exp(-Q(z, top)) + F1 exp(-Q(0, z)), Q = KAPPA int rho q_c dz, so a cloud top cools hard and drives
 //   the stratocumulus' turnover.
-// - The subgrid turbulence in the vertical (Smagorinsky-Lilly, Lilly 1962): at each interface of a column K = (C_S D)^2
-//   sqrt(max(S^2 - N^2 / PRANDTL, 0)), D the cell's (width^2 dz)^(1/3), S the wind's vertical shear, N^2 the
-//   buoyancy frequency of the virtual potential temperature: mixing where the air shears or is unstable, none in the
-//   inversion; implicit on the scalars (rain falls on its own) and the horizontal wind. The cells resolve the thermals,
-//   not the surface layer under them: without it the lowest level takes the ground's own state (a sea's saturated
-//   air, fog over a warm sea).
+// - No subgrid turbulence of its own: the fluid's advection is the scalars' (WeatherFluid, an implicit large-eddy
+//   simulation).
 // - Large-scale subsidence w = -D z on the scalars (upwind): it holds the inversion against the boundary layer's growth.
 // - The twist, Params::exchange: the surface fluxes' coefficients (all three, their ratio kept) times exchange: a
 //   storm's intensity, set by the ratio, is kept, its spin-up shortened. Only these: radiation and subsidence sped up
@@ -60,7 +56,6 @@ public:
     static constexpr double LW_F0 = 70.0; // W/m^2, DYCOMS-II RF01
     static constexpr double LW_F1 = 22.0;
     static constexpr double LW_KAPPA = 85.0; // m^2/kg
-    static constexpr double C_S = 0.18; // Smagorinsky's (Lilly)
     static constexpr double PRANDTL = WeatherFluid::PRANDTL;
 
     // The sounding: the reference potential temperature and vapour per level (the buoyancy's reference; the world's
@@ -102,6 +97,7 @@ public:
     struct Params {
         double exchange = 15.0; // the surface fluxes' twist
         double subsidence_per_s = 1.5e-5; // D: w = -D z
+        bool spread = true; // the partial cloud (false: each cell all or nothing, sigma_s 0)
     };
 
     WeatherMoist(const WeatherFluid &p_fluid, const Sounding &p_sounding, const Params &p_params);
@@ -136,19 +132,13 @@ public:
     // A level's saturation coefficients at the liquid water temperature: a and b of s = a q_w - b theta_l (Bechtold &
     // Siebesma 1998, A1), q_sl.
     static void saturation_terms(double p_theta_l, double p_exner, double p_pc, double &r_a, double &r_b, double &r_qsl);
-    // The eddy diffusivity (m^2/s) at each interface k (between levels k and k + 1) of a column: theta, qv, qc per level
-    // and its horizontal wind (3 per level), p_delta_m the Smagorinsky length.
-    static void eddy_diffusivity(const double *p_theta, const double *p_qv, const double *p_qc, const double (*p_wind)[3], double p_dz,
-            double p_delta_m, int p_levels, double *r_k);
-    // r_x per level diffused for p_dt by r_k per interface (implicit, the ground and the top closed).
-    static void diffuse(double *r_x, const double *p_k, double p_dz, double p_dt, int p_levels);
     // The heating rate (K/s) of the cloud's longwave flux per level of one column (qc per level).
     static void longwave(const double *p_qc, const double *p_rho, const double *p_exner, double p_dz, int p_levels, double *r_heating);
 
 private:
-    // The spread sigma_s per level of interior cell p_cell's column p_col (the scalars per level, after the turbulence of
-    // diffusivity p_eddy per interface).
-    void spread(size_t p_cell, const double (*p_col)[WeatherFluid::MAX_LEVELS], const double *p_eddy, const Convective &p_convective,
+    // The spread sigma_s per level of interior cell p_cell's column p_col (the scalars per level) from the shallow
+    // convection's fluxes.
+    void spread(size_t p_cell, const double (*p_col)[WeatherFluid::MAX_LEVELS], const Convective &p_convective,
             const WeatherFluid &p_fluid, double *r_sigma) const;
 
     Sounding sound;

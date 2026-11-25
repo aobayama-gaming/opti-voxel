@@ -95,3 +95,30 @@ TEST_CASE("WeatherDebug: no snapshot unless probing") {
     CHECK(weather.ready());
     CHECK(weather.probe() == nullptr);
 }
+
+TEST_CASE("WeatherDebug::cloud_objects: clouds seen from above, grouped within a face") {
+    WeatherDebug::Snapshot s;
+    s.faces = 1;
+    s.width = 8;
+    s.height = 8;
+    s.levels = 2;
+    s.values.assign(size_t(WeatherDebug::LEVEL_FIELDS) * s.cells() * 2 + size_t(WeatherDebug::FIELDS - WeatherDebug::LEVEL_FIELDS) * s.cells(), 0.0f);
+    auto set_qc = [&](int p_i, int p_j, int p_k) {
+        const size_t at = size_t(WeatherDebug::QC) * s.cells() * 2 + s.interior(0, p_i, p_j) * 2 + size_t(p_k);
+        s.values[at] = 0.5f;
+    };
+    // A 2 x 2 cloud on the lower level, a 3-column line on the upper, a lone column: 3 clouds of 8 columns.
+    set_qc(1, 1, 0);
+    set_qc(2, 1, 0);
+    set_qc(1, 2, 0);
+    set_qc(2, 2, 1);
+    set_qc(5, 5, 1);
+    set_qc(5, 6, 1);
+    set_qc(5, 7, 0);
+    set_qc(7, 0, 1);
+    const WeatherDebug::CloudObjects o = WeatherDebug::cloud_objects(s, WeatherDebug::ALL, 0.01f);
+    CHECK(o.count == 3);
+    CHECK(o.cover == doctest::Approx(8.0 / 64.0));
+    CHECK(o.largest_cells == 4);
+    CHECK(o.mean_cells == doctest::Approx(8.0 / 3.0));
+}

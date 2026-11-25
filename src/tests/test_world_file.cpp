@@ -189,6 +189,11 @@ TEST_CASE("WorldFile: a planet file's seed, shape, sea, climate offsets and air"
     CHECK(w.weather.tick_hz == WorldFile::Weather().tick_hz);
     CHECK(parse(R"({"shape": {"kind": "sphere", "radius_m": 2000}, "weather": {"on": false}, "biomes": [{"name": "a"}]})", w) == ov::str());
     CHECK(!w.weather.on);
+    CHECK(w.weather.convection);
+    CHECK(w.weather.cloud_spread);
+    CHECK(parse(R"({"shape": {"kind": "sphere", "radius_m": 2000}, "weather": {"convection": false, "cloud_spread": false}, "biomes": [{"name": "a"}]})", w) == ov::str());
+    CHECK(!w.weather.convection);
+    CHECK(!w.weather.cloud_spread);
     CHECK(parse(R"({"engine": {"voxel_m": 0.05}, "seed": 48211, "shape": {"kind": "sphere", "radius_m": 2000},
         "sea": {"level_m": -4, "water": {"deep": [0, 0.1, 0.2], "clarity_m": 8}, "shore": {"above_m": 1.5, "sand": [1, 0.9, 0.8]}},
         "climate": {"fields": [{"name": "temperature"}, {"name": "humidity"}], "temperature": {"mean": 0.4, "poles": -0.9}, "humidity": {"mean": -0.3}},
@@ -233,6 +238,7 @@ TEST_CASE("WorldFile: a planet file's refusals say why") {
     CHECK(ov::contains(parse(R"({"shape": {"kind": "sphere", "radius_m": 2000}, "weather": {"cell_m": 1000}})", w), "cell_m giving a cube face"));
     CHECK(ov::contains(parse(R"({"shape": {"kind": "sphere", "radius_m": 2000}, "weather": {"time_scale": 0}})", w), "time_scale in"));
     CHECK(ov::contains(parse(R"({"shape": {"kind": "sphere", "radius_m": 2000}, "weather": {"on": 1}})", w), "'on' is true or false"));
+    CHECK(ov::contains(parse(R"({"shape": {"kind": "sphere", "radius_m": 2000}, "weather": {"convection": 0}})", w), "'convection' is true or false"));
     CHECK(ov::contains(parse(R"({"shape": {"kind": "sphere", "radius_m": 2000}, "weather": {"rain": 1}})", w), "unknown key 'rain'"));
     CHECK(ov::contains(parse(R"({"climate": {"fields": [{"name": "t"}], "humidity": {"mean": 1}}, "biomes": [{"name": "a"}]})", w), "'humidity' is not a field"));
     CHECK(ov::contains(parse(R"({"climate": {"fields": [{"name": "t"}], "t": {"median": 1}}, "biomes": [{"name": "a"}]})", w), "unknown key 'median'"));

@@ -17,20 +17,18 @@
 //   wind (a 3D vector in the planet's axes: its tangent part and its vertical part w along the up) and `scalars` scalars
 //   the physics owns (WeatherPhysics: the potential temperature first).
 // - A step (the caller's, at most max_dt() long): advect(dt), then the caller's physics on state() (it may change the
-//   scalars), then force(dt, buoyancy) (the vorticity confinement, the buoyancy along the up, the Coriolis turn about
-//   it, the sponge under the top), then project(dt) (the pressure that takes the wind's divergence out).
-// - The advection: semi-Lagrangian (each field read where the air comes from, bilinear in the face's cells and linear
-//   between the levels). Its interpolation smears eddies under ~4-8 cells. Tried (2026-11-25): MacCormack's second-order
-//   correction (Selle et al. 2008, with their limiter); on every field the trade cumulus became a deck (0.83 of a level)
-//   and a fog rose to 180 m, on the wind alone the resolved convection nearly stopped (0.07% of a level, a bubble's air
-//   5% unbalanced): the moist physics are tuned to this trace's mixing, so it stays.
-// - The vorticity confinement (Fedkiw, Stam & Jensen 2001, "Visual simulation of smoke"; Harris 2003's clouds): the
-//   curl w of the wind (central differences, the neighbours' winds as they are: the sphere's turn over a cell is 2% of a
-//   radian), N = grad |w| / |grad |w||, the force confinement D (N x w), D the cell's (width^2 dz)^(1/3): it puts back
-//   the small swirls the grid's dissipation takes out. Times the closure's stability factor sqrt(max(1 - Ri / Pr, 0))
-//   (Ri = N^2 / S^2 from scalar 0's potential temperature and the wind's vertical shear; 1 where the air is unstable):
-//   only where the air can be turbulent. Unlimited, it stirred the inversion over the cumulus (rms w 0.03 -> 0.7 m/s
-//   above it), mixed the dry air above into the cloud layer and cleared every cloud.
+//   scalars), then force(dt, buoyancy) (the buoyancy along the up, the Coriolis turn about it, the sponge under the
+//   top), then project(dt) (the pressure that takes the wind's divergence out).
+// - The advection: MacCormack (Selle et al. 2008, "An unconditionally stable MacCormack method"): a semi-Lagrangian
+//   step (each field read where the air comes from, bilinear in the face's cells and linear between the levels), its
+//   result traced back to estimate the step's error, half of it added back (second order); where that makes a new
+//   extreme of the forward stencil's 8 values the plain step stays (the limiter). Every field alike, the centres' and
+//   the interfaces' w. No subgrid closure: the limiter's dissipation is the subgrid model (an implicit large-eddy
+//   simulation; Margolin, Smolarkiewicz & Sorbjan 1999 ran the convective boundary layer this way). Measured on that
+//   benchmark (test_weather_cbl.cpp, 2026-11-25; Moeng & Sullivan 1994's peak w rms 0.63 w* near 0.35 h): the plain
+//   semi-Lagrangian step 0.48 w*, it with a 3D Smagorinsky-Lilly closure 0.41, MacCormack 0.65, MacCormack with the
+//   closure 0.50 (the closure over-damps at ~8 cells a boundary layer). The plain step had been propped up by a
+//   vorticity confinement and random kicks; both are gone.
 // - The projection is the fluxes through each cell's 6 faces (4 sides, a top, a bottom; ground and top rigid): the
 //   pressure solves sum_f a_f (p_f - p) = (sum_f flux_f) / dt with a_f = face area over the centres' distance,
 //   red-black Gauss-Seidel (over-relaxed) warm-started from the last step's pressure. The vertical wind lives on the
@@ -65,7 +63,6 @@ public:
         // top), at a rate rising as the square of the depth into it to 1 / sponge_tau_s at the top.
         double sponge_m = 0.0;
         double sponge_tau_s = 30.0;
-        double confinement = 0.0; // epsilon, the vorticity confinement's strength (0: none)
     };
 
     WeatherFluid(std::shared_ptr<const WeatherGrid> p_grid, const Params &p_params);
@@ -149,9 +146,9 @@ private:
     // divergence are exact on it, so no level-by-level checkerboard escapes the pressure.
     std::vector<float> wf;
     std::vector<float> wf_next;
+    std::vector<float> corr, wf_corr; // the MacCormack step's results
     std::vector<float> p; // per padded cell and level
     std::vector<float> rhs; // per interior cell and level
-    std::vector<float> vort, vort_mag; // the confinement's: the curl (3 per padded cell and level), its length
     double min_spacing_m = 1.0;
 
     // The padded indices of an interior cell's 4 side neighbours (+x, -x, +y, -y).
@@ -163,17 +160,25 @@ private:
     float *face_w(size_t p_padded) { return &wf[p_padded * size_t(params.levels + 1)]; }
     const float *face_w(size_t p_padded) const { return &wf[p_padded * size_t(params.levels + 1)]; }
     void make_columns();
-    // advect's interfaces of one column: their w read where the air comes from (into wf_next).
-    void advect_interfaces(int p_face, int p_i, int p_j, double p_dt);
+    // A semi-Lagrangian stencil: the 4 padded columns about a point of a face (bilinear weights) and the two levels (or
+    // interfaces) about it.
+    struct Stencil {
+        size_t src[4];
+        double wxy[4];
+        int k0;
+        double fz;
+    };
+    // The stencil at p_d (metres, tangent) from interior cell (p_face, p_i, p_j)'s column at level coordinate p_z (the
+    // levels', or the interfaces' when p_top is levels).
+    Stencil trace(int p_face, int p_i, int p_j, const double p_d[3], double p_z, int p_top) const;
+    // Field p_f of a buffer of p_rec floats per padded cell, p_per per level, at a stencil (trilinear).
+    static double sample(const float *p_buf, size_t p_rec, int p_per, int p_f, const Stencil &p_s);
+    // A stencil's corner p_n (0-3 the lower level's columns, 4-7 the upper's): p_count fields from p_f.
+    static void corner(const float *p_buf, size_t p_rec, int p_per, int p_f, const Stencil &p_s, int p_n, float *r_v, int p_count);
+    // The tangent displacement over p_dt of a level's wind p_u (r_d), and its w; of an interface (its two levels').
+    static double level_step(const Column &p_c, const float *p_u, double p_dt, double r_d[3]);
+    static void interface_step(const Column &p_c, const float *p_lo, const float *p_hi, double p_dt, double r_d[3]);
     void sweep(int p_colour);
-    // The vorticity confinement's push over p_dt (the halo filled first).
-    void confine(double p_dt);
-    // The 3D gradient at an interior cell of a per-level field p_f (p_stride floats per padded cell, p_at its offset in a
-    // level, p_per its floats per level), from the neighbours p_nb and the levels round p_level.
-    void gradient(const Column &p_c, const float *p_f, size_t p_here, const size_t p_nb[SIDES], int p_stride, int p_per, int p_at, int p_level,
-            double r_g[3]) const;
-    // The share of the confinement a cell's level p_level takes: Lilly's stability factor (see the top).
-    double turbulent_share(const float *p_cell, const float p_up[3], int p_level) const;
     // The wind r_wind brought from the departure point p_c.pos + p_d turned into the column's frame: the rotation
     // carrying the departure's up onto the column's (parallel transport over the sphere; its vertical speed kept).
     static void transport(const Column &p_c, const double p_d[3], float *r_wind);

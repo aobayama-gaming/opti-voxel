@@ -60,12 +60,12 @@ tests.
 - **`WeatherFluid`** (`src/weather_fluid.*`, engine-free): the dynamics only, `du/dt + u . grad u = -grad p + b up -
   f up x u`, `div u = 0`, over a `WeatherGrid`'s columns in `levels` levels of `top / levels` (shallow atmosphere).
   A padded cell's record holds per level the wind (3D, planet axes: tangent part and w) and the physics' scalars.
-  A step: `advect` (semi-Lagrangian, the departure point in the face's own cells through the cell's dual vectors, no
+  A step: `advect` (MacCormack over a semi-Lagrangian step, "Turbulence" below; the departure point in the face's own cells through the cell's dual vectors, no
   `locate`, bilinear in the cells and linear in the levels; `max_dt` keeps the wind within half a cell or level; the
   wind brought from upstream turned into the cell's frame, `transport`: the rotation carrying the departure's up onto
   the cell's. Without it a wind keeps its upstream direction: a 5 m/s rotation drifted 6.5 m/s off in 10 minutes at
   the faces' edges),
-  the caller's physics on the state, `force` (the vorticity confinement, "Turbulence" below; the buoyancy along the up, the Coriolis turn about it, a sponge damping
+  the caller's physics on the state, `force` (the buoyancy along the up, the Coriolis turn about it, a sponge damping
   w in the top fifth), `project` (the pressure from the fluxes through each cell's 6 faces, ground and top rigid,
   red-black Gauss-Seidel over-relaxed 1.6, 20 sweeps warm-started). The vertical wind lives on the levels' interfaces
   (staggered, SAM's C grid in the vertical: `vertical_w`; a centre's is the mean of its two): the buoyancy and the
@@ -106,68 +106,42 @@ tests.
   only 4 K colder no fog forms in 30 minutes: cooled and dried at the same rate the lowest level moves on the mixing
   line to the ground's saturated state, which only crosses saturation near its end; the 40 m lowest cell averages the
   surface layer where real fog starts.
-- **Subgrid turbulence** (in `WeatherMoist`): Smagorinsky-Lilly in the vertical, `K = (0.18 D)^2 sqrt(max(S^2 -
-  N^2 / Pr, 0))` per interface (D the cell's `(width^2 dz)^(1/3)`, Pr 1/3), implicit on theta, vapour, cloud and the
-  horizontal wind: mixing where the wind shears or the air is unstable, none in the inversion. The cells resolve the
-  thermals, not the surface layer: without it the lowest level took the ground's own state, a sea's saturated air, and
-  fogged over a sea warmer than the air (5% of the lowest level, the cloudiest).
+- **Subgrid turbulence:** none of its own; the advection's limiter is the subgrid model ("Turbulence" below). The
+  vertical Smagorinsky it had (2026-11-25) changed the convective boundary layer's w by under 1%: the semi-Lagrangian
+  interpolation's smoothing was doing the subgrid work.
 - **The twist** (`Params::exchange`, 15): the surface fluxes' coefficients only. Sped up as well, radiation and
   subsidence (one time compression of the slow processes, tried) outran the boundary layer's turbulence, which runs at
   its own speed: the humid layer cooled to fog, the fog case's top overturned it into a deck at 180 m.
 
 ## Turbulence
-The 45 m cells resolve the thermals but the semi-Lagrangian's interpolation smears every eddy under ~4-8 cells, and the
-cube's 4-fold symmetry seeds what is left: clumps, no swirls. Two additions, one tried and dropped (2026-11-25):
-- **Vorticity confinement** (`WeatherFluid::confine`, at the start of `force`; Fedkiw, Stam & Jensen 2001, Harris
-  2003's clouds): the curl `w` of the wind from central differences (the neighbours' winds as they are: the sphere's
-  turn over a cell is 2% of a radian; one-sided at the ground and the top), `N = grad |w| / |grad |w||`, the force
-  `epsilon D (N x w)`, `D` the cell's `(width^2 dz)^(1/3)`. It feeds back the swirls the grid's dissipation takes out.
-  Only the curl's part about the up (the swirls seen from above). `epsilon` is the planet file's `confinement`, 0.02
-  (with the partial cloud, below: the eddies at 0.52 w*, under a convective layer's ~0.6, the cover BOMEX's "<20%"). 0.05 balances the dissipation at 2 cells (a 2-cell vortex of 4 m/s keeps 0.26 of its peak over 5
-  minutes without it, ~1.0 at 0.05, 2.4 at 0.15, 6 at 0.3: the smoke solvers' 0.3 runs away on a grid this coarse,
-  `test_weather_turbulence.cpp`), but on the planet it cleared every cloud, even at 0.02 (table below; the whole
-  curl did too, sharpening the shear over the ground). Times the subgrid closure's stability factor
-  `sqrt(max(1 - Ri / Pr, 0))`: unlimited it stirred the stable air over the inversion (rms w 0.03-0.1 -> 0.5-0.76 m/s,
-  K 0 -> 0.4-1 m^2/s, the inversion's jump 2.35 -> 0.57 K). Why it clears the clouds, measured on a trade-wind sea
-  (6 x 32^2 columns, minutes 15-30, the game's step order, 2026-11-25):
+An implicit large-eddy simulation: the advection is the one subgrid model, for the wind and every scalar, sideways and
+up alike (Margolin, Smolarkiewicz & Sorbjan 1999 ran the convective boundary layer this way, with MPDATA).
+- **MacCormack** (`WeatherFluid::advect`; Selle et al. 2008): the semi-Lagrangian step, its result traced back (where
+  the air goes, read in it) to estimate the step's error, half of it added back: second order. Where that makes a new
+  extreme of the forward stencil's 8 values (an overshoot at a sharp front) the plain step stays: the limiter, whose
+  dissipation is the subgrid's. The centres' fields and the interfaces' w alike. One extra pass: a step at ocean_test's
+  size costs 54 ms (40 before).
+- **The benchmark** (`test_weather_cbl.cpp`): the dry convective boundary layer (Deardorff 1974, Schmidt & Schumann
+  1989, Moeng & Sullivan 1994): a 400 m mixed layer under a 4 K inversion heated at 0.06 K m/s, ~49 m cells and 50 m
+  levels (the game's), no rotation, no moisture, a 0.1 K random start; the profiles over minutes 20-30. The large-eddy
+  simulations' w rms peaks at ~0.63 w* near 0.35 h, the heat flux falls linearly to ~-0.2 Q at h. Measured
+  (2026-11-25):
 
-  | epsilon | peak sigma_w / w* | cloudy columns | RH at 180 m | updraft cloud water |
+  | advection | closure | peak w rms / w* (at z/h) | w rms at 0.81 h | entrainment flux / Q |
   |---|---|---|---|---|
-  | 0 | 0.40 | 86% | 0.996 | 3.8e-6 |
-  | 0.005 | 0.41 | 76% | 0.994 | 3.2e-6 |
-  | 0.01 | 0.41 | 54% | 0.984 | 1.2e-6 |
-  | 0.02 | 0.51 | 1.8% | 0.940 | 8e-10 |
-  | 0.05 | 0.8-0.9 | 0% | 0.86 | 0 |
+  | semi-Lagrangian | none | 0.48 (0.31) | 0.20 | -0.08 |
+  | semi-Lagrangian | vertical Smagorinsky | 0.47 (0.31) | 0.20 | -0.08 |
+  | semi-Lagrangian | 3D Smagorinsky-Lilly | 0.41 (0.31) | 0.06 | -0.07 |
+  | **MacCormack** | **none** | **0.65 (0.31)** | **0.37** | **-0.14** |
+  | MacCormack | 3D Smagorinsky-Lilly | 0.50 (0.31) | 0.12 | -0.11 |
 
-  More resolved stirring entrains the dry, warm air over the inversion into the cloud layer (the layer warms 0.5-1 K,
-  the air over the inversion gains 1-3 g/kg; without the shallow convection the same: not a double count). The clouds
-  die long before the eddies are unphysical (0.51 w* at 0.02; convective boundary layers peak ~0.6 w*): a cell is
-  cloudy only when its mean is saturated, so the cloud deck here lives at RH 0.99, kept that wet by the grid's
-  under-mixing, and a 5% drier mean clears it. Real cumulus form at a mean RH of ~0.8-0.9 because the air inside a
-  cell varies; the model had no such variance: the partial cloud below.
-- **Kicks** (`WeatherForcing::kicks`, in `apply`): small swirls of random sign the grid's symmetry would never start,
-  a stochastic backscatter (Shutts 2005, the motion under the grid fed back). Each step a column starts one with a
-  chance that puts a new one over any point every `KICK_EVERY_S` (60 s) on average (a hash of the seed, the step and
-  the column: the same every run): a Gaussian vortex, speed `kick_mps r exp((1 - r^2) / 2)` with `r` in units of 2
-  cells, through every level, cut at its cube face's edge (the projection takes what that leaves out). The start is
-  kicked all over once. `kick_mps` (planet file, 1): a minute of kicks on still air peaks at 5 m/s where they overlap.
-- **MacCormack advection, dropped:** Selle et al. 2008's second-order correction with their limiter (a trace back, the
-  first corrected by half the round trip's error, reverted where it leaves the interpolated range). On every field
-  the trade cumulus became a deck (0.83 of a level) and a fog rose to 180 m; on the wind alone the resolved cumulus
-  nearly stopped (0.07% of a level against 1.6%) and a bubble's air was 5% unbalanced. The moist physics are tuned to
-  the semi-Lagrangian's mixing; a sharper scheme needs the horizontal subgrid mixing and the physics retuned with it
-  (a horizontal Smagorinsky in the same try did not bring them back).
-- **Measured** (`ocean_test`, 25-minute spin-up, `weather_report.sh`, 0 / 5 minutes after it, 2026-11-25):
-
-  | confinement | kick_mps | cover | air (C) | updrafts' top | max wind (m/s) |
-  |---|---|---|---|---|---|
-  | 0 | 0 | 0.38 / 0.28 | 25.2 | 300 / 283 m | 9.0 / 8.0 |
-  | 0 | 1 (default) | 0.22 / 0.19 | 25.2 | 302 / 282 m | 9.0 / 8.9 |
-  | 0.02 | 0 | 0.04 / 0.01 | 25.3 | 272 / 252 m | 10.4 / 11.1 |
-  | 0.05 | 0 | 0.00 / 0.00 | 25.4-25.5 | 252 / 247 m | 12.6 / 15.0 |
-  | 0.05 | 1 | 0.00 / 0.00 | 25.8-26.0 | 205 / 196 m | 13.2 / 11.1 |
-
-  The kicks cost a third of the cover at the start and less after; the shapes they make are judged in the viewer.
+  With ~8 cells a boundary layer an explicit closure on top of the scheme's own dissipation over-damps (counted
+  twice). The test keeps MacCormack's profile in the references' range.
+- **Removed** (2026-11-25): the vorticity confinement (Fedkiw, Stam & Jensen 2001) and the random kicks (a stochastic
+  backscatter, Shutts 2005) propped up the plain semi-Lagrangian step's damped convection; with MacCormack the
+  thermals come from the buoyancy alone (the benchmark's start is a 0.1 K noise once, as large-eddy simulations seed
+  theirs), and the confinement on top of it grew a vortex past its start. The planet file's `confinement` and
+  `kick_mps` went with them.
 
 ## Partial cloud
 The air inside a 45 m cell is not uniform: a cell a little under saturation holds some cloud where it is moister.
@@ -183,8 +157,8 @@ The air inside a 45 m cell is not uniform: a cell a little under saturation hold
   cloud's longwave and the ground's shade all from it); autoconversion from the cloudy part's water `q_c / N`. No
   spread: Kessler's all-or-nothing, unchanged.
 - **The spread** `sigma_s` per cell: s's variance budget in balance (Stull 1988: production `-2 w's' ds/dz`,
-  dissipation `sigma^2 / tau`): `sigma^2 = 2 tau |w's' ds/dz|`, the flux the subgrid turbulence's `-K ds/dz` plus the
-  shallow convection's updraft `M (s_u - s)` (convection sets the humidity's variance, as Lenderink & Siebesma 2000
+  dissipation `sigma^2 / tau`): `sigma^2 = 2 tau |w's' ds/dz|`, the flux the shallow convection's updraft `M (s_u - s)`
+  (the subgrid turbulence's `-K ds/dz` went with the closure: no updraft, no spread) (convection sets the humidity's variance, as Lenderink & Siebesma 2000
   couple a mass flux to a statistical cloud scheme); `tau = z_i / w*`, the boundary layer's turnover (z_i the updraft's
   top, w* the surface buoyancy flux's; at least u* and 0.1 m/s). The updraft's own cloud is no longer added on top:
   the partial cloud is the cloud.
@@ -198,17 +172,15 @@ The air inside a 45 m cell is not uniform: a cell a little under saturation hold
   3 octaves, a period of 4 weather cells: features of half a cell to an eighth), its ranks turned into values, so it is
   exactly uniform (each tenth holds a tenth of the texels to within one) and as smooth as the noise. The physics never
   reads it (`test_weather_cloud_fraction.cpp`: the closed form against the sum, the noise's histogram, its wrap).
-- **Measured** (trade-wind sea, 6 x 32^2, the game's step order, minutes 15-30): cover (each column's most clouded
-  level) 49% with no confinement, 37% at 0.01, 17% at 0.02, 5% at 0.05 (all-or-nothing: 86%, 54%, 1.8%, 0%): more
-  stirring thins the clouds instead of clearing them. sigma_s 0.1-0.45 g/kg, largest in the cloud layer.
-- **Open:** the levels alternate (180 and 260 m cloudy, 140, 220 and 300 m much less; the vapour alternates too, 19.6 /
-  17.7 / 19.2 g/kg): a vertical odd-even mode, older than this, to find.
+- **Measured** before the closure and the confinement went (trade-wind sea, 6 x 32^2, minutes 15-30): cover 49%
+  with no confinement, 17% at 0.02 (all-or-nothing: 86%, 1.8%); sigma_s 0.1-0.45 g/kg, largest in the cloud layer.
+  To measure again on the benchmark below.
 
 ## Convection
 `WeatherConvection` (`src/weather_convection.*`, engine-free): the shallow convection the cells cannot resolve (3-4
 levels in the mixed layer, a thermal ~2 cells wide: without it the ground's heat only diffused, and a warm afternoon
 made no cumulus). The mass-flux half of EDMF (Siebesma, Soares & Teixeira 2007, JAS 64, equation numbers theirs), its
-eddy diffusivity the moist physics' Smagorinsky turbulence; one updraft per column, each step before the moist physics
+eddy diffusivity the resolved flow's (no closure of its own since 2026-11-25); one updraft per column, each step before the moist physics
 (whose saturation adjustment condenses what it brings).
 - **Start** (17): the lowest level's mean plus `ALPHA w'phi'_s / sigma_w(z_1)` (ALPHA 1) of the ground's last fluxes
   (`WeatherMoist::surface`), `w_u = sigma_w / sqrt(0.15)` (section 3's `mu`); only while the ground heats the air (a
@@ -273,7 +245,8 @@ would leave [4, 1024]), `top_m` (the levels' top over the ground, 600; the level
 `tick_hz` (5), `time_scale` (game seconds a real second simulates, 1), `prevailing_mps` (5), `storm_m` (0: 1/8 of the
 radius), `spin_up_s` (game seconds simulated before the first frame, 600), `day_s` (the weather's day, 300),
 `inversion_m` (the start sounding's inversion, 300, under `top_m`), `exchange` (the surface fluxes' twist, 15),
-`confinement` (the vorticity confinement's epsilon, 0.02, in [0, 1]), `kick_mps` (the random swirls' speed, 1).
+`convection` (the shallow convection's updraft, true) and `cloud_spread` (the partial cloud, true; false: each cell all
+or nothing): the switches the debugger isolates a process with.
 
 ## Worker
 `Weather` (`src/weather.*`, engine-free): the fluid, its moist physics and its forcing on a worker of its own (`ov::executor().start_worker`,
@@ -381,8 +354,8 @@ Agreed with the user (2026-11-24). Stacked PRs, `feature/weather-*`:
     (thermal inertia per biome), clouds shading it; the report's day and night sides.
 13. **Shallow convection:** EDMF's updraft per column (`WeatherConvection`), its cloud published and shading the
     ground.
-14. **Turbulence:** the kicks and the vorticity confinement (the curl about the up, where the air can be turbulent);
-    MacCormack tried and dropped.
+14. **Turbulence:** the kicks and the vorticity confinement, then (2026-11-25) both removed for MacCormack as an
+    implicit large-eddy simulation, checked on the dry convective boundary layer; the vertical staggering of w.
 15. **Partial cloud:** the statistical cloud scheme in the physics, the render's noise through its spread.
 
 Later: curl-noise gusts, the FFT sea reading the wind (U10, fetch, swell), rain and ground wetness, saving the weather,

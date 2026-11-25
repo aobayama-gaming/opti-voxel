@@ -26,6 +26,11 @@ namespace WeatherCloud {
 constexpr double SHARE_SLOPE = 0.36;
 constexpr double SHARE_SCALE = 1.55;
 constexpr double Q1_LIMIT = 8.0; // a published Q1's range (the uniform cell's: +-Q1_LIMIT)
+// The spread a cell's Q1 is drawn with when the simulation has none (all or nothing, Params::spread off), kg/kg: a
+// cell's excess over it, so one near saturation draws near Q1 0 and fades in and out, its edge moving through the cell,
+// instead of +-Q1_LIMIT (a cube's face halfway between two cells, there or gone in a tick). 0.2 g/kg: the scheme's own
+// sigma_s in ocean_test's cloud layer (0.12-0.35 g/kg), as Cuijpers & Bechtold (1995) measure in shallow cumulus.
+constexpr double DRAW_SIGMA = 2e-4;
 
 // The spread's reach: F(REACH) = 1.
 inline double reach() {

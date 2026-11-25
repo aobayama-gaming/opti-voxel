@@ -84,14 +84,13 @@ void Weather::build() {
     dp.prevailing_mps = settings.prevailing_mps;
     dp.storm_m = settings.storm_m;
     dp.inversion_m = settings.inversion_m;
-    dp.kick_mps = settings.kick_mps;
-    fp.confinement = settings.confinement;
     dp.seed = seed;
     fp.omega_rad_s = 2.0 * 3.14159265358979323846 / settings.day_s;
     fluid = std::make_unique<WeatherFluid>(cells, fp);
     drive = std::make_unique<WeatherForcing>(*fluid, dp, std::move(cell_weather));
     WeatherMoist::Params mp;
     mp.exchange = settings.exchange;
+    mp.spread = settings.cloud_spread;
     const WeatherMoist::Sounding sounding = drive->sounding(*fluid);
     moist = std::make_unique<WeatherMoist>(*fluid, sounding, mp);
     convection = std::make_unique<WeatherConvection>(*fluid, sounding, settings.inversion_m);
@@ -136,8 +135,10 @@ void Weather::advance(double p_dt) {
         drive->warm(sun_at(sim_time_s + 0.5 * dt), dt, *fluid, moist->reference().rho, nullptr, ground);
         fluid->advect(dt);
         drive->apply(*fluid, dt, steps);
-        convection->apply(*fluid, moist->surface(), dt);
-        moist->apply(*fluid, ground, dt, buoyancy.data(), convection->fluxes());
+        if (settings.convection) {
+            convection->apply(*fluid, moist->surface(), dt);
+        }
+        moist->apply(*fluid, ground, dt, buoyancy.data(), settings.convection ? convection->fluxes() : WeatherMoist::Convective{});
         fluid->force(dt, buoyancy.data());
         fluid->project(dt);
         left -= dt;
@@ -218,6 +219,9 @@ bool Weather::step() {
     drive->day_night(*fluid, sun_at(sim_time_s), ground, day_k, night_k);
     double rising = 0.0, top_sum = 0.0;
     for (const float t : convection->tops()) {
+        if (!settings.convection) {
+            break; // its tops are the start's
+        }
         rising += t > 0.0f ? 1.0 : 0.0;
         top_sum += double(t);
     }

@@ -107,6 +107,17 @@ std::vector<double> mean(const Snapshot &p_snap, int p_field, Columns p_columns)
 std::vector<double> rms(const Snapshot &p_snap, int p_field, Columns p_columns);
 std::vector<double> maximum(const Snapshot &p_snap, int p_field, Columns p_columns);
 std::vector<double> share_above(const Snapshot &p_snap, int p_field, Columns p_columns, float p_above);
+// The clouds seen from above over p_columns: the share of columns holding cloud water past p_qc_g_kg at any level, and
+// those columns grouped into clouds (4-neighbour, within a cube face: a cloud across a seam counts twice): their
+// number and mean and largest size in columns.
+struct CloudObjects {
+    double cover = 0.0;
+    int count = 0;
+    double mean_cells = 0.0;
+    int largest_cells = 0;
+};
+CloudObjects cloud_objects(const Snapshot &p_snap, Columns p_columns, float p_qc_g_kg);
+
 // The large-eddy simulations' profiles (Siebesma et al. 2003's: the means per level, the cloud fraction, w's rms) over
 // p_columns as a markdown table, then the column fields' means.
 ov::str profile_table(const Snapshot &p_snap, Columns p_columns);

@@ -263,6 +263,59 @@ std::vector<double> share_above(const Snapshot &p_snap, int p_field, Columns p_c
     return reduce(p_snap, p_field, p_columns, 3, p_above);
 }
 
+CloudObjects cloud_objects(const Snapshot &p_snap, Columns p_columns, float p_qc_g_kg) {
+    const size_t n = p_snap.cells();
+    std::vector<uint8_t> cloudy(n, 0);
+    size_t in = 0, any = 0;
+    for (size_t c = 0; c < n; c++) {
+        const bool sea = p_snap.at(WETNESS, c, 0) >= 0.9f;
+        if ((p_columns == SEA && !sea) || (p_columns == LAND && sea)) {
+            continue;
+        }
+        in++;
+        for (int k = 0; k < p_snap.levels && !cloudy[c]; k++) {
+            cloudy[c] = p_snap.at(QC, c, k) > p_qc_g_kg ? 1 : 0;
+        }
+        any += cloudy[c];
+    }
+    CloudObjects out;
+    out.cover = in > 0 ? double(any) / double(in) : 0.0;
+    std::vector<uint32_t> stack;
+    size_t cells = 0;
+    for (size_t c = 0; c < n; c++) {
+        if (cloudy[c] != 1) {
+            continue;
+        }
+        int size = 0;
+        stack.push_back(uint32_t(c));
+        cloudy[c] = 2;
+        while (!stack.empty()) {
+            const size_t at = stack.back();
+            stack.pop_back();
+            size++;
+            const int i = int(at % size_t(p_snap.width));
+            const int j = int((at / size_t(p_snap.width)) % size_t(p_snap.height));
+            const int f = int(at / (size_t(p_snap.width) * size_t(p_snap.height)));
+            const int nb[4][2] = { { i + 1, j }, { i - 1, j }, { i, j + 1 }, { i, j - 1 } };
+            for (const auto &q : nb) {
+                if (q[0] < 0 || q[1] < 0 || q[0] >= p_snap.width || q[1] >= p_snap.height) {
+                    continue;
+                }
+                const size_t o = p_snap.interior(f, q[0], q[1]);
+                if (cloudy[o] == 1) {
+                    cloudy[o] = 2;
+                    stack.push_back(uint32_t(o));
+                }
+            }
+        }
+        out.count++;
+        cells += size_t(size);
+        out.largest_cells = ov::max(out.largest_cells, size);
+    }
+    out.mean_cells = out.count > 0 ? double(cells) / double(out.count) : 0.0;
+    return out;
+}
+
 ov::str profile_table(const Snapshot &p_snap, Columns p_columns) {
     const std::vector<double> theta = mean(p_snap, THETA, p_columns), qv = mean(p_snap, QV, p_columns), rh = mean(p_snap, RH, p_columns);
     const std::vector<double> qc = mean(p_snap, QC, p_columns), qc_max = maximum(p_snap, QC, p_columns), share = mean(p_snap, SHARE, p_columns);
@@ -283,6 +336,9 @@ ov::str profile_table(const Snapshot &p_snap, Columns p_columns) {
         s += ov::format(" %s %.3g %s,", info(f).name, mean(p_snap, f, p_columns)[0], info(f).unit);
     }
     s += ov::format(" updraft columns %.3f.\n", share_above(p_snap, UPDRAFT_TOP_M, p_columns, 0.0f)[0]);
+    const CloudObjects objects = cloud_objects(p_snap, p_columns, 0.01f);
+    s += ov::format("Clouds from above (qc > 0.01 g/kg at any level): cover %.3f, %d clouds, %.1f columns each on average, the largest %d.\n",
+            objects.cover, objects.count, objects.mean_cells, objects.largest_cells);
     // The vertical checkerboard: each column's field (its column mean out) projected on (-1)^k, its rms over the columns
     // against the field's own (noise alone gives about the field's over the root of the levels).
     s += "Checkerboard (-1)^k part / rms / noise level:";

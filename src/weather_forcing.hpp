@@ -23,11 +23,6 @@
 //   added to every level (u_g: east times -sin(6 |latitude|), trade easterlies at 15 degrees, westerlies at 45, y the
 //   pole axis); the Coriolis turns the rest. f = 2 Omega up_y, Omega the weather's day (the twist: a day of minutes, so
 //   storms spin at the game's scale).
-// - Kicks: small swirls of random sign the grid's own symmetry would never start (a cube's four-fold eddies otherwise):
-//   in each step a column starts one with a chance that puts a new one over any point every KICK_EVERY_S on average
-//   (a hash of the seed, the step and the column), a Gaussian vortex of kick_mps at KICK_RADIUS_CELLS round the up
-//   through every level (cut at its cube face's edge: the projection takes what that leaves out); the start is kicked
-//   all over once. Like a stochastic backscatter (Shutts 2005), the motion under the grid fed back.
 // - Storms' seeds: in each step a column starts one with the chance its biomes' storms give (a whole planet of storms 1
 //   starts one an hour; a hash of the seed, the step and the column): a warm, moist bubble of storm_m in the lower half
 //   of the levels. What it grows into is the physics': the seed only triggers it.
@@ -48,8 +43,6 @@ public:
     static constexpr double CLOUD_DRYING_PER_M = 1.4e-5; // q_v
     static constexpr double ABOVE_HUMIDITY = 0.45; // q_v above the inversion over the mixed layer's
     static constexpr double NOISE_K = 0.1; // the two lowest levels' start
-    static constexpr double KICK_EVERY_S = 60.0;
-    static constexpr double KICK_RADIUS_CELLS = 2.0;
     static constexpr double SUN_W_M2 = 1000.0; // the clear sky's sunlight at the ground, the sun overhead
     static constexpr double GROUND_ALBEDO = 0.15;
     static constexpr double DROPLET_RADIUS_M = 1e-5; // the clouds' effective radius
@@ -61,7 +54,6 @@ public:
         double prevailing_mps = 5.0;
         double storm_m = 0.0; // 0: 1 / 8 of the radius
         double inversion_m = 300.0;
-        double kick_mps = 1.0; // the kicks' peak speed (0: none)
         uint32_t seed = 0;
     };
 
@@ -106,8 +98,6 @@ public:
     // The grounds' mean temperature (K) on the sun's side (r_day) and the other (r_night), area-weighted.
     void day_night(const WeatherFluid &p_fluid, const Float3 &p_towards_sun, const std::vector<WeatherMoist::Ground> &p_ground, double &r_day,
             double &r_night) const;
-    // A kick at interior cell p_cell turning p_sign (1 anticlockwise about the up, -1 clockwise).
-    void kick(WeatherFluid &p_fluid, size_t p_cell, double p_sign) const;
     // A storm's seed under a position (metres from the base's centre).
     void seed_storm(WeatherFluid &p_fluid, const double p_pos[3]) const;
 
@@ -123,7 +113,4 @@ private:
     double mean_ground_k = 299.0;
     bool any_storms = false;
     uint64_t storms_started = 0;
-
-    // Each column starts a kick with chance p_chance (hash salt p_salt, step p_step).
-    void kicks(WeatherFluid &p_fluid, double p_chance, uint32_t p_salt, uint64_t p_step) const;
 };
