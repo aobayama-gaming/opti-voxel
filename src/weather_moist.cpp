@@ -101,6 +101,9 @@ double WeatherMoist::kessler(double *r_theta, double *r_qv, double *r_qc, double
     const double rhoqr = 1000.0;
     double r[MAX], rhalf[MAX], velqr[MAX], sed[MAX], pc[MAX], share[MAX];
     for (int k = 0; k < p_levels; k++) {
+        // The advection's rounding leaves water a few 1e-9 below 0, where the fall speed's power is NaN.
+        r_qc[k] = ov::max(r_qc[k], 0.0);
+        r_qr[k] = ov::max(r_qr[k], 0.0);
         r[k] = 0.001 * p_rho[k];
         rhalf[k] = std::sqrt(p_rho[0] / p_rho[k]);
         pc[k] = 3.8 / (std::pow(p_exner[k], 1.0 / KAPPA_EXNER) * psl);
@@ -295,7 +298,7 @@ void WeatherMoist::apply(WeatherFluid &p_fluid, const std::vector<Ground> &p_gro
                 const double qv = here[p_fluid.scalar_offset(k, QV)];
                 const double qc = here[p_fluid.scalar_offset(k, QC)];
                 const double qr = here[p_fluid.scalar_offset(k, QR)];
-                r_buoyancy[p_fluid.cell_index(in, k)] = float(GRAVITY * ((th - theta_ref) / theta_ref + 0.61 * (qv - qv_ref) - qc - qr));
+                r_buoyancy[p_fluid.cell_index(in, k)] = float(buoyancy(th, qv, qc, qr, theta_ref, qv_ref));
                 spread_s[p_fluid.cell_index(in, k)] = float(sigma[k]);
                 cloud_share[p_fluid.cell_index(in, k)] = float(share[k]);
                 cloud_q1[p_fluid.cell_index(in, k)] = float(q1[k]);

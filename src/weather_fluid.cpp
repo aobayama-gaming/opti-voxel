@@ -45,6 +45,7 @@ WeatherFluid::WeatherFluid(std::shared_ptr<const WeatherGrid> p_grid, const Para
     cur.assign(g.padded_cells() * size_t(stride()), 0.0f);
     next = cur;
     corr = cur;
+    side_speed.assign(g.cells() * size_t(params.levels) * SIDES, 0.0f);
     wf.assign(g.padded_cells() * size_t(params.levels + 1), 0.0f);
     wf_next = wf;
     wf_corr = wf;
@@ -120,6 +121,51 @@ void WeatherFluid::make_columns() {
             }
         }
     }
+    make_faces();
+}
+
+void WeatherFluid::make_faces() {
+    const WeatherGrid &g = *cells;
+    const size_t per_face = size_t(g.width()) * size_t(g.height());
+    // The interior cell holding each side's neighbour centre: the next cell of the face, or across a seam the
+    // neighbour face's cell under the halo centre (the faces' cells meet one to one along their edges).
+    auto across = [&](int p_face, int p_i, int p_j) -> uint32_t {
+        if (p_i >= 0 && p_i < g.width() && p_j >= 0 && p_j < g.height()) {
+            return uint32_t(g.interior(p_face, p_i, p_j));
+        }
+        double pos[3], up[3];
+        g.cell_surface(p_face, p_i, p_j, pos, up);
+        const WeatherGrid::Point at = g.locate(pos);
+        const int i = ov::clamp(int(std::floor(at.x)), 0, g.width() - 1);
+        const int j = ov::clamp(int(std::floor(at.y)), 0, g.height() - 1);
+        return uint32_t(g.interior(at.face, i, j));
+    };
+    for (int face = 0; face < g.faces(); face++) {
+        for (int j = 0; j < g.height(); j++) {
+            for (int i = 0; i < g.width(); i++) {
+                Column &c = column[g.interior(face, i, j)];
+                c.across[0] = across(face, i + 1, j);
+                c.across[1] = across(face, i - 1, j);
+                c.across[2] = across(face, i, j + 1);
+                c.across[3] = across(face, i, j - 1);
+            }
+        }
+    }
+    for (size_t in = 0; in < g.cells(); in++) {
+        Column &c = column[in];
+        for (int s = 0; s < SIDES; s++) {
+            const Column &o = column[c.across[s]];
+            c.back[s] = 0xff;
+            for (int t = 0; t < SIDES; t++) {
+                if (o.across[t] == in) {
+                    c.back[s] = uint8_t(t);
+                }
+            }
+            OV_ERR_FAIL_COND_MSG(c.back[s] == 0xff, "WeatherFluid: a cell's neighbour across a side doesn't face it back.");
+            const size_t n = c.across[s];
+            c.across_pad[s] = uint32_t(g.index(int(n / per_face), int(n % size_t(g.width())), int((n % per_face) / size_t(g.width()))));
+        }
+    }
 }
 
 void WeatherFluid::neighbours(int p_face, int p_i, int p_j, size_t r_nb[SIDES]) const {
@@ -158,6 +204,7 @@ void WeatherFluid::vertical_from_centres() {
         }
     }
     centre_vertical();
+    face_speeds();
 }
 
 void WeatherFluid::centre_vertical() {
@@ -207,8 +254,11 @@ double WeatherFluid::max_dt() const {
                     const float *u = here + wind_offset(k);
                     const double w = dotf(u, c.up);
                     const double h = std::sqrt(ov::max(dotf(u, u) - w * w, 0.0));
-                    rate = ov::max(rate, ov::max(h / min_spacing_m, std::fabs(w) / dz));
-                    rate = ov::max(rate, std::fabs(double(face_w(g.index(face, i, j))[k])) / dz);
+                    // The volumes' sum over the directions (the unsplit fluxes' bound): the tangent wind's two components at
+                    // most sqrt(2) of its speed, w at the centre or either interface.
+                    const float *wi = face_w(g.index(face, i, j));
+                    const double wv = ov::max(std::fabs(w), ov::max(std::fabs(double(wi[k])), std::fabs(double(wi[k + 1]))));
+                    rate = ov::max(rate, std::sqrt(2.0) * h / min_spacing_m + wv / dz);
                 }
             }
         }
@@ -216,190 +266,169 @@ double WeatherFluid::max_dt() const {
     return rate > 0.0 ? MAX_COURANT / rate : 1e30;
 }
 
-void WeatherFluid::transport(const Column &p_c, const double p_d[3], float *r_wind) {
-    double from[3];
-    for (int a = 0; a < 3; a++) {
-        from[a] = p_c.pos[a] + p_d[a];
-    }
-    const double len = length3(from);
-    if (!(len > 0.0)) {
-        return;
-    }
-    const double up[3] = { p_c.up[0], p_c.up[1], p_c.up[2] };
-    for (int a = 0; a < 3; a++) {
-        from[a] /= len;
-    }
-    // Rodrigues with k = from x up (|k| = sin, cos = from . up): v' = v cos + k x v + k (k . v) / (1 + cos).
-    double k[3];
-    cross3(from, up, k);
-    const double cosine = dot3(from, up);
-    const double v[3] = { r_wind[0], r_wind[1], r_wind[2] };
-    double kv[3];
-    cross3(k, v, kv);
-    const double kdv = dot3(k, v) / (1.0 + cosine);
-    for (int a = 0; a < 3; a++) {
-        r_wind[a] = float(v[a] * cosine + kv[a] + k[a] * kdv);
-    }
-}
-
-WeatherFluid::Stencil WeatherFluid::trace(int p_face, int p_i, int p_j, const double p_d[3], double p_z, int p_top) const {
+void WeatherFluid::face_speeds() {
     const WeatherGrid &g = *cells;
-    const Column &c = column[g.interior(p_face, p_i, p_j)];
-    // The point in the face's cells (the centres at integers) and levels (or interfaces, p_top the last).
-    const double x = ov::clamp(p_i + 2.0 * (p_d[0] * c.ax[0] + p_d[1] * c.ax[1] + p_d[2] * c.ax[2]), -1.0, double(g.width()));
-    const double y = ov::clamp(p_j + 2.0 * (p_d[0] * c.ay[0] + p_d[1] * c.ay[1] + p_d[2] * c.ay[2]), -1.0, double(g.height()));
-    const double z = ov::clamp(p_z, 0.0, double(p_top));
-    const int i0 = ov::min(int(std::floor(x)), g.width() - 1);
-    const int j0 = ov::min(int(std::floor(y)), g.height() - 1);
-    Stencil s;
-    s.k0 = ov::min(int(std::floor(z)), p_top - 1);
-    const double fx = x - i0, fy = y - j0;
-    s.fz = z - s.k0;
-    s.src[0] = g.index(p_face, i0, j0);
-    s.src[1] = g.index(p_face, i0 + 1, j0);
-    s.src[2] = g.index(p_face, i0, j0 + 1);
-    s.src[3] = g.index(p_face, i0 + 1, j0 + 1);
-    s.wxy[0] = (1.0 - fx) * (1.0 - fy);
-    s.wxy[1] = fx * (1.0 - fy);
-    s.wxy[2] = (1.0 - fx) * fy;
-    s.wxy[3] = fx * fy;
-    return s;
+    const int st = stride();
+    const int levels = params.levels;
+    parallel_for(uint32_t(g.faces() * g.height()), "WeatherFluid::face_speeds", [&](uint32_t p_row) {
+        const int face = int(p_row) / g.height();
+        const int j = int(p_row) % g.height();
+        for (int i = 0; i < g.width(); i++) {
+            const size_t in = g.interior(face, i, j);
+            const Column &c = column[in];
+            const float *here = &cur[g.index(face, i, j) * size_t(st)];
+            for (int s = 0; s < SIDES; s++) {
+                if (!owns(in, s)) {
+                    continue;
+                }
+                for (int k = 0; k < levels; k++) {
+                    const float *v = &cur[size_t(c.across_pad[s]) * size_t(st) + size_t(wind_offset(k))];
+                    side_speed[(in * size_t(levels) + size_t(k)) * SIDES + size_t(s)] = float(0.5 * (dotf(here + wind_offset(k), c.normal[s]) + dotf(v, c.normal[s])));
+                }
+            }
+        } }, ov::Priority::LOW);
 }
 
-double WeatherFluid::sample(const float *p_buf, size_t p_rec, int p_per, int p_f, const Stencil &p_s) {
-    double v = 0.0;
-    for (int n = 0; n < 4; n++) {
-        const float *b = &p_buf[p_s.src[n] * p_rec];
-        v += p_s.wxy[n] * ((1.0 - p_s.fz) * b[p_s.k0 * p_per + p_f] + p_s.fz * b[(p_s.k0 + 1) * p_per + p_f]);
+double WeatherFluid::outward(size_t p_interior, int p_level, int p_side) const {
+    const Column &c = column[p_interior];
+    const size_t levels = size_t(params.levels);
+    if (owns(p_interior, p_side)) {
+        return side_speed[(p_interior * levels + size_t(p_level)) * SIDES + size_t(p_side)];
     }
-    return v;
+    return -double(side_speed[(size_t(c.across[p_side]) * levels + size_t(p_level)) * SIDES + c.back[p_side]]);
 }
-
-void WeatherFluid::corner(const float *p_buf, size_t p_rec, int p_per, int p_f, const Stencil &p_s, int p_n, float *r_v, int p_count) {
-    const float *b = &p_buf[p_s.src[p_n % 4] * p_rec + size_t((p_s.k0 + p_n / 4) * p_per + p_f)];
-    for (int a = 0; a < p_count; a++) {
-        r_v[a] = b[a];
-    }
-}
-
-double WeatherFluid::level_step(const Column &p_c, const float *p_u, double p_dt, double r_d[3]) {
-    const double w = dotf(p_u, p_c.up);
-    for (int a = 0; a < 3; a++) {
-        r_d[a] = (double(p_u[a]) - w * p_c.up[a]) * p_dt;
-    }
-    return w;
-}
-
-void WeatherFluid::interface_step(const Column &p_c, const float *p_lo, const float *p_hi, double p_dt, double r_d[3]) {
-    double dl[3], dh[3];
-    level_step(p_c, p_lo, p_dt, dl);
-    level_step(p_c, p_hi, p_dt, dh);
-    for (int a = 0; a < 3; a++) {
-        r_d[a] = 0.5 * (dl[a] + dh[a]);
-    }
+template <typename Vertical, typename Side>
+void WeatherFluid::flux_stage(const std::vector<float> &p_in, std::vector<float> &r_out, int p_count, int p_per, int p_first, int p_last, double p_dt,
+        Vertical p_vertical, Side p_side) {
+    const WeatherGrid &g = *cells;
+    const size_t rec = size_t(p_count) * size_t(p_per);
+    std::vector<float> &grad = p_count == params.levels ? grad_c : grad_w;
+    grad.assign(g.padded_cells() * rec * 3, 0.0f);
+    auto at = [&](size_t p_cell, int p_v, int p_f) { return double(p_in[p_cell * rec + size_t(p_v * p_per + p_f)]); };
+    // The limited gradient of each field in each active volume (Barth & Jespersen 1989): the central differences', scaled
+    // so that the value it gives at each of the 6 faces stays within the volume's and its neighbours' range.
+    parallel_for(uint32_t(g.faces() * g.height()), "WeatherFluid::gradients", [&](uint32_t p_row) {
+        const int face = int(p_row) / g.height();
+        const int j = int(p_row) % g.height();
+        for (int i = 0; i < g.width(); i++) {
+            const Column &c = column[g.interior(face, i, j)];
+            const size_t here = g.index(face, i, j);
+            size_t nb[SIDES];
+            neighbours(face, i, j, nb);
+            for (int v = p_first; v <= p_last; v++) {
+                const int v0 = ov::max(v - 1, 0), v1 = ov::min(v + 1, p_count - 1);
+                for (int f = 0; f < p_per; f++) {
+                    const double x = at(here, v, f);
+                    const double di = at(nb[0], v, f) - at(nb[1], v, f);
+                    const double dj = at(nb[2], v, f) - at(nb[3], v, f);
+                    const double dk = (at(here, v1, f) - at(here, v0, f)) / (double(v1 - v0) * dz);
+                    double gr[3];
+                    for (int a = 0; a < 3; a++) {
+                        gr[a] = c.ax[a] * di + c.ay[a] * dj + c.up[a] * dk;
+                    }
+                    double lo = ov::min(at(here, v0, f), at(here, v1, f)), hi = ov::max(at(here, v0, f), at(here, v1, f));
+                    for (int s = 0; s < SIDES; s++) {
+                        lo = ov::min(lo, at(nb[s], v, f));
+                        hi = ov::max(hi, at(nb[s], v, f));
+                    }
+                    lo = ov::min(lo, x);
+                    hi = ov::max(hi, x);
+                    double alpha = 1.0;
+                    auto limit = [&](double p_delta) {
+                        if (p_delta > 1e-30) {
+                            alpha = ov::min(alpha, (hi - x) / p_delta);
+                        } else if (p_delta < -1e-30) {
+                            alpha = ov::min(alpha, (lo - x) / p_delta);
+                        }
+                    };
+                    for (int s = 0; s < SIDES; s++) {
+                        limit(0.5 * c.distance[s] * (gr[0] * c.normal[s][0] + gr[1] * c.normal[s][1] + gr[2] * c.normal[s][2]));
+                    }
+                    const double up = 0.5 * dz * (gr[0] * c.up[0] + gr[1] * c.up[1] + gr[2] * c.up[2]);
+                    limit(up);
+                    limit(-up);
+                    float *o = &grad[(here * rec + size_t(v * p_per + f)) * 3];
+                    for (int a = 0; a < 3; a++) {
+                        o[a] = float(alpha * gr[a]);
+                    }
+                }
+            }
+        } }, ov::Priority::LOW);
+    // A face's outward flux from its owner o through side p_s (volume p_v, field p_f), per second: the owner's speed,
+    // length and normal, the value the upwind volume's reconstruction at the face. Both cells call it for the owner, so
+    // what one loses the other gains to the bit.
+    auto face_flux = [&](size_t p_o, int p_s, int p_v, int p_f) {
+        const Column &c = column[p_o];
+        const double u = p_side(p_o, p_v, p_s) * double(c.length[p_s]) * dz;
+        const double h = 0.5 * double(c.distance[p_s]);
+        const double r[3] = { h * c.normal[p_s][0], h * c.normal[p_s][1], h * c.normal[p_s][2] };
+        const size_t cell = u >= 0.0 ? padded(p_o) : size_t(c.across_pad[p_s]);
+        const double sign = u >= 0.0 ? 1.0 : -1.0;
+        const float *gr = &grad[(cell * rec + size_t(p_v * p_per + p_f)) * 3];
+        return u * (at(cell, p_v, p_f) + sign * (gr[0] * r[0] + gr[1] * r[1] + gr[2] * r[2]));
+    };
+    parallel_for(uint32_t(g.faces() * g.height()), "WeatherFluid::fluxes", [&](uint32_t p_row) {
+        const int face = int(p_row) / g.height();
+        const int j = int(p_row) % g.height();
+        for (int i = 0; i < g.width(); i++) {
+            const size_t in = g.interior(face, i, j);
+            const Column &c = column[in];
+            const size_t here = g.index(face, i, j);
+            auto value = [&](int p_v, int p_f, double p_up) {
+                const float *gr = &grad[(here * rec + size_t(p_v * p_per + p_f)) * 3];
+                return at(here, p_v, p_f) + p_up * (gr[0] * c.up[0] + gr[1] * c.up[1] + gr[2] * c.up[2]);
+            };
+            const double volume = double(c.area) * dz;
+            for (int v = 0; v < p_count; v++) {
+                for (int f = 0; f < p_per; f++) {
+                    double out = at(here, v, f);
+                    if (v >= p_first && v <= p_last) {
+                        double flux = 0.0; // outward, per second
+                        for (int s = 0; s < SIDES; s++) {
+                            flux += owns(in, s) ? face_flux(in, s, v, f) : -face_flux(c.across[s], c.back[s], v, f);
+                        }
+                        if (v > 0) {
+                            const double w = p_vertical(here, v) * double(c.area);
+                            flux -= w * (w >= 0.0 ? value(v - 1, f, 0.5 * dz) : value(v, f, -0.5 * dz));
+                        }
+                        if (v + 1 < p_count) {
+                            const double w = p_vertical(here, v + 1) * double(c.area);
+                            flux += w * (w >= 0.0 ? value(v, f, 0.5 * dz) : value(v + 1, f, -0.5 * dz));
+                        }
+                        out -= p_dt * flux / volume;
+                    }
+                    r_out[here * rec + size_t(v * p_per + f)] = float(out);
+                }
+            }
+        } }, ov::Priority::LOW);
+    g.fill_halo(r_out.data(), int(rec));
 }
 
 void WeatherFluid::advect(double p_dt) {
-    const WeatherGrid &g = *cells;
-    const int st = stride();
-    const int per = per_level();
     const int levels = params.levels;
     const size_t fst = size_t(levels + 1);
-    // The air's displacement over -p_dt (p_sign -1: where it comes from) or p_dt (+1: where it goes) at a level's
-    // centre or an interface, in the column's frame: d tangent (metres) and the stencil there.
-    auto at_level = [&](int p_face, int p_i, int p_j, int p_k, double p_sign, double r_d[3]) {
-        const Column &c = column[g.interior(p_face, p_i, p_j)];
-        const double w = level_step(c, &cur[g.index(p_face, p_i, p_j) * size_t(st) + size_t(wind_offset(p_k))], p_sign * p_dt, r_d);
-        return trace(p_face, p_i, p_j, r_d, (level_m(p_k) + p_sign * w * p_dt) / dz - 0.5, levels - 1);
+    halo();
+    // The levels' volumes: through their sides the centres' mean wind, through their tops and bottoms the interfaces'.
+    // The interfaces' volumes (a level's centre to the next's): the two levels' side speeds, at their tops and bottoms
+    // the levels' centres' w (the interfaces' means). The ground's and the top's interface stay 0.
+    auto level_vertical = [&](size_t p_cell, int p_v) { return double(wf_from[p_cell * fst + size_t(p_v)]); };
+    auto level_side = [&](size_t p_in, int p_v, int p_s) { return outward(p_in, p_v, p_s); };
+    auto interface_vertical = [&](size_t p_cell, int p_v) {
+        return 0.5 * (double(wf_from[p_cell * fst + size_t(p_v - 1)]) + wf_from[p_cell * fst + size_t(p_v)]);
     };
-    auto at_interface = [&](int p_face, int p_i, int p_j, int p_m, double p_sign, double r_d[3]) {
-        const Column &c = column[g.interior(p_face, p_i, p_j)];
-        const size_t at = g.index(p_face, p_i, p_j);
-        interface_step(c, &cur[at * size_t(st) + size_t(wind_offset(p_m - 1))], &cur[at * size_t(st) + size_t(wind_offset(p_m))], p_sign * p_dt, r_d);
-        return trace(p_face, p_i, p_j, r_d, double(p_m) + p_sign * double(wf[at * fst + size_t(p_m)]) * p_dt / dz, levels);
-    };
-    // The forward step: each field read where the air comes from (the wind turned along), into next and wf_next.
-    parallel_for(uint32_t(g.faces() * g.height()), "WeatherFluid::advect", [&](uint32_t p_row) {
-        const int face = int(p_row) / g.height();
-        const int j = int(p_row) % g.height();
-        for (int i = 0; i < g.width(); i++) {
-            const Column &c = column[g.interior(face, i, j)];
-            const size_t at = g.index(face, i, j);
-            for (int k = 0; k < levels; k++) {
-                double d[3];
-                const Stencil s = at_level(face, i, j, k, -1.0, d);
-                float *out = &next[at * size_t(st) + size_t(wind_offset(k))];
-                for (int f = 0; f < per; f++) {
-                    out[f] = float(sample(cur.data(), size_t(st), per, f, s));
-                }
-                transport(c, d, out);
-            }
-            float *out = &wf_next[at * fst];
-            out[0] = 0.0f;
-            out[levels] = 0.0f;
-            for (int m = 1; m < levels; m++) {
-                double d[3];
-                out[m] = float(sample(wf.data(), fst, 1, 0, at_interface(face, i, j, m, -1.0, d)));
-            }
-        } }, ov::Priority::LOW);
-    // MacCormack (Selle et al. 2008, "An unconditionally stable MacCormack method"): the forward result traced back
-    // (where the air goes, read in it) misses the start by twice the forward step's error to first order; half the miss
-    // added back makes the step second order. Where that leaves the forward stencil's range (a new extreme: the
-    // correction's overshoot at a sharp front) the forward result stays.
-    g.fill_halo(next.data(), st);
-    g.fill_halo(wf_next.data(), levels + 1);
-    parallel_for(uint32_t(g.faces() * g.height()), "WeatherFluid::maccormack", [&](uint32_t p_row) {
-        constexpr int MAX_PER = WIND + MAX_SCALARS;
-        const int face = int(p_row) / g.height();
-        const int j = int(p_row) % g.height();
-        for (int i = 0; i < g.width(); i++) {
-            const Column &c = column[g.interior(face, i, j)];
-            const size_t at = g.index(face, i, j);
-            for (int k = 0; k < levels; k++) {
-                const size_t o = at * size_t(st) + size_t(wind_offset(k));
-                double d[3], e[3];
-                const Stencil fwd = at_level(face, i, j, k, -1.0, d);
-                const Stencil bwd = at_level(face, i, j, k, 1.0, e);
-                float back[MAX_PER];
-                for (int f = 0; f < per; f++) {
-                    back[f] = float(sample(next.data(), size_t(st), per, f, bwd));
-                }
-                transport(c, e, back);
-                float lo[MAX_PER], hi[MAX_PER];
-                for (int n = 0; n < 8; n++) {
-                    float v[MAX_PER];
-                    corner(cur.data(), size_t(st), per, 0, fwd, n, v, per);
-                    transport(c, d, v);
-                    for (int f = 0; f < per; f++) {
-                        lo[f] = n == 0 ? v[f] : ov::min(lo[f], v[f]);
-                        hi[f] = n == 0 ? v[f] : ov::max(hi[f], v[f]);
-                    }
-                }
-                for (int f = 0; f < per; f++) {
-                    const double v = double(next[o + size_t(f)]) + 0.5 * (double(cur[o + size_t(f)]) - back[f]);
-                    corr[o + size_t(f)] = v >= lo[f] && v <= hi[f] ? float(v) : next[o + size_t(f)];
-                }
-            }
-            float *out = &wf_corr[at * fst];
-            out[0] = 0.0f;
-            out[levels] = 0.0f;
-            for (int m = 1; m < levels; m++) {
-                double d[3], e[3];
-                const Stencil fwd = at_interface(face, i, j, m, -1.0, d);
-                const double back = sample(wf_next.data(), fst, 1, 0, at_interface(face, i, j, m, 1.0, e));
-                float lo = 0.0f, hi = 0.0f;
-                for (int n = 0; n < 8; n++) {
-                    float v;
-                    corner(wf.data(), fst, 1, 0, fwd, n, &v, 1);
-                    lo = n == 0 ? v : ov::min(lo, v);
-                    hi = n == 0 ? v : ov::max(hi, v);
-                }
-                const double v = double(wf_next[at * fst + size_t(m)]) + 0.5 * (double(wf[at * fst + size_t(m)]) - back);
-                out[m] = v >= lo && v <= hi ? float(v) : wf_next[at * fst + size_t(m)];
-            }
-        } }, ov::Priority::LOW);
-    cur.swap(corr);
-    wf.swap(wf_corr);
+    auto interface_side = [&](size_t p_in, int p_v, int p_s) { return 0.5 * (level_side(p_in, p_v - 1, p_s) + level_side(p_in, p_v, p_s)); };
+    wf_from = wf; // the speeds stay the step's start's through both stages
+    // Heun (SSP-RK2, Shu & Osher 1988): two stages, their mean with the start.
+    flux_stage(cur, next, levels, per_level(), 0, levels - 1, p_dt, level_vertical, level_side);
+    flux_stage(wf, wf_next, levels + 1, 1, 1, levels - 1, p_dt, interface_vertical, interface_side);
+    flux_stage(next, corr, levels, per_level(), 0, levels - 1, p_dt, level_vertical, level_side);
+    flux_stage(wf_next, wf_corr, levels + 1, 1, 1, levels - 1, p_dt, interface_vertical, interface_side);
+    for (size_t n = 0; n < cur.size(); n++) {
+        cur[n] = 0.5f * (cur[n] + corr[n]);
+    }
+    for (size_t n = 0; n < wf.size(); n++) {
+        wf[n] = 0.5f * (wf[n] + wf_corr[n]);
+    }
     centre_vertical();
 }
 
@@ -439,27 +468,15 @@ void WeatherFluid::force(double p_dt, const float *p_buoyancy) {
 }
 
 double WeatherFluid::divergence(size_t p_interior, int p_level) const {
-    const WeatherGrid &g = *cells;
-    const int st = stride();
-    const int face = int(p_interior / (size_t(g.width()) * size_t(g.height())));
-    const size_t rest = p_interior % (size_t(g.width()) * size_t(g.height()));
-    const int j = int(rest / size_t(g.width()));
-    const int i = int(rest % size_t(g.width()));
     const Column &c = column[p_interior];
-    size_t nb[SIDES];
-    neighbours(face, i, j, nb);
-    const float *here = &cur[g.index(face, i, j) * size_t(st)];
-    const float *u = here + wind_offset(p_level);
     double flux = 0.0;
     for (int s = 0; s < SIDES; s++) {
-        const float *v = &cur[nb[s] * size_t(st) + size_t(wind_offset(p_level))];
-        flux += 0.5 * (dotf(u, c.normal[s]) + dotf(v, c.normal[s])) * c.length[s] * dz;
+        flux += outward(p_interior, p_level, s) * face_length(p_interior, s) * dz;
     }
-    const float *w = face_w(g.index(face, i, j));
+    const float *w = face_w(padded(p_interior));
     flux += (double(w[p_level + 1]) - w[p_level]) * c.area;
     return flux / (double(c.area) * dz);
 }
-
 double WeatherFluid::max_divergence() const {
     double m = 0.0;
     for (size_t in = 0; in < cells->cells(); in++) {
@@ -473,44 +490,44 @@ double WeatherFluid::max_divergence() const {
 void WeatherFluid::sweep(int p_colour) {
     const WeatherGrid &g = *cells;
     const int levels = params.levels;
+    // Red-black within a face; across a seam, where a neighbour may be the same colour, the half sweep's start values
+    // (p_from), so the result doesn't hang on the threads' order.
+    p_from = p;
     parallel_for(uint32_t(g.faces() * g.height()), "WeatherFluid::sweep", [&](uint32_t p_row) {
         const int face = int(p_row) / g.height();
         const int j = int(p_row) % g.height();
         for (int i = 0; i < g.width(); i++) {
             const size_t in = g.interior(face, i, j);
             const Column &c = column[in];
-            size_t nb[SIDES];
-            neighbours(face, i, j, nb);
             const size_t at = g.index(face, i, j) * size_t(levels);
             const double vertical = double(c.area) / dz;
             for (int k = (i + j + p_colour) & 1; k < levels; k += 2) {
                 double sum = 0.0;
                 double diag = 0.0;
                 for (int s = 0; s < SIDES; s++) {
-                    const double a = double(c.length[s]) * dz / double(c.distance[s]);
-                    sum += a * p[nb[s] * size_t(levels) + size_t(k)];
+                    const double a = face_length(in, s) * dz / face_distance(in, s);
+                    sum += a * p_from[size_t(c.across_pad[s]) * size_t(levels) + size_t(k)];
                     diag += a;
                 }
                 if (k + 1 < levels) {
-                    sum += vertical * p[at + size_t(k + 1)];
+                    sum += vertical * p_from[at + size_t(k + 1)];
                     diag += vertical;
                 }
                 if (k > 0) {
-                    sum += vertical * p[at + size_t(k - 1)];
+                    sum += vertical * p_from[at + size_t(k - 1)];
                     diag += vertical;
                 }
                 const double gs = (sum - rhs[cell_index(in, k)]) / diag;
                 p[at + size_t(k)] = float(p[at + size_t(k)] + SOR * (gs - p[at + size_t(k)]));
             }
         } }, ov::Priority::LOW);
-    g.fill_halo(p.data(), levels);
 }
-
 void WeatherFluid::project(double p_dt) {
     const WeatherGrid &g = *cells;
     const int st = stride();
     const int levels = params.levels;
-    // The divergence's fluxes over dt: what the pressure takes out.
+    // The divergence of the faces' speeds (the centres' means) over dt: what the pressure takes out.
+    face_speeds();
     parallel_for(uint32_t(g.faces() * g.height()), "WeatherFluid::divergence", [&](uint32_t p_row) {
         const int face = int(p_row) / g.height();
         const int j = int(p_row) % g.height();
@@ -539,6 +556,28 @@ void WeatherFluid::project(double p_dt) {
     for (float &v : p) {
         v = float(v - mean);
     }
+    g.fill_halo(p.data(), levels);
+    // The faces' speeds (the advection's) lose dt times the difference of the two pressures across them, the solve's
+    // own: the MAC projection of a cell-centred grid (Bell, Colella & Glaz 1989; Almgren et al. 1998), so the fluxes
+    // that move the fields keep only the solver's residual divergence.
+    parallel_for(uint32_t(g.faces() * g.height()), "WeatherFluid::side_speeds", [&](uint32_t p_row) {
+        const int face = int(p_row) / g.height();
+        const int j = int(p_row) % g.height();
+        for (int i = 0; i < g.width(); i++) {
+            const size_t in = g.interior(face, i, j);
+            const Column &c = column[in];
+            const size_t here = g.index(face, i, j);
+            for (int s = 0; s < SIDES; s++) {
+                if (!owns(in, s)) {
+                    continue;
+                }
+                for (int k = 0; k < levels; k++) {
+                    const double dp = double(p[size_t(c.across_pad[s]) * size_t(levels) + size_t(k)]) - p[here * size_t(levels) + size_t(k)];
+                    float &u = side_speed[(in * size_t(levels) + size_t(k)) * SIDES + size_t(s)];
+                    u = float(u - p_dt * dp / c.distance[s]);
+                }
+            }
+        } }, ov::Priority::LOW);
     // The wind loses dt times the pressure's gradient: the horizontal part at the centres (central differences), the
     // vertical on the interfaces (the difference of the two levels round each: exact; the ground and the top rigid).
     parallel_for(uint32_t(g.faces() * g.height()), "WeatherFluid::correct", [&](uint32_t p_row) {

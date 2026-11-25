@@ -60,11 +60,8 @@ tests.
 - **`WeatherFluid`** (`src/weather_fluid.*`, engine-free): the dynamics only, `du/dt + u . grad u = -grad p + b up -
   f up x u`, `div u = 0`, over a `WeatherGrid`'s columns in `levels` levels of `top / levels` (shallow atmosphere).
   A padded cell's record holds per level the wind (3D, planet axes: tangent part and w) and the physics' scalars.
-  A step: `advect` (MacCormack over a semi-Lagrangian step, "Turbulence" below; the departure point in the face's own cells through the cell's dual vectors, no
-  `locate`, bilinear in the cells and linear in the levels; `max_dt` keeps the wind within half a cell or level; the
-  wind brought from upstream turned into the cell's frame, `transport`: the rotation carrying the departure's up onto
-  the cell's. Without it a wind keeps its upstream direction: a 5 m/s rotation drifted 6.5 m/s off in 10 minutes at
-  the faces' edges),
+  A step: `advect` (finite volume: every field, the wind's 3 components included, changes only by its fluxes through
+  its volume's 6 faces, "Turbulence" below; `max_dt` keeps the sum of a volume's outflow Courant numbers within 0.5),
   the caller's physics on the state, `force` (the buoyancy along the up, the Coriolis turn about it, a sponge damping
   w in the top fifth), `project` (the pressure from the fluxes through each cell's 6 faces, ground and top rigid,
   red-black Gauss-Seidel over-relaxed 1.6, 20 sweeps warm-started). The vertical wind lives on the levels' interfaces
@@ -107,8 +104,8 @@ tests.
   line to the ground's saturated state, which only crosses saturation near its end; the 40 m lowest cell averages the
   surface layer where real fog starts.
 - **Subgrid turbulence:** none of its own; the advection's limiter is the subgrid model ("Turbulence" below). The
-  vertical Smagorinsky it had (2026-11-25) changed the convective boundary layer's w by under 1%: the semi-Lagrangian
-  interpolation's smoothing was doing the subgrid work.
+  vertical Smagorinsky it had (2026-11-25) changed the convective boundary layer's w by under 1%: the then
+  semi-Lagrangian interpolation's smoothing was doing the subgrid work.
 - **The twist** (`Params::exchange`, 15): the surface fluxes' coefficients only. Sped up as well, radiation and
   subsidence (one time compression of the slow processes, tried) outran the boundary layer's turbulence, which runs at
   its own speed: the humid layer cooled to fog, the fog case's top overturned it into a deck at 180 m.
@@ -116,11 +113,20 @@ tests.
 ## Turbulence
 An implicit large-eddy simulation: the advection is the one subgrid model, for the wind and every scalar, sideways and
 up alike (Margolin, Smolarkiewicz & Sorbjan 1999 ran the convective boundary layer this way, with MPDATA).
-- **MacCormack** (`WeatherFluid::advect`; Selle et al. 2008): the semi-Lagrangian step, its result traced back (where
-  the air goes, read in it) to estimate the step's error, half of it added back: second order. Where that makes a new
-  extreme of the forward stencil's 8 values (an overshoot at a sharp front) the plain step stays: the limiter, whose
-  dissipation is the subgrid's. The centres' fields and the interfaces' w alike. One extra pass: a step at ocean_test's
-  size costs 54 ms (40 before).
+- **One flux-form scheme** (`WeatherFluid::advect`, 2026-11-25) for every field: the wind's 3 components (planet
+  axes), the scalars, the interfaces' w (their volumes span a level's centre to the next's). A field changes only by
+  its fluxes through its volume's 6 faces; a face's value is the upwind volume's, linear along its gradient, the
+  gradient limited so no face value leaves the range of the volume and its neighbours (Barth & Jespersen 1989: no new
+  extreme, water never negative); two stages (Heun, SSP-RK2). Each face is computed once, by its lower-index cell,
+  from the true cell across it (across a seam the neighbour face's, not the halo's interpolation), so what one cell
+  loses the other gains to the bit. The pressure is solved over the same faces and corrects the same face speeds (a
+  MAC projection: Bell, Colella & Glaz 1989), so the fluxes are divergence-free to the solver's residual.
+- **Why not MacCormack** (Selle et al. 2008; the scheme before, same day): a semi-Lagrangian step corrected by its
+  traced-back error. It passed the dry benchmark (0.65 w*) but isn't conservative: on BOMEX it created +0.25 g/kg of
+  water every 5 minutes at the clouds' sharp edges, rained it and evaporated it into a 5 K/h cooling, updrafts at
+  16-31 m/s. The flux form, same case and hour: water by advection within 0.007 g/kg per 5 minutes (the budget weighs
+  by density, the fluxes by volume), the surface theta steady, w at most 5-8 m/s. A test keeps a blob's total within
+  1e-5 over 100 steps round the sphere and its range within its start's.
 - **The benchmark** (`test_weather_cbl.cpp`): the dry convective boundary layer (Deardorff 1974, Schmidt & Schumann
   1989, Moeng & Sullivan 1994): a 400 m mixed layer under a 4 K inversion heated at 0.06 K m/s, ~49 m cells and 50 m
   levels (the game's), no rotation, no moisture, a 0.1 K random start; the profiles over minutes 20-30. The large-eddy
@@ -132,13 +138,14 @@ up alike (Margolin, Smolarkiewicz & Sorbjan 1999 ran the convective boundary lay
   | semi-Lagrangian | none | 0.48 (0.31) | 0.20 | -0.08 |
   | semi-Lagrangian | vertical Smagorinsky | 0.47 (0.31) | 0.20 | -0.08 |
   | semi-Lagrangian | 3D Smagorinsky-Lilly | 0.41 (0.31) | 0.06 | -0.07 |
-  | **MacCormack** | **none** | **0.65 (0.31)** | **0.37** | **-0.14** |
+  | MacCormack | none | 0.65 (0.31) | 0.37 | -0.14 |
   | MacCormack | 3D Smagorinsky-Lilly | 0.50 (0.31) | 0.12 | -0.11 |
+  | **flux form (limited linear, SSP-RK2)** | **none** | **0.625 (0.44)** | **0.34** | **-0.26** |
 
   With ~8 cells a boundary layer an explicit closure on top of the scheme's own dissipation over-damps (counted
-  twice). The test keeps MacCormack's profile in the references' range.
+  twice). The test keeps the profile in the references' range.
 - **Removed** (2026-11-25): the vorticity confinement (Fedkiw, Stam & Jensen 2001) and the random kicks (a stochastic
-  backscatter, Shutts 2005) propped up the plain semi-Lagrangian step's damped convection; with MacCormack the
+  backscatter, Shutts 2005) propped up the plain semi-Lagrangian step's damped convection; now the
   thermals come from the buoyancy alone (the benchmark's start is a 0.1 K noise once, as large-eddy simulations seed
   theirs), and the confinement on top of it grew a vortex past its start. The planet file's `confinement` and
   `kick_mps` went with them.
@@ -354,8 +361,9 @@ Agreed with the user (2026-11-24). Stacked PRs, `feature/weather-*`:
     (thermal inertia per biome), clouds shading it; the report's day and night sides.
 13. **Shallow convection:** EDMF's updraft per column (`WeatherConvection`), its cloud published and shading the
     ground.
-14. **Turbulence:** the kicks and the vorticity confinement, then (2026-11-25) both removed for MacCormack as an
-    implicit large-eddy simulation, checked on the dry convective boundary layer; the vertical staggering of w.
+14. **Turbulence:** the kicks and the vorticity confinement, then (2026-11-25) both removed for an implicit
+    large-eddy simulation, checked on the dry convective boundary layer; the vertical staggering of w; the advection
+    one conservative flux-form scheme for every field (MacCormack created water on BOMEX).
 15. **Partial cloud:** the statistical cloud scheme in the physics, the render's noise through its spread.
 
 Later: curl-noise gusts, the FFT sea reading the wind (U10, fetch, swell), rain and ground wetness, saving the weather,

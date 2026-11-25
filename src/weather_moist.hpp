@@ -120,6 +120,11 @@ public:
     static double saturation(double p_t, double p_p_mb);
     // The bulk exchange coefficient at height p_z_m over a roughness p_z0_m (neutral).
     static double neutral_exchange(double p_z_m, double p_z0_m);
+    // The buoyancy (m/s^2) of a cell's theta, qv, qc, qr against its level's reference: virtual, the condensate's
+    // weight in it.
+    static double buoyancy(double p_theta, double p_qv, double p_qc, double p_qr, double p_theta_ref, double p_qv_ref) {
+        return GRAVITY * ((p_theta - p_theta_ref) / p_theta_ref + 0.61 * (p_qv - p_qv_ref) - p_qc - p_qr);
+    }
     // The Kessler step on one column (kessler.f90): theta, qv, qc, qr per level, the column's rho, exner and z; the
     // precipitation rate (m of water per second) returned.
     // p_sigma (or null: none) the cells' spread per level; r_share (or null) their cloudy share.

@@ -19,28 +19,32 @@
 // - A step (the caller's, at most max_dt() long): advect(dt), then the caller's physics on state() (it may change the
 //   scalars), then force(dt, buoyancy) (the buoyancy along the up, the Coriolis turn about it, the sponge under the
 //   top), then project(dt) (the pressure that takes the wind's divergence out).
-// - The advection: MacCormack (Selle et al. 2008, "An unconditionally stable MacCormack method"): a semi-Lagrangian
-//   step (each field read where the air comes from, bilinear in the face's cells and linear between the levels), its
-//   result traced back to estimate the step's error, half of it added back (second order); where that makes a new
-//   extreme of the forward stencil's 8 values the plain step stays (the limiter). Every field alike, the centres' and
-//   the interfaces' w. No subgrid closure: the limiter's dissipation is the subgrid model (an implicit large-eddy
-//   simulation; Margolin, Smolarkiewicz & Sorbjan 1999 ran the convective boundary layer this way). Measured on that
-//   benchmark (test_weather_cbl.cpp, 2026-11-25; Moeng & Sullivan 1994's peak w rms 0.63 w* near 0.35 h): the plain
-//   semi-Lagrangian step 0.48 w*, it with a 3D Smagorinsky-Lilly closure 0.41, MacCormack 0.65, MacCormack with the
-//   closure 0.50 (the closure over-damps at ~8 cells a boundary layer). The plain step had been propped up by a
-//   vorticity confinement and random kicks; both are gone.
-// - The projection is the fluxes through each cell's 6 faces (4 sides, a top, a bottom; ground and top rigid): the
-//   pressure solves sum_f a_f (p_f - p) = (sum_f flux_f) / dt with a_f = face area over the centres' distance,
-//   red-black Gauss-Seidel (over-relaxed) warm-started from the last step's pressure. The vertical wind lives on the
-//   levels' interfaces (vertical staggering, as SAM's C grid and Harlow & Welch's MAC grid): the top and bottom fluxes
-//   are its, it loses dt times the difference of the two levels' pressures round it, so the vertical part is exact.
-//   The tangent wind stays at the centres and loses the pressure's central gradient (an approximate projection
-//   sideways). Collocated in the vertical (until 2026-11-25), a w alternating level by level had zero face means: the
-//   projection never saw it, the buoyancy drove it, and it held 70-90% of w's rms on ocean_test, layering the vapour
-//   and the cloud level by level. Across a seam a neighbour is the halo's (WeatherGrid::fill_halo).
-// - The departure point is found in the face's own cells (the cell's dual vectors, no locate): it stays within the
-//   halo while the wind crosses at most half a cell in dt (max_dt; across a seam the halo's bilinear values are the
-//   neighbour face's).
+// - The advection: one finite-volume scheme for every field, the wind's 3 components, the scalars and the interfaces'
+//   w alike (the interfaces' volumes span a level's centre to the next's): a field changes only by its fluxes through
+//   its volume's 6 faces, so what one cell loses its neighbour gains (conserved to the floats' rounding). A face's value
+//   is the upwind volume's, linear from its centre along its gradient, the gradient limited so no face value leaves the
+//   range of the volume and its 6 neighbours (Barth & Jespersen 1989: no new extreme, water never negative); two stages
+//   (Heun, SSP-RK2, Shu & Osher 1988). The limiter's dissipation is the subgrid model: an implicit large-eddy simulation
+//   (Margolin, Smolarkiewicz & Sorbjan 1999 ran the convective boundary layer this way, with MPDATA, a flux-form scheme).
+//   The wind's components are the planet's axes; centre_vertical then sets each centre's w from its interfaces, which
+//   also takes out the radial part a wind gains following the sphere.
+// - Faces: each cell's 4 sides and its top and bottom. A side's neighbour is the true cell across it, across a seam the
+//   neighbour face's (Column::across; the faces' cells meet one to one along their edges), and a face belongs to its
+//   lower-index cell: its length, normal, speed and flux are computed once, from that side, so both cells see the same
+//   bits. The sides' speeds are the two centres' mean normal wind, then corrected by the projection.
+// - The projection: the pressure solves sum_f a_f (p_f - p) = (sum_f flux_f) / dt over the same faces, a_f the face's
+//   area over the centres' distance (ground and top rigid), red-black Gauss-Seidel over-relaxed (a seam's neighbour read
+//   at the half sweep's start), warm-started from the last step's pressure. Each side's speed then loses dt times the
+//   difference of the two pressures across it, the solve's own (the MAC projection of a cell-centred grid: Bell,
+//   Colella & Glaz 1989; Almgren et al. 1998), so the fluxes that move the fields keep only the solver's residual
+//   divergence; the vertical wind lives on the levels' interfaces (staggered: SAM's C grid in the vertical) and loses
+//   the difference of the two levels' pressures round it. The centres' tangent wind loses the pressure's central
+//   gradient (the halo's). Collocated in the vertical (until 2026-11-25), a w alternating level by level had zero face
+//   means: the projection never saw it.
+// - Measured (2026-11-25) on the dry convective boundary layer (test_weather_cbl.cpp; Moeng & Sullivan 1994's peak w
+//   rms 0.63 w* near 0.35 h, entrainment flux ~-0.2 Q): 0.625 w* at 0.44 h, -0.26 Q. MacCormack (a semi-Lagrangian
+//   step, corrected) gave the same dry profile but created water at the clouds' edges (+0.25 g/kg in 5 minutes of
+//   BOMEX, the extra rain evaporating into a 5 K/h cooling); this scheme conserves it.
 // Every interior cell of a pass is written from the previous state only (red-black: one colour from the other), so
 // parallel_for over rows gives the same bits on any thread count.
 class WeatherFluid {
@@ -48,7 +52,7 @@ public:
     static constexpr int WIND = 3; // the wind's floats, first in a level's record
     static constexpr int MAX_LEVELS = 64;
     static constexpr int MAX_SCALARS = 8;
-    // The largest fraction of a cell (or a level) the wind may cross in a step (max_dt).
+    // The largest sum of a volume's Courant numbers over the directions in a step (max_dt).
     static constexpr double MAX_COURANT = 0.5;
     // The pressure solve's over-relaxation.
     static constexpr double SOR = 1.6;
@@ -101,7 +105,7 @@ public:
     // The kinematic pressure (m^2/s^2) per padded cell and level (the halo filled).
     const std::vector<float> &pressure() const { return p; }
 
-    // The longest step the wind allows now (MAX_COURANT of a cell or a level; 1e30 at rest).
+    // The longest step the wind allows now (MAX_COURANT summed over the directions; 1e30 at rest).
     double max_dt() const;
     void advect(double p_dt);
     // p_buoyancy: m/s^2 along the up per cell (cell_index).
@@ -132,6 +136,11 @@ private:
         float distance[4];
         float area;
         float f;
+        // The cell across each side (interior and padded index: across a seam the neighbour face's, not a halo cell)
+        // and which of its sides faces back. A face is its lower-index cell's (owns): its speed, length and flux.
+        uint32_t across[4];
+        uint32_t across_pad[4];
+        uint8_t back[4];
     };
     static constexpr int SIDES = 4;
 
@@ -146,7 +155,11 @@ private:
     // divergence are exact on it, so no level-by-level checkerboard escapes the pressure.
     std::vector<float> wf;
     std::vector<float> wf_next;
-    std::vector<float> corr, wf_corr; // the MacCormack step's results
+    std::vector<float> corr, wf_corr; // the second stage's results
+    std::vector<float> wf_from; // the interfaces' w at the step's start (the stages' speeds)
+    std::vector<float> side_speed; // per interior cell, level and side: the owned faces' outward speeds
+    std::vector<float> p_from; // the pressure at a half sweep's start
+    std::vector<float> grad_c, grad_w; // the limited gradients (3 per field and volume per padded cell)
     std::vector<float> p; // per padded cell and level
     std::vector<float> rhs; // per interior cell and level
     double min_spacing_m = 1.0;
@@ -160,26 +173,30 @@ private:
     float *face_w(size_t p_padded) { return &wf[p_padded * size_t(params.levels + 1)]; }
     const float *face_w(size_t p_padded) const { return &wf[p_padded * size_t(params.levels + 1)]; }
     void make_columns();
-    // A semi-Lagrangian stencil: the 4 padded columns about a point of a face (bilinear weights) and the two levels (or
-    // interfaces) about it.
-    struct Stencil {
-        size_t src[4];
-        double wxy[4];
-        int k0;
-        double fz;
-    };
-    // The stencil at p_d (metres, tangent) from interior cell (p_face, p_i, p_j)'s column at level coordinate p_z (the
-    // levels', or the interfaces' when p_top is levels).
-    Stencil trace(int p_face, int p_i, int p_j, const double p_d[3], double p_z, int p_top) const;
-    // Field p_f of a buffer of p_rec floats per padded cell, p_per per level, at a stencil (trilinear).
-    static double sample(const float *p_buf, size_t p_rec, int p_per, int p_f, const Stencil &p_s);
-    // A stencil's corner p_n (0-3 the lower level's columns, 4-7 the upper's): p_count fields from p_f.
-    static void corner(const float *p_buf, size_t p_rec, int p_per, int p_f, const Stencil &p_s, int p_n, float *r_v, int p_count);
-    // The tangent displacement over p_dt of a level's wind p_u (r_d), and its w; of an interface (its two levels').
-    static double level_step(const Column &p_c, const float *p_u, double p_dt, double r_d[3]);
-    static void interface_step(const Column &p_c, const float *p_lo, const float *p_hi, double p_dt, double r_d[3]);
+    void make_faces();
+    bool owns(size_t p_interior, int p_side) const { return p_interior < column[p_interior].across[p_side]; }
+    // A face's geometry (its owner's) and outward speed from either side.
+    double face_length(size_t p_interior, int p_side) const {
+        const Column &c = column[p_interior];
+        return owns(p_interior, p_side) ? c.length[p_side] : column[c.across[p_side]].length[c.back[p_side]];
+    }
+    double face_distance(size_t p_interior, int p_side) const {
+        const Column &c = column[p_interior];
+        return owns(p_interior, p_side) ? c.distance[p_side] : column[c.across[p_side]].distance[c.back[p_side]];
+    }
+    double outward(size_t p_interior, int p_level, int p_side) const;
+    size_t padded(size_t p_interior) const {
+        const size_t per_face = size_t(cells->width()) * size_t(cells->height());
+        return cells->index(int(p_interior / per_face), int(p_interior % size_t(cells->width())), int((p_interior % per_face) / size_t(cells->width())));
+    }
+    // The normal wind through each owned face of each interior cell's levels from the centres alone (their mean), into
+    // side_speed (project() then corrects them).
+    void face_speeds();
+    // One forward-Euler stage of the flux-form advection (advect) from p_in to r_out (halo filled): p_count volumes per
+    // padded cell of p_per fields each, those from p_first to p_last moved; p_vertical(padded, v) the speed up through
+    // the face between volumes v - 1 and v, p_side(interior, v, s) the speed out through side s.
+    template <typename Vertical, typename Side>
+    void flux_stage(const std::vector<float> &p_in, std::vector<float> &r_out, int p_count, int p_per, int p_first, int p_last, double p_dt,
+            Vertical p_vertical, Side p_side);
     void sweep(int p_colour);
-    // The wind r_wind brought from the departure point p_c.pos + p_d turned into the column's frame: the rotation
-    // carrying the departure's up onto the column's (parallel transport over the sphere; its vertical speed kept).
-    static void transport(const Column &p_c, const double p_d[3], float *r_wind);
 };

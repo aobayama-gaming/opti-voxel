@@ -47,6 +47,7 @@ Dictionary UnitTests::run(const String &p_filter) {
     context.setOption("no-path-filenames", true);
     if (!p_filter.is_empty()) {
         context.addFilter("test-case", p_filter.utf8().get_data());
+        context.setOption("no-skip", true); // a slow case (doctest::skip(), named "Slow: ...") runs when a filter names it
     }
     RunTotals::last = doctest::TestRunStats();
     const int result = context.run();

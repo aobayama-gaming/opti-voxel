@@ -319,3 +319,63 @@ TEST_CASE("WeatherFluid: a step's cost at ocean_test's size (6 x 70^2 columns, 1
     MESSAGE("WeatherFluid step: ", ms, " ms for ", fluid.cell_count(), " cells");
     CHECK(ms > 0.0);
 }
+
+// The flux-form advection: what leaves a cell enters its neighbour (the total kept to the floats' rounding), and the
+// limiter keeps a blob within its start's bounds (no new extreme: rain never negative).
+TEST_CASE("WeatherFluid: the advection conserves a scalar and keeps it within its bounds") {
+    const auto grid = std::make_shared<CubeSphereGrid>(24, 1000.0);
+    WeatherFluid::Params p;
+    p.levels = 6;
+    p.top_m = 300.0;
+    p.scalars = 1;
+    WeatherFluid fluid(grid, p);
+    const WeatherGrid &g = fluid.grid();
+    auto total = [&](double &r_lo, double &r_hi) {
+        double sum = 0.0;
+        r_lo = 1e30;
+        r_hi = -1e30;
+        for (size_t in = 0; in < g.cells(); in++) {
+            const int f = int(in / (size_t(g.width()) * size_t(g.height())));
+            const int j = int((in / size_t(g.width())) % size_t(g.height()));
+            const int i = int(in % size_t(g.width()));
+            const float *here = &fluid.state()[g.index(f, i, j) * size_t(fluid.stride())];
+            for (int k = 0; k < fluid.levels(); k++) {
+                const double v = here[fluid.scalar_offset(k, 0)];
+                sum += v * fluid.column_area_m2(in);
+                r_lo = std::min(r_lo, v);
+                r_hi = std::max(r_hi, v);
+            }
+        }
+        return sum;
+    };
+    for (int f = 0; f < g.faces(); f++) {
+        for (int j = 0; j < g.height(); j++) {
+            for (int i = 0; i < g.width(); i++) {
+                float *here = &fluid.state()[g.index(f, i, j) * size_t(fluid.stride())];
+                double pos[3], up[3];
+                g.cell_surface(f, i, j, pos, up);
+                const double l = std::sqrt(pos[0] * pos[0] + pos[1] * pos[1] + pos[2] * pos[2]);
+                const double u[3] = { 5.0 * pos[2] / l, 0.0, -5.0 * pos[0] / l };
+                for (int k = 0; k < fluid.levels(); k++) {
+                    for (int a = 0; a < 3; a++) {
+                        here[fluid.wind_offset(k) + a] = float(u[a]);
+                    }
+                    here[fluid.scalar_offset(k, 0)] = (f == 0 && i > 8 && i < 14 && j > 8 && j < 14 && k == 2) ? 1.0f : 0.0f;
+                }
+            }
+        }
+    }
+    fluid.vertical_from_centres();
+    fluid.project(1.0); // the rotation's discrete divergence out of the sides' speeds
+    double lo0, hi0;
+    const double before = total(lo0, hi0);
+    for (int s = 0; s < 100; s++) {
+        fluid.advect(fluid.max_dt());
+    }
+    double lo, hi;
+    const double after = total(lo, hi);
+    MESSAGE("a blob after 100 steps of a 5 m/s rotation: total ", after / before, " of its start, range [", lo, ", ", hi, "]");
+    CHECK(std::fabs(after / before - 1.0) < 1e-5);
+    CHECK(lo >= -1e-6);
+    CHECK(hi <= 1.0 + 1e-6);
+}
