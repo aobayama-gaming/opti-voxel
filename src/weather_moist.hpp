@@ -1,0 +1,96 @@
+#pragma once
+
+#include "weather_fluid.hpp"
+
+#include <vector>
+
+// The weather's moist physics (docs/weather.md "Moist physics"): what turns WeatherFluid's air into weather, per column
+// between its advect() and its force(). Engine-free; the reference schemes of the cloud-resolving models:
+// - Warm microphysics: Kessler (1969) as in Klemp & Wilhelmson (1978) and the DCMIP2016 reference code (kessler.f90,
+//   Ullrich; ported step for step: kessler()): vapour, cloud water and rain; the saturation adjustment (KW eq. 3.10,
+//   with its Clausius-Clapeyron denominator), autoconversion past 1 g/kg, accretion, rain falling at its terminal speed
+//   (sub-stepped under its CFL) and evaporating under the cloud; latent heat into the potential temperature.
+// - Bulk surface fluxes over each column's ground (Monin-Obukhov neutral): momentum C_D U u, sensible heat C_H U
+//   (theta_s - theta), evaporation beta C_E U (q_s(T_s) - q_v) (dew at full rate), C_D = (k / ln(z_1 / z_0))^2 at the
+//   lowest level's centre, C_H = C_E = C_D, times Params::exchange (the approved twist: the storms' spin-up is set by
+//   it, their intensity by the ratio, kept); U at least GUSTINESS (free convection at no wind).
+// - Radiation: the clear air cools CLEAR_COOLING K/day; the cloud's longwave flux is DYCOMS-II RF01's (Stevens et al.
+//   2005): F(z) = F0 exp(-Q(z, top)) + F1 exp(-Q(0, z)), Q = KAPPA int rho q_c dz, so a cloud top cools hard and drives
+//   the stratocumulus' turnover.
+// - Large-scale subsidence w = -D z on the scalars (upwind): it holds the inversion against the boundary layer's growth.
+// - The buoyancy the fluid takes: b = g ((theta - theta_ref) / theta_ref + 0.61 (q_v - q_v,ref) - q_c - q_r) (vapour
+//   lightens the air, the water weighs it).
+// The reference column (Sounding): the hydrostatic Exner function and density of the sounding the world gives, from
+// P0 at the ground.
+class WeatherMoist {
+public:
+    enum Scalar {
+        THETA, // potential temperature (K)
+        QV, // vapour (kg/kg)
+        QC, // cloud water
+        QR, // rain
+        SCALARS,
+    };
+
+    static constexpr double GRAVITY = WeatherFluid::GRAVITY;
+    static constexpr double LATENT = 2.5e6; // J/kg
+    static constexpr double CP = 1003.0; // J/(kg K), kessler.f90's
+    static constexpr double KAPPA_EXNER = 0.2875; // R_d / c_p, kessler.f90's
+    static constexpr double R_D = 287.0;
+    static constexpr double P0_MB = 1000.0; // the ground's pressure
+    static constexpr double VON_KARMAN = 0.4;
+    static constexpr double GUSTINESS = 1.0; // m/s
+    static constexpr double CLEAR_COOLING = 2.0; // K/day
+    static constexpr double LW_F0 = 70.0; // W/m^2, DYCOMS-II RF01
+    static constexpr double LW_F1 = 22.0;
+    static constexpr double LW_KAPPA = 85.0; // m^2/kg
+
+    // The sounding: the reference potential temperature and vapour per level (the buoyancy's reference; the world's
+    // air at rest), and their hydrostatic Exner function, density and pressure.
+    struct Sounding {
+        std::vector<double> theta;
+        std::vector<double> qv;
+        std::vector<double> exner;
+        std::vector<double> rho; // kg/m^3
+        std::vector<double> z; // the levels' centres (m)
+    };
+    // A sounding of p_theta and p_qv per level of p_fluid.
+    static Sounding sounding(const WeatherFluid &p_fluid, const std::vector<double> &p_theta, const std::vector<double> &p_qv);
+
+    // A column's ground (the 2D forcing): its temperature, how wet it is (beta: 1 a sea, 0 a desert) and its
+    // roughness length.
+    struct Ground {
+        float temp_k = 300.0f;
+        float wetness = 1.0f;
+        float z0_m = 1.5e-4f;
+    };
+
+    struct Params {
+        double exchange = 15.0; // the bulk coefficients' twist (both, the ratio kept)
+        double subsidence_per_s = 1.5e-5; // D: w = -D z
+    };
+
+    WeatherMoist(const WeatherFluid &p_fluid, const Sounding &p_sounding, const Params &p_params);
+
+    const Sounding &reference() const { return sound; }
+    // Everything above on p_fluid's state for p_dt (p_ground per interior cell), then the buoyancy (per fluid cell).
+    void apply(WeatherFluid &p_fluid, const std::vector<Ground> &p_ground, double p_dt, float *r_buoyancy);
+    // The rain reaching each column's ground in the last apply() (m of water per second), per interior cell.
+    const std::vector<float> &rain() const { return rain_rate; }
+
+    // The saturation mixing ratio at temperature p_t (K) and pressure p_p_mb (Tetens as in KW eq. 2.11).
+    static double saturation(double p_t, double p_p_mb);
+    // The bulk exchange coefficient at height p_z_m over a roughness p_z0_m (neutral).
+    static double neutral_exchange(double p_z_m, double p_z0_m);
+    // The Kessler step on one column (kessler.f90): theta, qv, qc, qr per level, the column's rho, exner and z; the
+    // precipitation rate (m of water per second) returned.
+    static double kessler(double *r_theta, double *r_qv, double *r_qc, double *r_qr, const double *p_rho, const double *p_exner,
+            const double *p_z, int p_levels, double p_dt);
+    // The heating rate (K/s) of the cloud's longwave flux per level of one column (qc per level).
+    static void longwave(const double *p_qc, const double *p_rho, const double *p_exner, double p_dz, int p_levels, double *r_heating);
+
+private:
+    Sounding sound;
+    Params params;
+    std::vector<float> rain_rate;
+};

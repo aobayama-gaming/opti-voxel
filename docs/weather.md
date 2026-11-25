@@ -127,10 +127,32 @@ tests; `WeatherSim` stays the live path until the moisture lands.
   divergence is left (~5% of `w / dz`) is the collocated projection's, not the solver's.
 - **Cost** (unit test, this laptop, 2026-11-25): a dry step at `ocean_test`'s size (6 x 70^2 columns x 15 levels,
   441k cells) takes ~34 ms on the worker pool. At 5 Hz that is ~17% of the tick's time.
-- **Next:** the moist physics between `advect` and `force` (liquid potential temperature and total water, Bolton's
-  saturation and the exact adjustment, Kessler's warm rain, the bulk surface fluxes, the longwave cooling and the
-  large-scale subsidence), tested on a BOMEX-like case and the fog cases; then the physical forcing (ground K and its
-  day, wetness, z0, the sea's temperature), the typhoon test on an f-plane, the clouds' cost.
+- **`WeatherMoist`** (`src/weather_moist.*`, engine-free): the moist physics between `advect` and `force`, per column,
+  the fluid's scalars potential temperature, vapour, cloud water, rain. Kessler's warm rain ported step for step from
+  the DCMIP2016 reference (`kessler.f90`, Klemp & Wilhelmson 1978): the saturation adjustment (Tetens, with its
+  Clausius-Clapeyron denominator, latent heat into theta), autoconversion past 1 g/kg, accretion, rain falling at its
+  terminal speed (sub-stepped under its CFL) and evaporating. The bulk surface fluxes into the lowest level (drag,
+  sensible heat, evaporation times the ground's wetness, dew at full rate; `C = (0.4 / ln(z1 / z0))^2` at its centre,
+  times `Params::exchange` = 15, the approved twist; at least 1 m/s of gustiness). Radiation: clear air cools 2 K/day,
+  a cloud's longwave flux is DYCOMS-II RF01's (`F0 e^-Q(z,top) + F1 e^-Q(0,z)`, Stevens et al. 2005). Subsidence
+  `w = -D z` on the scalars (`D` = 1.5e-5 /s: it holds a ~300 m inversion). The buoyancy `g ((theta - theta_ref) /
+  theta_ref + 0.61 (q_v - q_v,ref) - q_c - q_r)` against the world's sounding (`WeatherMoist::sounding`: its
+  hydrostatic Exner function and density from 1000 mb at the ground). A column's ground is 2D (`Ground`: temperature,
+  wetness, roughness; relief ignored).
+- **Moist tests** (`test_weather_moist.cpp`): Tetens' saturation at 0, 20, 30 C; one adjustment keeps the water and
+  the liquid potential temperature; a column's rain balances its water (0.431 kg/m^2 lost, 0.431 rained); a cloud's
+  top cools 4.7 K/h, clear air not at all. **Trade-wind cumulus** (BOMEX, Siebesma et al. 2003, fitted under 600 m: a
+  mixed layer at 298 K and 18 g/kg, an inversion of 4 K at 300-340 m, a sea 1.5 K warmer, 0.1 K of noise): after 20
+  minutes cumulus covering 2 to 5% of each level from 180 to 300 m (BOMEX's 5-10% near the base), no cloud at the
+  ground nor above the inversion: broken, clear air between them. **Sea fog** (98% humidity over ground 6 K colder:
+  its dew point above the ground): after 40 minutes the lowest level is cloud everywhere, 180 m clear. With the ground
+  only 4 K colder no fog forms in 30 minutes: cooled and dried at the same rate the lowest level moves on the mixing
+  line to the ground's saturated state, which only crosses saturation near its end; the 40 m lowest cell averages the
+  surface layer where real fog starts.
+- **Next:** the physical forcing (each biome's ground temperature and its day, wetness, roughness; the sea's
+  temperature; the sounding from the world) and the wiring: `Weather` steps the fluid and the physics at 5 Hz,
+  publishes each level's cloud water, the clouds blend the last two states carried by the wind; `WeatherSim` goes.
+  Then the typhoon test on an f-plane and the clouds' cost.
 
 ## Forcing
 Each cell's biome weather (`Climate::BiomeWeather`, a biome's `"weather"` block, `docs/climate.md`): the cell's biome
@@ -200,8 +222,9 @@ Agreed with the user (2026-11-24). Stacked PRs, `feature/weather-*`:
 7. **Levels:** the simulation in levels up to `top_m` (hydrostatic pressure, vertical wind, parcel convection under an
    inversion, latent heat, drying aloft, saturation from the actual temperature), the report's cross-section.
 8. **3D clouds:** the cloud layer from the ground to `top_m`, each level's cloud a slice of the texture (`docs/look.md`).
-9. **Fluid** (the rebuild, "Fluid" above): the 3D dynamics and its tests. Then the moisture, the physical forcing,
-   the typhoon test and the clouds' cost, then the torus's grid.
+9. **Fluid** (the rebuild, "Fluid" above): the 3D dynamics and its tests.
+10. **Moist physics:** `WeatherMoist` and its tests (cumulus, fog). Then the physical forcing and the wiring, the
+    typhoon test and the clouds' cost, then the torus's grid.
 
 Later: curl-noise gusts, the FFT sea reading the wind (U10, fetch, swell), rain and ground wetness, saving the weather,
 the GPU if the CPU tick is too slow.

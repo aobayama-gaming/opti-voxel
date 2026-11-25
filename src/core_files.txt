@@ -172,6 +172,8 @@ src/weather_sim.cpp
 src/weather_fluid.hpp
 src/weather_fluid.cpp
 src/weather_vec.hpp
+src/weather_moist.hpp
+src/weather_moist.cpp
 src/weather.hpp
 src/weather.cpp
 src/weather_report.hpp
