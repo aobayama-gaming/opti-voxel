@@ -1,38 +1,21 @@
 #include "weather_sim.hpp"
 
 #include "parallel_for.hpp"
+#include "weather_vec.hpp"
 
 #include "ov/math.hpp"
 
 #include <cmath>
 
+using weather_vec::cross3;
+using weather_vec::dot3;
+using weather_vec::relax;
+using weather_vec::tangent;
+
 namespace {
 
 constexpr int F = WeatherSim::FIELDS;
 constexpr int D = WeatherSim::DIAGS;
-
-double dot3(const double p_a[3], const double p_b[3]) {
-    return p_a[0] * p_b[0] + p_a[1] * p_b[1] + p_a[2] * p_b[2];
-}
-
-void cross3(const double p_a[3], const double p_b[3], double r[3]) {
-    r[0] = p_a[1] * p_b[2] - p_a[2] * p_b[1];
-    r[1] = p_a[2] * p_b[0] - p_a[0] * p_b[2];
-    r[2] = p_a[0] * p_b[1] - p_a[1] * p_b[0];
-}
-
-// p_v minus its component along the unit p_n.
-void tangent(const double p_n[3], double r_v[3]) {
-    const double d = dot3(p_n, r_v);
-    for (int k = 0; k < 3; k++) {
-        r_v[k] -= d * p_n[k];
-    }
-}
-
-// The fraction of the way to its target a quantity relaxing over p_tau goes in p_dt.
-double relax(double p_dt, double p_tau) {
-    return 1.0 - std::exp(-p_dt / p_tau);
-}
 
 uint64_t mix64(uint64_t p_x) {
     p_x += 0x9E3779B97F4A7C15ull;
@@ -127,14 +110,7 @@ void WeatherSim::make_cells(const std::vector<Climate::BiomeWeather> &p_weather)
 }
 
 void WeatherSim::coriolis(const double p_up[3], double p_f, double p_dt, double r_wind[3]) {
-    const double a = -p_f * p_dt;
-    double nu[3];
-    cross3(p_up, r_wind, nu);
-    const double c = std::cos(a);
-    const double s = std::sin(a);
-    for (int k = 0; k < 3; k++) {
-        r_wind[k] = r_wind[k] * c + nu[k] * s;
-    }
+    weather_vec::coriolis(p_up, p_f, p_dt, r_wind);
 }
 
 void WeatherSim::prevailing(const double p_up[3], double p_speed, double r_wind[3]) {

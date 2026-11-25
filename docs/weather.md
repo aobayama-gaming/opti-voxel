@@ -102,6 +102,36 @@ over the rows (LOW priority) gives the same bits on any thread count; the halos 
   0.1 s tick on the worker (4 levels: ~4 ms), its 20 game minutes of spin-up ~14 s at load (TODO: start the columns
   nearer their balance, which the spin-up only waits for). At 10 ticks a second that is ~10% of a core, off the frame.
 
+## Fluid (the rebuild, not wired yet)
+The levelled `WeatherSim` above is hydrostatic: at 45 m cells, as tall as they are wide, it cannot hold a thermal
+nor the air sinking round it, the clear gaps between cumulus, so it makes one flat deck (seen in game, 2026-11-25).
+Its replacement, approved with the user: the non-hydrostatic moist Boussinesq equations of the cloud-resolving models
+(SAM, Khairoutdinov & Randall 2003; Harris et al. 2003; Hadrich et al. 2020 "Stormscapes"), real constants, the
+forcing physical and 2D (relief ignored: the SDF as the ground boundary comes later). Built in stages, each with its
+tests; `WeatherSim` stays the live path until the moisture lands.
+- **`WeatherFluid`** (`src/weather_fluid.*`, engine-free): the dynamics only, `du/dt + u . grad u = -grad p + b up -
+  f up x u`, `div u = 0`, over a `WeatherGrid`'s columns in `levels` levels of `top / levels` (shallow atmosphere).
+  A padded cell's record holds per level the wind (3D, planet axes: tangent part and w) and the physics' scalars.
+  A step: `advect` (semi-Lagrangian, the departure point in the face's own cells through the cell's dual vectors, no
+  `locate`, bilinear in the cells and linear in the levels; `max_dt` keeps the wind within half a cell or level),
+  the caller's physics on the state, `force` (the buoyancy along the up, the Coriolis turn about it, a sponge damping
+  w in the top fifth), `project` (the pressure from the fluxes through each cell's 6 faces, ground and top rigid,
+  red-black Gauss-Seidel over-relaxed 1.6, 20 sweeps warm-started; the wind at the centres loses dt times its
+  central gradient: an approximate projection, collocated, no checkerboard). Rows run in `parallel_for`, the same
+  bits on any thread count.
+- **Tests** (`test_weather_fluid.cpp`): stratified air at rest stays exactly at rest; three projections take a
+  converging updraft's divergence down 68x; a 2 K warm bubble of 150 m (the dry thermal of Robert 1993 / Bryan &
+  Fritsch 2002 at the game's scale) rises 86 m in 120 s at 3.2 m/s, the thermal's `sqrt(g' R)` (3.1 m/s), every
+  level's net vertical flux within 5% of its total (the air round it sinks as much: the return flow spreads wide,
+  ~0.25 m/s over a ring twice its radius); the same bits run to run. A 300-sweep solve changes nothing: what
+  divergence is left (~5% of `w / dz`) is the collocated projection's, not the solver's.
+- **Cost** (unit test, this laptop, 2026-11-25): a dry step at `ocean_test`'s size (6 x 70^2 columns x 15 levels,
+  441k cells) takes ~34 ms on the worker pool. At 5 Hz that is ~17% of the tick's time.
+- **Next:** the moist physics between `advect` and `force` (liquid potential temperature and total water, Bolton's
+  saturation and the exact adjustment, Kessler's warm rain, the bulk surface fluxes, the longwave cooling and the
+  large-scale subsidence), tested on a BOMEX-like case and the fog cases; then the physical forcing (ground K and its
+  day, wetness, z0, the sea's temperature), the typhoon test on an f-plane, the clouds' cost.
+
 ## Forcing
 Each cell's biome weather (`Climate::BiomeWeather`, a biome's `"weather"` block, `docs/climate.md`): the cell's biome
 weights at its centre on the ground blend their biomes' values. `wind` scales the prevailing wind there, `drag` the
@@ -169,8 +199,9 @@ Agreed with the user (2026-11-24). Stacked PRs, `feature/weather-*`:
    metres; the planet file's `grid` becomes `cell_m`.
 7. **Levels:** the simulation in levels up to `top_m` (hydrostatic pressure, vertical wind, parcel convection under an
    inversion, latent heat, drying aloft, saturation from the actual temperature), the report's cross-section.
-8. **3D clouds:** the cloud layer from the ground to `top_m`, each level's cloud a slice of the texture (`docs/look.md`). Then
-   the torus's grid.
+8. **3D clouds:** the cloud layer from the ground to `top_m`, each level's cloud a slice of the texture (`docs/look.md`).
+9. **Fluid** (the rebuild, "Fluid" above): the 3D dynamics and its tests. Then the moisture, the physical forcing,
+   the typhoon test and the clouds' cost, then the torus's grid.
 
 Later: curl-noise gusts, the FFT sea reading the wind (U10, fetch, swell), rain and ground wetness, saving the weather,
 the GPU if the CPU tick is too slow.

@@ -169,6 +169,9 @@ src/weather_grid.hpp
 src/weather_grid.cpp
 src/weather_sim.hpp
 src/weather_sim.cpp
+src/weather_fluid.hpp
+src/weather_fluid.cpp
+src/weather_vec.hpp
 src/weather.hpp
 src/weather.cpp
 src/weather_report.hpp
