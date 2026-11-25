@@ -98,6 +98,8 @@ public:
     // The large-scale wind and the storms' seeds for p_dt of step p_step; the storms started so far.
     void apply(WeatherFluid &p_fluid, double p_dt, uint64_t p_step);
     uint64_t storms() const { return storms_started; }
+    // Each interior cell's biome weather (the constructor's).
+    const std::vector<Climate::BiomeWeather> &cell_climate() const { return climate; }
     // The forcing over the planet: the grounds' temperatures (min, area mean, max), the wet share (wetness 0.9 and
     // more), the sounding's mixed layer, per hemisphere (y > 0 the north).
     ov::Value summary(const WeatherFluid &p_fluid) const;

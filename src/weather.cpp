@@ -1,5 +1,7 @@
 #include "weather.hpp"
 
+#include "weather_debug.hpp"
+
 #include "parallel_for.hpp"
 #include "trace.hpp"
 
@@ -7,8 +9,9 @@
 
 #include <cmath>
 
-Weather::Weather(const WorldFile::Weather &p_weather, const BaseSurface &p_base, double p_voxel_m, uint32_t p_seed, ForcingFn p_forcing) :
-        settings(p_weather), base(p_base), voxel_m(p_voxel_m), forcing(std::move(p_forcing)) {
+Weather::Weather(const WorldFile::Weather &p_weather, const BaseSurface &p_base, double p_voxel_m, uint32_t p_seed, ForcingFn p_forcing,
+        bool p_probing) :
+        settings(p_weather), base(p_base), voxel_m(p_voxel_m), forcing(std::move(p_forcing)), probing(p_probing) {
     ov::str why;
     cells = WeatherGrid::for_base(p_base, p_voxel_m, p_weather.cell_m, &why);
     if (!cells) {
@@ -209,6 +212,8 @@ bool Weather::step() {
         done++;
     }
     std::vector<float> state = look();
+    std::shared_ptr<const WeatherDebug::Snapshot> snapshot =
+            probing ? WeatherDebug::Snapshot::capture(*fluid, *moist, *convection, *drive, ground, buoyancy, sim_time_s) : nullptr;
     double day_k = 0.0, night_k = 0.0;
     drive->day_night(*fluid, sun_at(sim_time_s), ground, day_k, night_k);
     double rising = 0.0, top_sum = 0.0;
@@ -228,6 +233,7 @@ bool Weather::step() {
         next_done = done;
         next_time_s = sim_time_s;
         next_storms = drive->storms();
+        next_probe = std::move(snapshot);
         ready_state = true;
         started = true;
         more = done < due;
@@ -262,6 +268,7 @@ bool Weather::update(uint64_t p_now_usec) {
             live_done = next_done;
             live_time_s = next_time_s;
             live_storms = next_storms;
+            live_probe = std::move(next_probe);
             has_live = true;
         }
         // The clock runs from the first state (the forcing and the spin-up take what they take).

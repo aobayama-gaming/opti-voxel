@@ -1,12 +1,13 @@
 #include "weather_report.hpp"
 
-#include "sdf_cascade.hpp"
 #include "weather.hpp"
+#include "weather_debug.hpp"
 #include "world_file.hpp"
 
 #include "ov/clock.hpp"
 #include "ov/files.hpp"
 #include "ov/format.hpp"
+#include "ov/json.hpp"
 #include "ov/math.hpp"
 #include "ov/png.hpp"
 
@@ -149,38 +150,20 @@ bool write_png(const ov::str &p_path, int p_w, int p_h, const std::vector<uint8_
 // p_world's weather mapped at p_minutes.
 WeatherReport::Frames run_world(const WorldFile &p_world, const std::vector<double> &p_minutes, int p_width) {
     WeatherReport::Frames out;
-    SDFCascade sdf;
-    ChunkParam param;
-    out.error = sdf.configure_world(p_world, param);
-    if (out.error.empty() && !p_world.weather.on) {
-        out.error = "weather: the world has none (not a sphere, or \"weather\": {\"on\": false}).";
-    }
+    WeatherDebug::Session session;
+    out.error = session.open(p_world, -1.0, false);
     if (!out.error.empty()) {
         return out;
     }
-    const Climate::Table *climate = sdf.get_climate();
-    const SDFCascade *cascade = &sdf;
-    Weather::ForcingFn forcing;
-    if (climate != nullptr) {
-        forcing = [climate, cascade](const VoxelPos &p_voxel, int p_m) { return Weather::forcing_at(*climate, cascade->program(), p_voxel, p_m); };
-    }
-    Weather weather(p_world.weather, sdf.get_base(), p_world.voxel_m, p_world.seed, forcing);
-    // The report's own clock: one tick of real time per update, each waited for.
-    const uint64_t period_usec = uint64_t(std::llround(1e6 / p_world.weather.tick_hz));
-    uint64_t now = 1;
-    weather.update(now);
-    weather.finish();
-    weather.update(now);
+    const Weather &weather = session.weather();
+    session.step(0); // the forcing and the spin-up
     const double start_s = weather.game_s();
     out.width = ov::clamp(p_width, 64, 4096);
     out.height = out.width / 2;
     out.section_height = weather.levels() * WeatherReport::SECTION_PX;
     for (const double minutes : p_minutes) {
         while (weather.game_s() < start_s + minutes * 60.0 - 1e-6) {
-            now += period_usec;
-            weather.update(now); // asks for this period's tick
-            weather.finish();
-            weather.update(now); // collects it (the clock didn't move: no new tick)
+            session.step(1);
         }
         out.frames.push_back(map_state(weather, out.width, 2.0 * ov::max(p_world.weather.prevailing_mps, 1.0)));
         out.frames.back().minutes = minutes;

@@ -6,6 +6,9 @@ Every check tool in detail. The short list of what to run when is in `CLAUDE.md`
   headless Godot, a few seconds, no GPU. `filter` is a doctest wildcard on test names
   (`'ChunkMath*'`). Tests are compiled into non-release builds only (`OPTI_VOXEL_TESTS`).
 - `tools/format.sh [--check] [files]`: clang-format 23.1.3 through `uvx` on `src/`.
+- `res://debug/weather_debug/weather_debug.tscn` (a window): the weather debugger, every field of the simulation per
+  cell and level on the planet's cells, a column's table and section (`docs/weather.md` "Debugger"). Headless with
+  `--pick=FACE,I,J --shot=PNG --ticks=N` it prints the picked column after N ticks.
 - `tools/biome_mixer.sh [--open=PATH] [--biome=NAME] [--world] [--set=ID.KEY=V] [--shot=PATH]` opens the biome mixer (a window;
   `docs/climate.md`); `--check` is its headless self-test (world.json read and written back the same, every biome and a
   graph of every engine kind drawn by the engine, `ClimateReportNode.preview`, and every node's UI built, edits, the

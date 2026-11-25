@@ -182,3 +182,5 @@ src/weather_report.hpp
 src/weather_report.cpp
 src/weather_cloud_fraction.hpp
 src/weather_cloud_fraction.cpp
+src/weather_debug.cpp
+src/weather_debug.hpp

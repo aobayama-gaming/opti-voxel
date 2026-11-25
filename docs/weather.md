@@ -330,6 +330,29 @@ The biome mixer (`debug/biome_mixer/`) edits a biome's weather and shows a world
   accepts; unit tests run `WeatherReport::frames` from a world's text (sizes, the minute's time, no weather refused)
   and parse every key at its bounds and refuse it past them.
 
+## Debugger
+`res://debug/weather_debug/weather_debug.tscn`: a world's weather alone (no terrain, no mesher, no clouds), every field
+the simulation holds, cell by cell. One path: the engine's own `Weather`, built with `p_probing` so that each published
+state also carries a `WeatherDebug::Snapshot` (`src/weather_debug.*`, engine-free: the fields captured on the worker
+after the tick, field-major) and run by a `WeatherDebug::Session` (the world's SDF for the forcing, the weather, a clock
+of its own; the report runs through one too). `WeatherDebugNode` (adapter) only maps them onto Godot's types.
+- **Fields:** per cell and level the wind (east, north, w, speed), theta and its anomaly over the sounding, the
+  temperature, qv, qs, the relative humidity, qc, qr, the cloudy share, Q1, sigma_s, the updraft's water, the buoyancy
+  and the pressure; per column the ground (its temperature now and its biomes' mean, the ground over the lowest air, its
+  wetness, z0, thermal inertia, storm odds), the surface's sensible and latent fluxes (W/m^2), u*, the rain, the updraft's
+  top, the cover (the largest share) and the cloud water path.
+- **The view:** the planet is the grid's cells (`planet_mesh`: a quad per cell, its edges drawn), coloured by the field at
+  the level (Turbo; a signed field blue-white-red round 0; the range the field's own unless locked), the wind at that
+  level as lines. A click picks a cell: its column as a table (every level, the shown one yellow; the column's values
+  under it) and the section through it (its face's row, the levels up).
+- **Clock:** paused at the spin-up's end; space runs it (speed x0.1 to x20, the worker the limit: Weather::MAX_BEHIND),
+  N one tick, M ten. The spin-up is the world file's unless the field or `--spin_up=` says (0: watch it from the start).
+- **Run:** `godot --path adapter/godot/project res://debug/weather_debug/weather_debug.tscn -- [--world=PATH]
+  [--spin_up=S] [--field=NAME] [--level=K] [--pick=FACE,I,J] [--shot=PNG --ticks=N]` (`--shot`: N ticks, the window
+  saved, the picked column printed, quit; headless it prints the column without the picture).
+- **Checked:** `test_weather_debug.cpp`: a probing weather's snapshot is its published state (the cloud water and the
+  ground level's temperature), slices and sections read what `at()` reads, no snapshot unless probing.
+
 ## Plan
 Agreed with the user (2026-11-24). Stacked PRs, `feature/weather-*`:
 1. **Grid** (#178): the cube sphere, its halo and sampling, the GLSL lookup.

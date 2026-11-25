@@ -17,6 +17,7 @@
 #include "quad_pool_spike.hpp"
 #include "voxel_sky.hpp"
 #include "voxel_terrain.hpp"
+#include "weather_debug_node.hpp"
 
 #include "godot_conv.hpp"
 #include "godot_executor.hpp"
@@ -83,6 +84,7 @@ void initialize_gdextension_types(ModuleInitializationLevel p_level) {
     GDREGISTER_CLASS(FrameSpike);
     GDREGISTER_CLASS(CascadeSpike);
     GDREGISTER_CLASS(ClimateReportNode);
+    GDREGISTER_CLASS(WeatherDebugNode);
 #ifdef OPTI_VOXEL_TESTS
     GDREGISTER_CLASS(UnitTests);
 #endif

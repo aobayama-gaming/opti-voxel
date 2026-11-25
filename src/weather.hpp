@@ -6,6 +6,10 @@
 #include "weather_forcing.hpp"
 #include "world_file.hpp"
 
+namespace WeatherDebug {
+struct Snapshot;
+}
+
 #include "ov/executor.hpp"
 #include "ov/value.hpp"
 
@@ -66,8 +70,10 @@ public:
     };
 
     // The weather p_weather (WorldFile::Weather, on) over p_base (voxel p_voxel_m) on its grid (WeatherGrid::for_base, which
-    // the world file checked), seeded by the planet's seed.
-    Weather(const WorldFile::Weather &p_weather, const BaseSurface &p_base, double p_voxel_m, uint32_t p_seed, ForcingFn p_forcing);
+    // the world file checked), seeded by the planet's seed; p_probing: every published state also keeps the whole
+    // simulation's (probe(), the debugger's).
+    Weather(const WorldFile::Weather &p_weather, const BaseSurface &p_base, double p_voxel_m, uint32_t p_seed, ForcingFn p_forcing,
+            bool p_probing = false);
     ~Weather() override;
     Weather(const Weather &) = delete;
     Weather &operator=(const Weather &) = delete;
@@ -116,6 +122,8 @@ public:
     // the first.
     double shown_s() const;
     ov::Value get_stats() const;
+    // The latest state's whole simulation (WeatherDebug::Snapshot; null unless probing).
+    std::shared_ptr<const WeatherDebug::Snapshot> probe() const { return live_probe; }
 
     // The worker's: the forcing and the spin-up first, then one tick per call while ticks are due.
     bool step() override;
@@ -130,6 +138,7 @@ private:
     double voxel_m = 1.0;
     ForcingFn forcing;
     int forcing_level = 0;
+    bool probing = false;
     // The worker's.
     std::unique_ptr<WeatherFluid> fluid;
     std::unique_ptr<WeatherMoist> moist;
@@ -154,6 +163,7 @@ private:
     uint64_t next_done = 0;
     double next_time_s = 0.0;
     uint64_t next_storms = 0;
+    std::shared_ptr<const WeatherDebug::Snapshot> next_probe;
     Float3 sun_dir{ 0.0f, 0.0f, 1.0f }; // an equinox sun until a host sets one (the report's)
     TimingStat tick_stat;
     TimingStat forcing_stat;
@@ -173,6 +183,7 @@ private:
     uint64_t live_storms = 0;
     std::vector<float> live_look;
     std::vector<float> prev_look;
+    std::shared_ptr<const WeatherDebug::Snapshot> live_probe;
 
     void build();
     // p_dt game seconds of fluid, physics and forcing.
