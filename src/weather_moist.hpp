@@ -54,7 +54,7 @@ public:
     static constexpr double LW_F1 = 22.0;
     static constexpr double LW_KAPPA = 85.0; // m^2/kg
     static constexpr double C_S = 0.18; // Smagorinsky's (Lilly)
-    static constexpr double PRANDTL = 1.0 / 3.0;
+    static constexpr double PRANDTL = WeatherFluid::PRANDTL;
 
     // The sounding: the reference potential temperature and vapour per level (the buoyancy's reference; the world's
     // air at rest), and their hydrostatic Exner function, density and pressure.

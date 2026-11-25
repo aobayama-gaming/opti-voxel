@@ -121,8 +121,25 @@ cube's 4-fold symmetry seeds what is left: clumps, no swirls. Two additions, one
   by default**: 0.05 balances the dissipation at 2 cells (a 2-cell vortex of 4 m/s keeps 0.26 of its peak over 5
   minutes without it, ~1.0 at 0.05, 2.4 at 0.15, 6 at 0.3: the smoke solvers' 0.3 runs away on a grid this coarse,
   `test_weather_turbulence.cpp`), but on the planet it cleared every cloud, even at 0.02 (table below; the whole
-  curl did too, sharpening the shear over the ground): it speeds the low wind, the boundary layer warms 0.2-0.7 K and
-  the updrafts stop 50-100 m lower, under the cloud base. What it does to the moist boundary layer is open.
+  curl did too, sharpening the shear over the ground). Times the subgrid closure's stability factor
+  `sqrt(max(1 - Ri / Pr, 0))`: unlimited it stirred the stable air over the inversion (rms w 0.03-0.1 -> 0.5-0.76 m/s,
+  K 0 -> 0.4-1 m^2/s, the inversion's jump 2.35 -> 0.57 K). Why it clears the clouds, measured on a trade-wind sea
+  (6 x 32^2 columns, minutes 15-30, the game's step order, 2026-11-25):
+
+  | epsilon | peak sigma_w / w* | cloudy columns | RH at 180 m | updraft cloud water |
+  |---|---|---|---|---|
+  | 0 | 0.40 | 86% | 0.996 | 3.8e-6 |
+  | 0.005 | 0.41 | 76% | 0.994 | 3.2e-6 |
+  | 0.01 | 0.41 | 54% | 0.984 | 1.2e-6 |
+  | 0.02 | 0.51 | 1.8% | 0.940 | 8e-10 |
+  | 0.05 | 0.8-0.9 | 0% | 0.86 | 0 |
+
+  More resolved stirring entrains the dry, warm air over the inversion into the cloud layer (the layer warms 0.5-1 K,
+  the air over the inversion gains 1-3 g/kg; without the shallow convection the same: not a double count). The clouds
+  die long before the eddies are unphysical (0.51 w* at 0.02; convective boundary layers peak ~0.6 w*): a cell is
+  cloudy only when its mean is saturated, so the cloud deck here lives at RH 0.99, kept that wet by the grid's
+  under-mixing, and a 5% drier mean clears it. Real cumulus form at a mean RH of ~0.8-0.9 because the air inside a
+  cell varies; the model has no such variance (the plan: a statistical cloud fraction, Sommeria & Deardorff 1977).
 - **Kicks** (`WeatherForcing::kicks`, in `apply`): small swirls of random sign the grid's symmetry would never start,
   a stochastic backscatter (Shutts 2005, the motion under the grid fed back). Each step a column starts one with a
   chance that puts a new one over any point every `KICK_EVERY_S` (60 s) on average (a hash of the seed, the step and

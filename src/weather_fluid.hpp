@@ -27,7 +27,10 @@
 // - The vorticity confinement (Fedkiw, Stam & Jensen 2001, "Visual simulation of smoke"; Harris 2003's clouds): the
 //   curl w of the wind (central differences, the neighbours' winds as they are: the sphere's turn over a cell is 2% of a
 //   radian), N = grad |w| / |grad |w||, the force confinement D (N x w), D the cell's (width^2 dz)^(1/3): it puts back
-//   the small swirls the grid's dissipation takes out.
+//   the small swirls the grid's dissipation takes out. Times the closure's stability factor sqrt(max(1 - Ri / Pr, 0))
+//   (Ri = N^2 / S^2 from scalar 0's potential temperature and the wind's vertical shear; 1 where the air is unstable):
+//   only where the air can be turbulent. Unlimited, it stirred the inversion over the cumulus (rms w 0.03 -> 0.7 m/s
+//   above it), mixed the dry air above into the cloud layer and cleared every cloud.
 // - The projection is the fluxes through each cell's 6 faces (4 sides, a top, a bottom; ground and top rigid): the
 //   pressure solves sum_f a_f (p_f - p) = (sum_f flux_f) / dt with a_f = face area over the centres' distance,
 //   red-black Gauss-Seidel (over-relaxed) warm-started from the last step's pressure; the wind at the centres then
@@ -99,6 +102,7 @@ public:
     // The buoyancy g (theta - p_theta_ref[level]) / THETA_0 of scalar p_scalar (a potential temperature, K): dry air's.
     static constexpr double GRAVITY = 9.81;
     static constexpr double THETA_0 = 300.0; // the Boussinesq reference
+    static constexpr double PRANDTL = 1.0 / 3.0; // the turbulent Prandtl number (the subgrid closures' stability limit)
     void dry_buoyancy(int p_scalar, const std::vector<double> &p_theta_ref, float *r_buoyancy) const;
     // The flux divergence (1/s) of the wind now at an interior cell and level (the projection's measure).
     double divergence(size_t p_interior, int p_level) const;
@@ -143,6 +147,8 @@ private:
     // level, p_per its floats per level), from the neighbours p_nb and the levels round p_level.
     void gradient(const Column &p_c, const float *p_f, size_t p_here, const size_t p_nb[SIDES], int p_stride, int p_per, int p_at, int p_level,
             double r_g[3]) const;
+    // The share of the confinement a cell's level p_level takes: Lilly's stability factor (see the top).
+    double turbulent_share(const float *p_cell, const float p_up[3], int p_level) const;
     // The wind r_wind brought from the departure point p_c.pos + p_d turned into the column's frame: the rotation
     // carrying the departure's up onto the column's (parallel transport over the sphere; its vertical speed kept).
     static void transport(const Column &p_c, const double p_d[3], float *r_wind);

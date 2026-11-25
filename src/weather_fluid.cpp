@@ -252,6 +252,26 @@ void WeatherFluid::gradient(const Column &p_c, const float *p_f, size_t p_here, 
     }
 }
 
+double WeatherFluid::turbulent_share(const float *p_cell, const float p_up[3], int p_level) const {
+    const int k0 = ov::max(p_level - 1, 0), k1 = ov::min(p_level + 1, params.levels - 1);
+    const double span = double(k1 - k0) * dz;
+    const double n2 = GRAVITY / THETA_0 * (double(p_cell[scalar_offset(k1, 0)]) - double(p_cell[scalar_offset(k0, 0)])) / span;
+    if (n2 <= 0.0) {
+        return 1.0;
+    }
+    const float *a = &p_cell[wind_offset(k1)];
+    const float *b = &p_cell[wind_offset(k0)];
+    double d[3] = { double(a[0]) - b[0], double(a[1]) - b[1], double(a[2]) - b[2] };
+    const double along = d[0] * p_up[0] + d[1] * p_up[1] + d[2] * p_up[2];
+    double s2 = 0.0;
+    for (int i = 0; i < 3; i++) {
+        d[i] -= along * p_up[i];
+        s2 += d[i] * d[i];
+    }
+    s2 /= span * span;
+    return s2 > n2 / PRANDTL ? std::sqrt(1.0 - n2 / (PRANDTL * s2)) : 0.0;
+}
+
 void WeatherFluid::confine(double p_dt) {
     if (!(params.confinement > 0.0)) {
         return;
@@ -304,10 +324,14 @@ void WeatherFluid::confine(double p_dt) {
                 if (len < 1e-12) {
                     continue;
                 }
+                const double share = params.scalars > 0 ? turbulent_share(u, c.up, k) : 1.0;
+                if (share <= 0.0) {
+                    continue;
+                }
                 const float *w = &vort[(here * size_t(levels) + size_t(k)) * 3];
                 const double f[3] = { (n[1] * w[2] - n[2] * w[1]) / len, (n[2] * w[0] - n[0] * w[2]) / len, (n[0] * w[1] - n[1] * w[0]) / len };
                 for (int a = 0; a < 3; a++) {
-                    u[wind_offset(k) + a] += float(push * f[a]);
+                    u[wind_offset(k) + a] += float(push * share * f[a]);
                 }
             }
         } }, ov::Priority::LOW);
