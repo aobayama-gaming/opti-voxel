@@ -128,8 +128,11 @@ public:
 
     // The world's planet radius in metres; 0 the flat world.
     double get_planet_radius() const;
-    // The direction towards the sun (render space; VoxelSky, from its light): the atmosphere's camera volume.
+    // The direction towards the scene's sun (render space; VoxelSky, from its light as authored): the atmosphere's camera
+    // volume; the world's day turns it.
     void set_sun_direction(const Vector3 &p_towards_sun);
+    // How far the world's day turns the scene's sun now (radians round +y; 0 without weather): VoxelSky turns its light.
+    double get_day_angle() const;
     // The scatter and the forest stream (default on: their keys computed as the chunks ask for them,
     // instance_stream.hpp); false places them whole at configure (--stream=0). Must be set before the node enters the tree.
     void set_archetype_stream(bool p_enabled);

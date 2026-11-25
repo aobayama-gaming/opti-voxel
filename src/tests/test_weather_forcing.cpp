@@ -58,33 +58,121 @@ TEST_CASE("WeatherForcing: the sounding's mixed layer saturates at the cloud bas
     CHECK(snd.qv[size_t(top)] == doctest::Approx(F::ABOVE_HUMIDITY * snd.qv[0]));
 }
 
-TEST_CASE("WeatherForcing: the ground warms by day, cools by night, its day's mean its ground_k") {
+TEST_CASE("WeatherForcing: the sun turns west, once a weather day") {
+    const double omega = 2.0 * 3.14159265358979323846 / F::Params().day_s;
+    // Over z = 1 on the equator east is +x (the prevailing wind's test): a quarter day on, the noon sun sets in the west.
+    const Float3 noon{ 0.0f, 0.0f, 1.0f };
+    const Float3 dusk = F::turn_sun(noon, -omega * F::Params().day_s / 4.0);
+    CHECK(dusk.x == doctest::Approx(-1.0).epsilon(1e-6));
+    CHECK(std::fabs(dusk.z) < 1e-6f);
+    const Float3 day = F::turn_sun(Float3{ 0.3f, 0.4f, 0.866f }, -omega * F::Params().day_s);
+    CHECK(day.x == doctest::Approx(0.3).epsilon(1e-5));
+    CHECK(day.y == doctest::Approx(0.4).epsilon(1e-6));
+    CHECK(day.z == doctest::Approx(0.866).epsilon(1e-5));
+}
+
+TEST_CASE("WeatherForcing::mean_light: a day's mean sunlight, the sun turned round the pole") {
+    constexpr double PI = 3.14159265358979323846;
+    for (const double lat : { 0.0, 20.0, -45.0, 70.0, 89.0 }) {
+        for (const double decl : { 0.0, 23.4, -23.4 }) {
+            const double up[3] = { std::cos(lat * PI / 180.0), std::sin(lat * PI / 180.0), 0.0 };
+            const Float3 noon{ float(std::cos(decl * PI / 180.0)), float(std::sin(decl * PI / 180.0)), 0.0f };
+            double mean = 0.0;
+            const int steps = 7200;
+            for (int h = 0; h < steps; h++) {
+                const Float3 sun = F::turn_sun(noon, 2.0 * PI * (h + 0.5) / steps);
+                mean += std::max(up[0] * sun.x + up[1] * sun.y + up[2] * sun.z, 0.0) / steps;
+            }
+            CAPTURE(lat);
+            CAPTURE(decl);
+            CHECK(F::mean_light(up[1], std::sin(decl * PI / 180.0)) == doctest::Approx(mean).epsilon(1e-4));
+        }
+    }
+    CHECK(F::mean_light(0.0, 0.0) == doctest::Approx(1.0 / PI));
+}
+
+namespace {
+
+// A slab of p_inertia on the equator at equinox, clear, over 12 weather days of 1 s steps: its last day's mean, swing
+// (max - min) and the lag of its warmest after noon (a share of the day).
+struct Day {
+    double mean = 0.0, swing = 0.0, lag = 0.0;
+};
+
+Day slab_day(double p_inertia) {
+    constexpr double PI = 3.14159265358979323846;
+    const double day_s = F::Params().day_s;
+    const double absorbed = F::SUN_W_M2 * (1.0 - F::GROUND_ALBEDO);
+    double t_k = 299.0;
+    Day d;
+    double lo = 1e9, hi = -1e9;
+    const int per_day = int(day_s);
+    for (int s = 0; s < 12 * per_day; s++) {
+        const double h = 2.0 * PI * (s + 0.5) / day_s; // noon at s = 0
+        t_k = F::warm_slab(t_k, 299.0, p_inertia, absorbed * (std::max(std::cos(h), 0.0) - 1.0 / PI), day_s, 1.0);
+        if (s >= 11 * per_day) {
+            d.mean += t_k / per_day;
+            lo = std::min(lo, t_k);
+            if (t_k > hi) {
+                hi = t_k;
+                d.lag = double(s - 11 * per_day) / per_day;
+            }
+        }
+    }
+    d.swing = hi - lo;
+    return d;
+}
+
+} // namespace
+
+TEST_CASE("WeatherForcing::warm_slab: land warms into the afternoon, a sea barely moves, the day's mean kept") {
+    const Day soil = slab_day(1500.0), sand = slab_day(300.0), sea = slab_day(1e5);
+    MESSAGE(ov::format("swing: soil %.2f K (warmest %.3f day after noon), sand %.2f K, sea %.3f K", soil.swing, soil.lag, sand.swing, sea.swing).c_str());
+    CHECK(soil.mean == doctest::Approx(299.0).epsilon(1e-4));
+    CHECK(sea.mean == doctest::Approx(299.0).epsilon(1e-4));
+    CHECK(soil.swing > 2.0);
+    CHECK(soil.swing < 8.0);
+    CHECK(sand.swing == doctest::Approx(soil.swing * 5.0).epsilon(0.05)); // the swing goes as 1 / inertia
+    CHECK(sea.swing < 0.1);
+    // The force-restore slab lags the sun's warming by about an eighth of a day: the afternoon.
+    CHECK(soil.lag > 0.05);
+    CHECK(soil.lag < 0.2);
+}
+
+TEST_CASE("WeatherForcing::warm: the ground under the noon sun warms, less under a cloud's shade") {
     Setup s = make(8, 299.0f, 0.0f);
     std::vector<Climate::BiomeWeather> climate(s.grid->cells());
     for (Climate::BiomeWeather &c : climate) {
-        c.diurnal_k = 10.0f;
+        c.thermal_inertia = 1500.0f;
     }
     F drive(*s.fluid, F::Params(), climate);
-    // The column under the sun at noon, then the sun round its equator: the mean of a day.
-    std::vector<M::Ground> ground;
+    const M::Sounding snd = drive.sounding(*s.fluid);
+    // A cumulus of 0.3 g/kg over 120 m: ~0.04 kg/m^2 of water, an albedo of ~0.3.
+    CHECK(F::cloud_albedo(0.04) > 0.2);
+    CHECK(F::cloud_albedo(0.04) < 0.4);
+    CHECK(F::cloud_albedo(0.0) == 0.0);
     double up[3];
     s.fluid->column_up(0, up);
-    drive.grounds(Float3{ float(up[0]), float(up[1]), float(up[2]) }, ground);
-    CHECK(ground[0].temp_k == doctest::Approx(299.0 + 10.0 * (1.0 - 1.0 / 3.14159265358979323846)).epsilon(1e-5));
-    drive.grounds(Float3{ float(-up[0]), float(-up[1]), float(-up[2]) }, ground);
-    CHECK(ground[0].temp_k == doctest::Approx(299.0 - 10.0 / 3.14159265358979323846).epsilon(1e-5));
-    // A day of the sun circling the column's own great circle: the mean is ground_k.
-    double side[3] = { -up[1], up[0], 0.0 };
-    const double l = std::sqrt(side[0] * side[0] + side[1] * side[1]);
-    double mean = 0.0;
-    const int hours = 3600;
-    for (int h = 0; h < hours; h++) {
-        const double a = 2.0 * 3.14159265358979323846 * (h + 0.5) / hours;
-        const Float3 sun{ float(up[0] * std::cos(a) + side[0] / l * std::sin(a)), float(up[1] * std::cos(a) + side[1] / l * std::sin(a)), float(up[2] * std::cos(a)) };
-        drive.grounds(sun, ground);
-        mean += ground[0].temp_k / hours;
+    const Float3 noon{ float(up[0]), float(up[1]), float(up[2]) };
+    auto noon_k = [&]() {
+        std::vector<M::Ground> ground;
+        drive.grounds(ground);
+        for (int t = 0; t < 30; t++) {
+            drive.warm(noon, 1.0, *s.fluid, snd.rho, ground);
+        }
+        return double(ground[0].temp_k);
+    };
+    const double clear = noon_k();
+    const WeatherGrid &g = *s.grid;
+    float *here = &s.fluid->state()[g.index(0, 0, 0) * size_t(s.fluid->stride())];
+    CHECK(g.interior(0, 0, 0) == 0);
+    for (int k = 4; k < 7; k++) {
+        here[s.fluid->scalar_offset(k, M::QC)] = 3e-4f;
     }
-    CHECK(mean == doctest::Approx(299.0).epsilon(1e-4));
+    const double shaded = noon_k();
+    CHECK(clear > 299.5);
+    CHECK(shaded < clear - 0.1);
+    CHECK(shaded > 299.0);
 }
 
 TEST_CASE("WeatherForcing: the prevailing wind blows from the east in the trades, from the west at 45 degrees") {
@@ -124,7 +212,7 @@ TEST_CASE("WeatherForcing: a trade-wind sea makes broken cumulus") {
     WeatherMoist moist(*s.fluid, snd, M::Params());
     s.drive->start(*s.fluid, snd);
     std::vector<M::Ground> ground;
-    s.drive->grounds(Float3{ 0.0f, 1.0f, 0.0f }, ground);
+    s.drive->grounds(ground);
     std::vector<float> b(s.fluid->cell_count());
     const WeatherGrid &g = s.fluid->grid();
     const int levels = s.fluid->levels();

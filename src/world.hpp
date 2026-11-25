@@ -123,8 +123,14 @@ public:
     const str &get_error() const { return error; }
     // The LOD the view's rule gives at p_distance_m from the camera (ChunkDiscoverer::lod_at_distance); 0 before start.
     int lod_at_distance(double p_distance_m) const;
-    // The direction towards the sun (render space, unit): the atmosphere's light from the next frame on.
+    // The direction towards the scene's sun (render space, unit): the atmosphere's light from the next frame on. With
+    // weather, the sun at the end of its spin-up: the planet's day turns it (day_angle).
     void set_sun(const Float3 &p_towards_sun) { sun = p_towards_sun; }
+    // How far the planet's day has turned the scene's sun at the time the frame shows (radians round +y, right-handed;
+    // 0 without weather): a host turns its light by it.
+    double day_angle() const;
+    // The sun the frame shows: the scene's turned by day_angle().
+    Float3 shown_sun() const;
     // The atmosphere (null: off, or before start).
     const Atmosphere *get_atmosphere() const { return atmosphere; }
     // The clouds (null: off, no weather, or before start): their cover, type and drift are the weather's.

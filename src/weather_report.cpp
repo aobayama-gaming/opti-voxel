@@ -48,6 +48,9 @@ WeatherReport::Frame map_state(const Weather &p_weather, int p_w, double p_full_
     cover.resize(size_t(p_w) * size_t(h) * 3);
     wind.resize(cover.size());
     double cover_sum = 0.0, wind_max = 0.0, raining = 0.0, weight = 0.0;
+    // The day side's and the night side's cover and air at the ground (the sun's half and the other).
+    const Float3 sun = p_weather.sun_at(p_weather.game_s());
+    double side_cover[2] = {}, side_temp[2] = {}, side_weight[2] = {};
     for (int y = 0; y < h; y++) {
         for (int x = 0; x < p_w; x++) {
             double d[3];
@@ -72,6 +75,10 @@ WeatherReport::Frame map_state(const Weather &p_weather, int p_w, double p_full_
             // Area weights (cos latitude) for the means.
             const double a = std::sqrt(1.0 - d[1] * d[1]);
             cover_sum += a * s.cover;
+            const int day = d[0] * sun.x + d[1] * sun.y + d[2] * sun.z > 0.0 ? 1 : 0;
+            side_cover[day] += a * s.cover;
+            side_temp[day] += a * s.temp;
+            side_weight[day] += a;
             raining += s.rain > 0.1f ? a : 0.0; // mm/h
             weight += a;
             wind_max = ov::max(wind_max, speed);
@@ -118,6 +125,14 @@ WeatherReport::Frame map_state(const Weather &p_weather, int p_w, double p_full_
     m["game_s"] = p_weather.game_s();
     m["storms"] = int64_t(p_weather.storms());
     m["mean_cover"] = cover_sum / weight;
+    const ov::Value stats = p_weather.get_stats();
+    m["ground_day_k"] = stats["ground_day_k"].as_double();
+    m["ground_night_k"] = stats["ground_night_k"].as_double();
+    for (int day = 0; day < 2; day++) {
+        const double w = ov::max(side_weight[day], 1e-12);
+        m[day == 1 ? "day_cover" : "night_cover"] = side_cover[day] / w;
+        m[day == 1 ? "day_air_c" : "night_air_c"] = side_temp[day] / w;
+    }
     m["max_wind_mps"] = wind_max;
     m["raining"] = raining / weight;
     f.numbers = m;
@@ -214,15 +229,18 @@ ov::Value WeatherReport::run(const ov::str &p_out_dir, const ov::str &p_world_pa
             stats["substep_s"].as_double());
     md += ov::format("%d levels up to %g m. Cloudy levels: each level's share of the planet with cloud past a quarter of full cover, the ground first.\n\n",
             int(stats["levels"].as_int()), stats["top_m"].as_double());
-    md += "| game min | storms | mean cover | max wind (m/s) | raining | cloudy levels |\n|---|---|---|---|---|---|\n";
+    md += "Day / night: the sun's half of the planet and the other, their mean cover and air at the ground.\n\n";
+    md += "| game min | storms | mean cover | day / night cover | day / night air (C) | day / night ground (K) | max wind (m/s) | raining | cloudy levels |\n"
+          "|---|---|---|---|---|---|---|---|---|\n";
     for (size_t i = 0; i < maps.size(); i++) {
         const ov::Value &m = maps[i];
         ov::str levels;
         for (size_t k = 0; k < m["cloudy_levels"].size(); k++) {
             levels += ov::format("%s%.0f%%", k == 0 ? "" : " ", 100.0 * m["cloudy_levels"][k].as_double());
         }
-        md += ov::format("| %g | %d | %.2f | %.1f | %.1f%% | %s |\n", m["minutes"].as_double(), int(m["storms"].as_int()), m["mean_cover"].as_double(),
-                m["max_wind_mps"].as_double(), 100.0 * m["raining"].as_double(), levels);
+        md += ov::format("| %g | %d | %.2f | %.3f / %.3f | %.2f / %.2f | %.2f / %.2f | %.1f | %.1f%% | %s |\n", m["minutes"].as_double(), int(m["storms"].as_int()),
+                m["mean_cover"].as_double(), m["day_cover"].as_double(), m["night_cover"].as_double(), m["day_air_c"].as_double(),
+                m["night_air_c"].as_double(), m["ground_day_k"].as_double(), m["ground_night_k"].as_double(), m["max_wind_mps"].as_double(), 100.0 * m["raining"].as_double(), levels);
     }
     md += "\nForcing: " + ov::to_json(stats["forcing_summary"]) + "\n";
     md += ov::format("\nForcing and spin-up: %.0f ms. Tick: %.2f ms on average, %.2f ms at most (%d ticks).\n", stats["forcing"]["total_ms"].as_double(),

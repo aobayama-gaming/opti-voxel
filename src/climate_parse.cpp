@@ -33,7 +33,7 @@ namespace Climate {
 //             "at": { "temperature": [0.5, 0.3] (centre, span), "humidity": { "min": 0.1, "max": 0.5 } },
 //             "graph": { "nodes": [ node... ] },
 //             "surface": { "flat": "#2a2420", "steep": "#1a1614" (optional, else flat), "roughness": 1 },
-//             "weather": { "ground_k": 299, "diurnal_k": 0, "wetness": 1, "z0_m": 0.00015, "storms": 0 } (optional, each key too),
+//             "weather": { "ground_k": 299, "thermal_inertia": 100000, "wetness": 1, "z0_m": 0.00015, "storms": 0 } (optional, each key too),
 //             "instances": [ { "species": "conifer", "cell_m": 5, "share": 2 } ] (optional), "features": [ { "kind": "lava_lake", "cell_m": 640, "chance": 0.6, "radius_m": [18, 45] } ]
 //             (optional),
 //             "debug_color": "#c04020" }

@@ -174,7 +174,7 @@ TEST_CASE("Climate::WEATHER_KEYS: every key parses at its bounds, refused past t
         }
         ov::Value data;
         CHECK(load_table("res://climate/example.json", data) == ov::str());
-        data["biomes"].at(0)["weather"] = json(ov::format(R"({"%s": %g})", k.name, double(k.max) + 1.0));
+        data["biomes"].at(0)["weather"] = json(ov::format(R"({"%s": %g})", k.name, double(k.max) * 1.01 + 1.0));
         ClimateSDF bad(data, 15);
         CHECK_MESSAGE(bad.sdf.get_climate() == nullptr, k.name);
     }

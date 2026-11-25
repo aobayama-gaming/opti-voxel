@@ -343,9 +343,10 @@ void World::frame(const Float3 *p_camera_pos, const Float3 *p_camera_forward, do
     }
     if (atmosphere && p_camera_pos != nullptr) {
         const BaseSurface::Render base = base_render();
-        atmosphere->frame(*p_camera_pos, sun, base);
+        const Float3 shown = shown_sun();
+        atmosphere->frame(*p_camera_pos, shown, base);
         if (clouds) {
-            clouds->frame(*p_camera_pos, sun, base, render_origin_voxel());
+            clouds->frame(*p_camera_pos, shown, base, render_origin_voxel());
         }
     }
 
@@ -666,6 +667,14 @@ double World::sea_height_at(const double p_render_pos[3]) const {
     const double vs = double(config.chunk_param.voxel_size);
     const double offset[3] = { p_render_pos[0] / vs, p_render_pos[1] / vs, p_render_pos[2] / vs };
     return Sea::height_at(sdf->get_base(), WorldCoord::offset_pos(config.chunk_param.origin_voxel(), offset), vs, content.sea.level_m);
+}
+
+double World::day_angle() const {
+    return weather ? std::remainder(weather->day_angle(weather->shown_s()), 2.0 * 3.14159265358979323846) : 0.0;
+}
+
+Float3 World::shown_sun() const {
+    return weather ? WeatherForcing::turn_sun(sun, day_angle()) : sun;
 }
 
 bool World::weather_at(const double p_render_pos[3], Weather::Sample &r_sample) const {

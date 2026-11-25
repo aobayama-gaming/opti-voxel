@@ -92,6 +92,7 @@ void Weather::build() {
     drive->start(*fluid, sounding);
     const ov::Value summary = drive->summary(*fluid);
     buoyancy.assign(fluid->cell_count(), 0.0f);
+    drive->grounds(ground);
     if (settings.spin_up_s > 0.0) {
         advance(settings.spin_up_s);
     }
@@ -106,16 +107,27 @@ void Weather::set_sun(const Float3 &p_towards_sun) {
     sun_dir = p_towards_sun;
 }
 
-void Weather::advance(double p_dt) {
-    Float3 sun;
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        sun = sun_dir;
+double Weather::day_angle(double p_game_s) const {
+    return -2.0 * 3.14159265358979323846 / settings.day_s * (p_game_s - settings.spin_up_s);
+}
+
+Float3 Weather::sun_at(double p_game_s) const {
+    std::lock_guard<std::mutex> lock(mutex);
+    return WeatherForcing::turn_sun(sun_dir, day_angle(p_game_s));
+}
+
+double Weather::shown_s() const {
+    if (!has_live) {
+        return settings.spin_up_s;
     }
-    drive->grounds(sun, ground);
+    return live_time_s - (1.0 - double(blend())) * settings.time_scale / settings.tick_hz;
+}
+
+void Weather::advance(double p_dt) {
     double left = p_dt;
     while (left > 1e-9) {
         const double dt = ov::min(ov::min(left, MAX_STEP_S), fluid->max_dt());
+        drive->warm(sun_at(sim_time_s + 0.5 * dt), dt, *fluid, moist->reference().rho, ground);
         fluid->advect(dt);
         drive->apply(*fluid, dt, steps);
         moist->apply(*fluid, ground, dt, buoyancy.data());
@@ -191,9 +203,13 @@ bool Weather::step() {
         done++;
     }
     std::vector<float> state = look();
+    double day_k = 0.0, night_k = 0.0;
+    drive->day_night(*fluid, sun_at(sim_time_s), ground, day_k, night_k);
     bool more;
     {
         std::lock_guard<std::mutex> lock(mutex);
+        ground_day_k = day_k;
+        ground_night_k = night_k;
         next_look = std::move(state);
         next_tick = steps;
         next_done = done;
@@ -301,5 +317,7 @@ ov::Value Weather::get_stats() const {
     d["substep_s"] = substep_s;
     d["omega_rad_s"] = omega_rad_s;
     d["forcing_summary"] = forcing_summary;
+    d["ground_day_k"] = ground_day_k;
+    d["ground_night_k"] = ground_night_k;
     return d;
 }

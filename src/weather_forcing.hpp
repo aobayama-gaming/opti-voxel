@@ -10,9 +10,15 @@
 
 // What drives the weather from outside the air (docs/weather.md "Forcing"): the climate's 2D ground under each column
 // and the planet's large scale. Engine-free; relief ignored (the SDF as the ground boundary comes later).
-// - The ground (WeatherMoist::Ground) per column: its biomes' blend of ground_k, wetness and z0_m, warmed by day and
-//   cooled by night: ground_k + diurnal_k (max(up . sun, 0) - 1 / pi) (the day's mean is ground_k; the sun keeps the
-//   game's day).
+// - The sun turns round the pole (y) once a weather day, west as the planet spins east (turn_sun): the planet's day is
+//   the Coriolis' (one Omega).
+// - The ground (WeatherMoist::Ground) per column: its biomes' blend of ground_k, wetness and z0_m, its temperature a
+//   force-restore slab (Deardorff 1978): dT/dt = 2 sqrt(pi) Q / (I sqrt(P)) - 2 pi / P (T - ground_k), P the day, I the
+//   biome's thermal inertia sqrt(k rho c), Q the sunlight it absorbs over its day's mean: SUN_W_M2 (1 - GROUND_ALBEDO)
+//   ((1 - A) max(up . sun, 0) - mean_light), A the albedo of the cloud over it (its water path, droplets of
+//   DROPLET_RADIUS_M, Stephens 1978's two-stream). Clear, the day's mean is ground_k; land warms into the afternoon
+//   (the slab lags the sun by an eighth of a day), a sea (an inertia of ~1e5: its mixed layer) barely moves, a cloud's
+//   shade cools what is under it.
 // - The large-scale wind: the pressure gradient that holds the prevailing wind u_g in geostrophic balance, f up x u_g
 //   added to every level (u_g: east times -sin(6 |latitude|), trade easterlies at 15 degrees, westerlies at 45, y the
 //   pole axis); the Coriolis turns the rest. f = 2 Omega up_y, Omega the weather's day (the twist: a day of minutes, so
@@ -37,6 +43,10 @@ public:
     static constexpr double CLOUD_DRYING_PER_M = 1.4e-5; // q_v
     static constexpr double ABOVE_HUMIDITY = 0.45; // q_v above the inversion over the mixed layer's
     static constexpr double NOISE_K = 0.1; // the two lowest levels' start
+    static constexpr double SUN_W_M2 = 1000.0; // the clear sky's sunlight at the ground, the sun overhead
+    static constexpr double GROUND_ALBEDO = 0.15;
+    static constexpr double DROPLET_RADIUS_M = 1e-5; // the clouds' effective radius
+    static constexpr double CLOUD_ASYMMETRY = 0.85; // g, the droplets' forward scattering
 
     struct Params {
         double day_s = 300.0; // the weather's day (Omega = 2 pi / day_s)
@@ -54,14 +64,31 @@ public:
     WeatherMoist::Sounding sounding(const WeatherFluid &p_fluid) const;
     // The fluid's start: the sounding, the prevailing wind, a little noise on the lowest levels.
     void start(WeatherFluid &p_fluid, const WeatherMoist::Sounding &p_sounding) const;
-    // Each column's ground under the sun (towards it, planet axes).
-    void grounds(const Float3 &p_towards_sun, std::vector<WeatherMoist::Ground> &r_ground) const;
+    // Each column's ground at its day's mean (ground_k), its wetness and roughness.
+    void grounds(std::vector<WeatherMoist::Ground> &r_ground) const;
+    // The grounds' temperatures p_dt on under the sun (towards it, planet axes) and the cloud over them (p_rho: the
+    // air's density per level, the sounding's).
+    void warm(const Float3 &p_towards_sun, double p_dt, const WeatherFluid &p_fluid, const std::vector<double> &p_rho,
+            std::vector<WeatherMoist::Ground> &r_ground);
+    // A thermal inertia's slab (force-restore over a day of p_day_s) p_dt on, absorbing p_q W/m^2 over its day's mean,
+    // restored to p_mean_k.
+    static double warm_slab(double p_temp_k, double p_mean_k, double p_inertia, double p_q, double p_day_s, double p_dt);
+    // The day's mean of max(up . sun, 0) at sin(latitude) p_sin_lat, the sun at sin(declination) p_sin_decl, turning
+    // round the pole (Berger's daily insolation).
+    static double mean_light(double p_sin_lat, double p_sin_decl);
+    // The albedo of a cloud of p_lwp kg/m^2 of water.
+    static double cloud_albedo(double p_lwp);
+    // p_sun turned round the pole (y) by p_angle (radians, right-handed: the planet's spin turns it by -Omega t).
+    static Float3 turn_sun(const Float3 &p_sun, double p_angle);
     // The large-scale wind and the storms' seeds for p_dt of step p_step; the storms started so far.
     void apply(WeatherFluid &p_fluid, double p_dt, uint64_t p_step);
     uint64_t storms() const { return storms_started; }
     // The forcing over the planet: the grounds' temperatures (min, area mean, max), the wet share (wetness 0.9 and
     // more), the sounding's mixed layer, per hemisphere (y > 0 the north).
     ov::Value summary(const WeatherFluid &p_fluid) const;
+    // The grounds' mean temperature (K) on the sun's side (r_day) and the other (r_night), area-weighted.
+    void day_night(const WeatherFluid &p_fluid, const Float3 &p_towards_sun, const std::vector<WeatherMoist::Ground> &p_ground, double &r_day,
+            double &r_night) const;
     // A storm's seed under a position (metres from the base's centre).
     void seed_storm(WeatherFluid &p_fluid, const double p_pos[3]) const;
 
@@ -72,6 +99,8 @@ private:
     Params params;
     std::vector<Climate::BiomeWeather> climate;
     std::vector<double> ups; // 3 per column
+    std::vector<double> light_mean; // per column, for the sun's declination light_decl
+    double light_decl = 2.0;
     double mean_ground_k = 299.0;
     bool any_storms = false;
     uint64_t storms_started = 0;

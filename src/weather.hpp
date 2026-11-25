@@ -100,8 +100,17 @@ public:
     double game_s() const { return live_time_s; }
     uint64_t storms() const { return live_storms; }
     const WorldFile::Weather &get_settings() const { return settings; }
-    // The direction towards the sun (planet axes, unit): the grounds' day from the next tick on.
+    // The direction towards the sun (planet axes, unit) at the end of the spin-up (the scene's sun): the weather turns it
+    // round the pole once a day (day_angle) for the grounds' day from the next tick on.
     void set_sun(const Float3 &p_towards_sun);
+    // How far the planet's spin has turned the sun at game time p_game_s (radians round +y: WeatherForcing::turn_sun):
+    // 0 at the end of the spin-up, -Omega t after.
+    double day_angle(double p_game_s) const;
+    // The sun at game time p_game_s (planet axes, unit): set_sun's turned by day_angle.
+    Float3 sun_at(double p_game_s) const;
+    // The game time the frame shows: between the previous state's and the latest's (blend()); the spin-up's end before
+    // the first.
+    double shown_s() const;
     ov::Value get_stats() const;
 
     // The worker's: the forcing and the spin-up first, then one tick per call while ticks are due.
@@ -140,12 +149,13 @@ private:
     uint64_t next_done = 0;
     double next_time_s = 0.0;
     uint64_t next_storms = 0;
-    Float3 sun_dir{ 0.0f, 1.0f, 0.0f };
+    Float3 sun_dir{ 0.0f, 0.0f, 1.0f }; // an equinox sun until a host sets one (the report's)
     TimingStat tick_stat;
     TimingStat forcing_stat;
     double substep_s = 0.0;
     double omega_rad_s = 0.0;
     ov::Value forcing_summary;
+    double ground_day_k = 0.0, ground_night_k = 0.0; // the latest tick's grounds, the sun's side and the other
 
     // The frame thread's.
     uint64_t last_usec = 0;

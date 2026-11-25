@@ -124,13 +124,14 @@ struct Surface {
 };
 
 // How a biome's ground drives the weather ("weather"; WeatherForcing, docs/weather.md "Forcing"): the columns over it
-// blend their biomes' values by weight. ground_k: the ground's (or the sea's) mean temperature (K); diurnal_k: how much
-// the sun warms it by day and the night cools it (0 a sea, ~10 a desert); wetness: how freely it gives up water (1 a
+// blend their biomes' values by weight. ground_k: the ground's (or the sea's) mean temperature (K); thermal_inertia:
+// sqrt(k rho c) (J m^-2 K^-1 s^-1/2), how little the sun warms it by day and the night cools it (~300 dry sand, ~1500
+// a moist soil, ~2500 rock; a sea's mixed layer ~1e5: it barely moves); wetness: how freely it gives up water (1 a
 // sea or a swamp, 0 a desert); z0_m: its roughness length (1.5e-4 a calm sea, 0.03 grass, 1 a forest); storms: the
 // storms' seeds a whole planet of this biome would start in an hour.
 struct BiomeWeather {
     float ground_k = 299.0f;
-    float diurnal_k = 0.0f;
+    float thermal_inertia = 1e5f;
     float wetness = 1.0f;
     float z0_m = 1.5e-4f;
     float storms = 0.0f;
@@ -146,7 +147,7 @@ struct WeatherKey {
 };
 inline constexpr WeatherKey WEATHER_KEYS[] = {
     { "ground_k", 200.0f, 400.0f, &BiomeWeather::ground_k },
-    { "diurnal_k", 0.0f, 40.0f, &BiomeWeather::diurnal_k },
+    { "thermal_inertia", 50.0f, 1e6f, &BiomeWeather::thermal_inertia },
     { "wetness", 0.0f, 1.0f, &BiomeWeather::wetness },
     { "z0_m", 1e-5f, 3.0f, &BiomeWeather::z0_m },
     { "storms", 0.0f, 1000.0f, &BiomeWeather::storms },

@@ -118,8 +118,9 @@ macro layer in double on the CPU, `BaseSurface`'s region machinery).
   doesn't upload yet, so `SDFCascade` refuses such a climate on a sphere. Why: the ground is 3D, and moving up a column
   meets other noise (needles, folds where dh/dy passes 1); on the Mont Blanc match a stretch of 4 from 100 m up took the
   100 m octave's amplitude from 8.7 m to 2.3 m (real: 2.6 m) and the slopes over 75° from 0.4% to none.
-- **Weather** (a biome's `"weather": {"ground_k", "diurnal_k", "wetness", "z0_m", "storms"}`, `Climate::BiomeWeather`):
-  the biome's ground as the simulated weather feels it, its temperature and day, wetness, roughness and storm seeds
+- **Weather** (a biome's `"weather": {"ground_k", "thermal_inertia", "wetness", "z0_m", "storms"}`,
+  `Climate::BiomeWeather`): the biome's ground as the simulated weather feels it, its mean temperature, how its day
+  swings (thermal inertia: ~300 dry sand, ~1500 moist soil, ~1e5 a sea), wetness, roughness and storm seeds
   (`docs/weather.md` "Forcing"); every key optional, the neutral biome's values by default. It touches no cascade pass or shader either: the weather is read by what is drawn, never by the
   ground.
 - **Worlds** (`adapter/godot/project/climate/`): `world.json` with `engine.json` and `climate.json` (eight biomes on

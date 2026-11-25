@@ -215,7 +215,8 @@ float VoxelSky::get_atmosphere_gain() const {
 }
 
 // The sun's light and direction for the atmosphere: the global atmo_sun_light (both shaders) and the terrains' sun
-// (its camera volume), when they change.
+// (its camera volume), when they change. With weather the planet's day turns the light: the authored sun (or one a
+// script set since) goes to the terrains, which turn it themselves; the light takes the first terrain's turn.
 void VoxelSky::_process(double) {
     if (sun == nullptr) {
         return;
@@ -227,17 +228,32 @@ void VoxelSky::_process(double) {
         sun_light_sent = light;
         RenderingServer::get_singleton()->global_shader_parameter_set("atmo_sun_light", light);
     }
-    const Vector3 towards = sun->get_global_transform().basis.get_column(2).normalized();
-    if (towards != sun_dir_sent) {
-        sun_dir_sent = towards;
-        RenderingServer::get_singleton()->global_shader_parameter_set("atmo_sun_dir", towards);
+    Transform3D xf = sun->get_global_transform();
+    if (!has_noon || !xf.basis.is_equal_approx(basis_set)) {
+        noon_basis = xf.basis;
+        has_noon = true;
     }
+    const Vector3 noon = noon_basis.get_column(2).normalized();
     Node *parent = get_parent();
+    bool turned = false;
+    double angle = 0.0;
     for (int i = 0; parent && i < parent->get_child_count(); i++) {
         if (VoxelTerrain *terrain = Object::cast_to<VoxelTerrain>(parent->get_child(i))) {
             // Every frame: a terrain that starts later gets them at once.
-            terrain->set_sun_direction(towards);
+            terrain->set_sun_direction(noon);
+            angle = turned ? angle : terrain->get_day_angle();
+            turned = true;
         }
+    }
+    basis_set = Basis(Vector3(0.0f, 1.0f, 0.0f), real_t(angle)) * noon_basis;
+    if (!xf.basis.is_equal_approx(basis_set)) {
+        xf.basis = basis_set;
+        sun->set_global_transform(xf);
+    }
+    const Vector3 towards = basis_set.get_column(2).normalized();
+    if (towards != sun_dir_sent) {
+        sun_dir_sent = towards;
+        RenderingServer::get_singleton()->global_shader_parameter_set("atmo_sun_dir", towards);
     }
 }
 

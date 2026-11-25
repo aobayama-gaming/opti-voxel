@@ -32,6 +32,7 @@ void VoxelTerrain::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_world_origin_z", "voxel"), &VoxelTerrain::set_world_origin_z);
     ClassDB::bind_method(D_METHOD("get_world_origin_z"), &VoxelTerrain::get_world_origin_z);
     ClassDB::bind_method(D_METHOD("set_sun_direction", "towards_sun"), &VoxelTerrain::set_sun_direction);
+    ClassDB::bind_method(D_METHOD("get_day_angle"), &VoxelTerrain::get_day_angle);
     ClassDB::bind_method(D_METHOD("get_planet_radius"), &VoxelTerrain::get_planet_radius);
     ClassDB::bind_method(D_METHOD("set_archetype_stream", "enabled"), &VoxelTerrain::set_archetype_stream);
     ClassDB::bind_method(D_METHOD("get_archetype_stream"), &VoxelTerrain::get_archetype_stream);
@@ -325,6 +326,10 @@ double VoxelTerrain::get_planet_radius() const {
 
 void VoxelTerrain::set_sun_direction(const Vector3 &p_towards_sun) {
     world->set_sun(ov_f3(p_towards_sun.normalized()));
+}
+
+double VoxelTerrain::get_day_angle() const {
+    return world->day_angle();
 }
 
 void VoxelTerrain::set_archetype_stream(bool p_enabled) {

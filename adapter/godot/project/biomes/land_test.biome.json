@@ -1,7 +1,7 @@
 {
  "comment": "The land of ocean_test.planet.json: tiny_biomes biome 1 (its ground notes), placed on the dry and warm side. A check fixture, not a designed biome.",
  "name": "land",
- "weather": {"ground_k": 299, "diurnal_k": 3, "wetness": 0.3, "z0_m": 0.1},
+ "weather": {"ground_k": 299, "thermal_inertia": 1200, "wetness": 0.3, "z0_m": 0.1},
  "debug_color": "#6a8a4a",
  "surface": {
   "flat": "#6a8a4a",

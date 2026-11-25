@@ -113,9 +113,21 @@ tests.
 `WeatherForcing` (`src/weather_forcing.*`, engine-free): what drives the air from outside it.
 - **The ground** per column, 2D (relief ignored): the blend of its biomes' `"weather"` (`Climate::BiomeWeather`,
   `docs/climate.md`; their weights at the column's ground point, `Weather::forcing_at`, sampled once at start):
-  `ground_k` the ground's or the sea's mean temperature, `diurnal_k` its day (`ground_k + diurnal_k (max(up . sun, 0)
-  - 1 / pi)`: the day's mean is `ground_k`; the sun is the game's, `World::set_sun`), `wetness` (1 a sea, 0 a desert),
-  `z0_m` its roughness, `storms`. The weather never changes the ground.
+  `ground_k` the ground's or the sea's mean temperature, `thermal_inertia` how its day swings, `wetness` (1 a sea, 0 a
+  desert), `z0_m` its roughness, `storms`. The weather never changes the ground.
+- **The day:** the planet's spin is the weather's day (`day_s`, one Omega for the sun and the Coriolis): the sun turns
+  round the pole once a day, west (`WeatherForcing::turn_sun`, `Weather::day_angle`: 0 at the spin-up's end, so the
+  first frame shows the scene's sun; `World::shown_sun` the turned one for the atmosphere and the clouds, and VoxelSky
+  turns its light by `VoxelTerrain::get_day_angle`, the authored sun kept as the noon one). The main scene's sun is 28
+  degrees north: a northern summer (the far north never sets).
+- **The ground's temperature:** a force-restore slab per column (Deardorff 1978), `dT/dt = 2 sqrt(pi) Q / (I sqrt(P)) -
+  2 pi / P (T - ground_k)`: `P` the day, `I` the biomes' `thermal_inertia` `sqrt(k rho c)`, `Q` the sunlight absorbed
+  over the day's mean (`1000 W/m^2 (1 - 0.15) ((1 - A) max(up . sun, 0) - mean_light)`, `mean_light` Berger's daily
+  insolation for the column's latitude and the sun's declination, `A` the albedo of the cloud over it: its water path,
+  droplets of 10 um, a two-stream `(1 - g) tau / (2 + (1 - g) tau)`). Clear, the day's mean is `ground_k`; the slab
+  warms into the afternoon (its warmest an eighth of a day after noon). With the 300 s day a moist soil (1500) swings
+  2-8 K, dry sand (300) five times as much, a sea (1e5, its mixed layer) under 0.1 K; a cloud's shade cools what is
+  under it (`test_weather_forcing.cpp`).
 - **The large scale:** the pressure gradient holding the prevailing wind in geostrophic balance, `f up x u_g` on every
   level (`u_g`: east times `-sin(6 |latitude|)`, trades at 15 degrees, westerlies at 45). `f = 2 Omega up_y`, `Omega`
   the weather's day (`day_s` 300 s: the twist, storms spin at the game's scale). The jets are unstable: they roll up
@@ -175,10 +187,18 @@ waited for, mapped at game minutes after the spin-up: `cover_<min>.png` (cover g
 way the wind blows as a hue: east red, north yellow-green, west cyan, south violet; its speed as the brightness),
 equirectangular with the +y pole at the top, `section_<min>.png` (a cross-section along the equator: longitude across,
 the levels up from the ground, the cloud water white at full cover) and `report.md` (per map: storms, mean cover, top
-wind, raining share (rain over 0.1 mm/h), each level's cloudy share of the planet, and the forcing's summary). The test biomes of `ocean_test.planet.json` carry a
-weather block (the ocean a sea at 300.5 K, smooth and stormy; the land at 299 K with a 3 K day, 30% wet, z0 0.1 m;
-with an 8 K day the fixed sun's night side fogged whole, its land 1 K under the trade air's dew point). On it
-(2026-11-25): no fog, a sparse cumulus field at 180 m along the eddies' edges, 4% of that level, mean cover 0.05.
+wind, raining share (rain over 0.1 mm/h), the day side's and the night side's mean cover, air at the ground and ground
+temperature, each level's cloudy share of the planet, and the forcing's summary). The report's sun is an equinox one
+(no host sets it). The test biomes of `ocean_test.planet.json` carry a
+weather block (the ocean a sea at 300.5 K, smooth and stormy; the land at 299 K, a thermal inertia of 1200, 30% wet,
+z0 0.1 m). On it (2026-11-25): no fog, a sparse cumulus field at 180 m along the eddies' edges, 4% of that level, mean
+cover 0.05. **The day** (the sun turning): the ground's day side 0.6-0.8 K over its night side planet-wide (~2 K on the
+land), the air at the ground 0.1 K at most, the cover the same by day and night (0.04-0.06 both). A day of 1800 s
+(and its slower spin) gives the ground 1.6 K, the air still ~0.1 K, and no cloud at all: the clouds come from the
+eddies' convergence lines, not from the ground's thermals. The mixed layer is 3-4 levels deep and a thermal ~2
+cells wide: the surface's heat mixes through the subgrid turbulence instead of rising as resolved plumes, so a warm
+afternoon makes no cumulus (TODO: the convection's resolution or a shallow convection scheme, to decide with the
+user).
 
 ## Mixer
 The biome mixer (`debug/biome_mixer/`) edits a biome's weather and shows a world's.
@@ -212,6 +232,8 @@ Agreed with the user (2026-11-24). Stacked PRs, `feature/weather-*`:
 11. **Forcing and wiring:** `WeatherForcing`, the biome block's physical keys, `Weather` on the fluid at 5 Hz,
     `WeatherSim` deleted; the advection's parallel transport, the subgrid turbulence. Then the typhoon test on an
     f-plane, the clouds' blend carried by the wind and their cost, then the torus's grid.
+12. **The day:** the sun turning with the planet's spin (the scene's light too), the ground a force-restore slab
+    (thermal inertia per biome), clouds shading it; the report's day and night sides.
 
 Later: curl-noise gusts, the FFT sea reading the wind (U10, fetch, swell), rain and ground wetness, saving the weather,
 the GPU if the CPU tick is too slow.

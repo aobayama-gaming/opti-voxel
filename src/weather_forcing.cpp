@@ -120,16 +120,81 @@ void WeatherForcing::start(WeatherFluid &p_fluid, const WeatherMoist::Sounding &
     p_fluid.fill_halo();
 }
 
-void WeatherForcing::grounds(const Float3 &p_towards_sun, std::vector<WeatherMoist::Ground> &r_ground) const {
+void WeatherForcing::grounds(std::vector<WeatherMoist::Ground> &r_ground) const {
     r_ground.resize(climate.size());
-    const double sun[3] = { double(p_towards_sun.x), double(p_towards_sun.y), double(p_towards_sun.z) };
-    constexpr double MEAN_DAY = 1.0 / 3.14159265358979323846; // max(cos, 0)'s mean over a day at the equator
     for (size_t c = 0; c < climate.size(); c++) {
-        const double light = ov::max(dot3(&ups[c * 3], sun), 0.0);
-        r_ground[c].temp_k = float(double(climate[c].ground_k) + double(climate[c].diurnal_k) * (light - MEAN_DAY));
+        r_ground[c].temp_k = climate[c].ground_k;
         r_ground[c].wetness = climate[c].wetness;
         r_ground[c].z0_m = climate[c].z0_m;
     }
+}
+
+double WeatherForcing::warm_slab(double p_temp_k, double p_mean_k, double p_inertia, double p_q, double p_day_s, double p_dt) {
+    constexpr double PI = 3.14159265358979323846;
+    const double gain = 2.0 * std::sqrt(PI) / (ov::max(p_inertia, 1.0) * std::sqrt(p_day_s));
+    const double restore = 2.0 * PI / p_day_s;
+    // Implicit in the restoring term: any dt is stable.
+    return (p_temp_k + p_dt * (gain * p_q + restore * p_mean_k)) / (1.0 + restore * p_dt);
+}
+
+double WeatherForcing::mean_light(double p_sin_lat, double p_sin_decl) {
+    constexpr double PI = 3.14159265358979323846;
+    const double sl = ov::clamp(p_sin_lat, -1.0, 1.0), sd = ov::clamp(p_sin_decl, -1.0, 1.0);
+    const double cl = std::sqrt(1.0 - sl * sl), cd = std::sqrt(1.0 - sd * sd);
+    // The sun is up while cos h > -tan(lat) tan(decl): from -h0 to h0.
+    const double c = cl * cd > 1e-12 ? -(sl * sd) / (cl * cd) : (sl * sd > 0.0 ? -2.0 : 2.0);
+    const double h0 = std::acos(ov::clamp(c, -1.0, 1.0));
+    return (h0 * sl * sd + cl * cd * std::sin(h0)) / PI;
+}
+
+double WeatherForcing::cloud_albedo(double p_lwp) {
+    // The optical depth of droplets of r_e (3 LWP / (2 rho_w r_e)), the two-stream albedo (1 - g) tau / (2 + (1 - g) tau).
+    const double tau = 1.5 * ov::max(p_lwp, 0.0) / (1000.0 * DROPLET_RADIUS_M);
+    const double t = (1.0 - CLOUD_ASYMMETRY) * tau;
+    return t / (2.0 + t);
+}
+
+Float3 WeatherForcing::turn_sun(const Float3 &p_sun, double p_angle) {
+    const double c = std::cos(p_angle), s = std::sin(p_angle);
+    const double x = p_sun.x, z = p_sun.z;
+    return Float3{ float(x * c + z * s), p_sun.y, float(-x * s + z * c) };
+}
+
+void WeatherForcing::warm(const Float3 &p_towards_sun, double p_dt, const WeatherFluid &p_fluid, const std::vector<double> &p_rho,
+        std::vector<WeatherMoist::Ground> &r_ground) {
+    const WeatherGrid &g = p_fluid.grid();
+    const double sun[3] = { double(p_towards_sun.x), double(p_towards_sun.y), double(p_towards_sun.z) };
+    const double len = std::sqrt(dot3(sun, sun));
+    if (len < 1e-9) {
+        return;
+    }
+    const double sin_decl = sun[1] / len;
+    if (light_mean.size() != climate.size() || std::fabs(sin_decl - light_decl) > 1e-6) {
+        light_mean.resize(climate.size());
+        for (size_t c = 0; c < climate.size(); c++) {
+            light_mean[c] = mean_light(ups[c * 3 + 1], sin_decl);
+        }
+        light_decl = sin_decl;
+    }
+    r_ground.resize(climate.size());
+    const int levels = p_fluid.levels();
+    const double dz = p_fluid.dz_m();
+    const std::vector<float> &state = p_fluid.state();
+    const double absorbed = SUN_W_M2 * (1.0 - GROUND_ALBEDO);
+    parallel_for(uint32_t(g.faces() * g.height()), "WeatherForcing::warm", [&](uint32_t p_row) {
+        const int face = int(p_row) / g.height();
+        const int j = int(p_row) % g.height();
+        for (int i = 0; i < g.width(); i++) {
+            const size_t c = g.interior(face, i, j);
+            const float *here = &state[g.index(face, i, j) * size_t(p_fluid.stride())];
+            double lwp = 0.0;
+            for (int k = 0; k < levels; k++) {
+                lwp += double(here[p_fluid.scalar_offset(k, WeatherMoist::QC)]) * p_rho[size_t(k)] * dz;
+            }
+            const double light = ov::max(dot3(&ups[c * 3], sun) / len, 0.0);
+            const double q = absorbed * ((1.0 - cloud_albedo(lwp)) * light - light_mean[c]);
+            r_ground[c].temp_k = float(warm_slab(r_ground[c].temp_k, climate[c].ground_k, climate[c].thermal_inertia, q, params.day_s, p_dt));
+        } });
 }
 
 void WeatherForcing::apply(WeatherFluid &p_fluid, double p_dt, uint64_t p_step) {
@@ -193,6 +258,20 @@ ov::Value WeatherForcing::summary(const WeatherFluid &p_fluid) const {
         out[north == 1 ? "north" : "south"] = h;
     }
     return out;
+}
+
+void WeatherForcing::day_night(const WeatherFluid &p_fluid, const Float3 &p_towards_sun, const std::vector<WeatherMoist::Ground> &p_ground, double &r_day,
+        double &r_night) const {
+    const double sun[3] = { double(p_towards_sun.x), double(p_towards_sun.y), double(p_towards_sun.z) };
+    double sum[2] = {}, area[2] = {};
+    for (size_t c = 0; c < p_ground.size() && c < climate.size(); c++) {
+        const int day = dot3(&ups[c * 3], sun) > 0.0 ? 1 : 0;
+        const double a = p_fluid.column_area_m2(c);
+        sum[day] += a * double(p_ground[c].temp_k);
+        area[day] += a;
+    }
+    r_day = area[1] > 0.0 ? sum[1] / area[1] : 0.0;
+    r_night = area[0] > 0.0 ? sum[0] / area[0] : 0.0;
 }
 
 void WeatherForcing::seed_storm(WeatherFluid &p_fluid, const double p_pos[3]) const {
