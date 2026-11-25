@@ -1,10 +1,10 @@
 #include "clouds.hpp"
 
-#include "exact_noise_glsl.hpp"
 #include "glsl_uniforms.hpp"
 #include "gpu_shader.hpp"
 #include "shade_frame_glsl.hpp"
 #include "trace.hpp"
+#include "weather_cloud_fraction.hpp"
 
 #include "ov/clock.hpp"
 #include "ov/half.hpp"
@@ -13,90 +13,6 @@
 #include <cmath>
 
 namespace {
-
-// The noises (Schneider's, after sebh's TileableVolumeNoise): every one repeats over the texture, so a tile wraps. The
-// shape: R Perlin-Worley (a Perlin fbm remapped above a Worley fbm: billows), G B A Worley fbms at 4, 8 and 16 cells per
-// tile; the detail: R G B Worley fbms at 4, 8 and 16 cells. Worley values are inverted (1 at a cell's point).
-constexpr const char GLSL_PASS_NOISE[] = R"glsl(#version 450
-layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
-layout(set = 0, binding = 0, rgba16f) uniform restrict writeonly image3D noise;
-layout(push_constant, std430) uniform Push { int size; int detail; } push;
-$PCG3D
-// A lattice cell's random point in [0, 1)^3, the cell wrapped to n per axis; seed separates the noises.
-vec3 noise_point(ivec3 c, int n, uint seed) {
-    uvec3 w = uvec3((c % n + n) % n);
-    return vec3(pcg3d(w + uvec3(seed * 1013u, seed * 7919u, seed * 104729u)) >> 8u) * (1.0 / 16777216.0);
-}
-
-// Worley at n cells per tile, inverted: 1 at a cell's point, 0 a cell away.
-float noise_worley(vec3 p, int n, uint seed) {
-    vec3 x = p * float(n);
-    ivec3 c = ivec3(floor(x));
-    vec3 f = x - vec3(c);
-    float d = 1.0;
-    for (int k = -1; k <= 1; k++) {
-        for (int j = -1; j <= 1; j++) {
-            for (int i = -1; i <= 1; i++) {
-                ivec3 o = ivec3(i, j, k);
-                vec3 v = vec3(o) + noise_point(c + o, n, seed) - f;
-                d = min(d, dot(v, v));
-            }
-        }
-    }
-    return 1.0 - sqrt(d);
-}
-
-float noise_worley_fbm(vec3 p, int n, uint seed) {
-    return noise_worley(p, n, seed) * 0.625 + noise_worley(p, 2 * n, seed + 1u) * 0.25 + noise_worley(p, 4 * n, seed + 2u) * 0.125;
-}
-
-// Gradient (Perlin) noise at n cells per tile, in about [-1, 1].
-float noise_perlin(vec3 p, int n, uint seed) {
-    vec3 x = p * float(n);
-    ivec3 c = ivec3(floor(x));
-    vec3 f = x - vec3(c);
-    vec3 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
-    float v[8];
-    for (int k = 0; k < 8; k++) {
-        ivec3 o = ivec3(k & 1, (k >> 1) & 1, k >> 2);
-        vec3 g = normalize(noise_point(c + o, n, seed) * 2.0 - 1.0 + vec3(1e-4));
-        v[k] = dot(g, f - vec3(o));
-    }
-    float x00 = mix(v[0], v[1], u.x);
-    float x10 = mix(v[2], v[3], u.x);
-    float x01 = mix(v[4], v[5], u.x);
-    float x11 = mix(v[6], v[7], u.x);
-    return mix(mix(x00, x10, u.y), mix(x01, x11, u.y), u.z);
-}
-
-// A Perlin fbm of 5 octaves from n cells per tile, in [0, 1].
-float noise_perlin_fbm(vec3 p, int n, uint seed) {
-    float sum = 0.0;
-    float amp = 0.5;
-    for (int o = 0; o < 5; o++) {
-        sum += amp * noise_perlin(p, n << o, seed + uint(o));
-        amp *= 0.5;
-    }
-    return clamp(0.5 + 2.0 * sum, 0.0, 1.0); // sum: a standard deviation of ~0.11
-}
-
-void main() {
-    ivec3 id = ivec3(gl_GlobalInvocationID);
-    if (any(greaterThanEqual(id, ivec3(push.size)))) {
-        return;
-    }
-    vec3 p = (vec3(id) + 0.5) / float(push.size);
-    vec4 v;
-    if (push.detail != 0) {
-        v = vec4(noise_worley_fbm(p, 4, 40u), noise_worley_fbm(p, 8, 50u), noise_worley_fbm(p, 16, 60u), 1.0);
-    } else {
-        float worley = noise_worley_fbm(p, 4, 1u);
-        float perlin = noise_perlin_fbm(p, 4, 10u);
-        v = vec4(worley + perlin * (1.0 - worley), worley, noise_worley_fbm(p, 8, 20u), noise_worley_fbm(p, 16, 30u));
-    }
-    imageStore(noise, id, v);
-}
-)glsl";
 
 // The grid's directions (after the atmosphere's GLSL: ATMO_PI): plain GLSL that Godot's shading language takes too.
 constexpr const char GLSL_GRID[] = R"glsl(
@@ -129,7 +45,7 @@ vec2 cloud_grid_uv(vec3 dir, vec3 up, vec3 t1, vec3 t2) {
 }
 )glsl";
 
-// The density and the layer's spans (the passes'). $SHAPE and $DETAIL are the noises' sampler expressions.
+// The density and the layer's spans (the passes'). $SPREAD and $MAP are the spread noise's and the weather's sampler expressions.
 constexpr const char GLSL_DENSITY[] = R"glsl(
 const int OCTAVES = $OCTAVES;
 const float MS_SCATTERING = $MS_SCATTERING;
@@ -154,22 +70,26 @@ float cloud_height_fraction(float altitude) {
     return (altitude - cloud_bottom_m) / (cloud_top_m - cloud_bottom_m);
 }
 
-// The simulation's cover at p, height fraction hf: its levels' cloud (Weather: the atlas's slice per level), linear
-// between their middles, the lowest's down to the ground, the top's fading to none at the top (an empty level above:
-// no cloud ends flat at the layer's top); its two states blended.
-float cloud_sim_cover(vec3 p, float hf) {
-    vec4 m = textureLod($MAP, vec3(weather_uv(p), clamp(hf, $HALF_LEVEL, 1.0 - $HALF_LEVEL)), 0.0);
-    float fade = clamp((1.0 - hf) / $HALF_LEVEL, 0.0, 1.0);
-    return (m.r + (m.g - m.r) * cloud_weather_blend) * fade;
-}
-
-// The cloud's density at p (height fraction hf): the simulation's cloud water there over FULL_CLOUD_QC, nothing else;
-// cloud_extinction is the droplets' extinction at 1 (CloudLayer::of_weather).
+// The cloud's density at p (height fraction hf): the simulation's partial cloud (weather_cloud_fraction.hpp) drawn by
+// the spread noise. Its levels (Weather: the atlas's slice per level; R G the mean cloud water over FULL_CLOUD_QC of
+// the two states, B A their Q1), linear between their middles, the lowest's down to the ground, the top's fading to none
+// at the top; the states blended. A point's saturation excess is Q1 plus the noise's spread there (u uniform, carried
+// by the wind), its cloud that excess over the cell's mean excess times the cell's mean water: the cell's points
+// average to the simulation's water, the cloudy ones are its share. cloud_extinction is the droplets' at density 1.
 float cloud_density(vec3 p, float hf) {
     if (hf <= 0.0 || hf >= 1.0) {
         return 0.0;
     }
-    return max(cloud_sim_cover(p, hf), 0.0);
+    vec4 m = textureLod($MAP, vec3(weather_uv(p), clamp(hf, $HALF_LEVEL, 1.0 - $HALF_LEVEL)), 0.0);
+    float water = (m.r + (m.g - m.r) * cloud_weather_blend) * clamp((1.0 - hf) / $HALF_LEVEL, 0.0, 1.0);
+    float q1 = m.b + (m.a - m.b) * cloud_weather_blend;
+    float mean = cloud_mean_excess(q1);
+    if (water <= 0.0 || mean <= 1e-6) {
+        return 0.0;
+    }
+    vec3 c = (shade_point(p, cloud_spread_period_vox) - cloud_wind_offset_m) / shade_period_m(cloud_spread_period_vox);
+    float u = textureLod($SPREAD, c, 0.0).r;
+    return water * max(q1 + cloud_spread(u), 0.0) / mean;
 }
 
 // Where the ray p + t dir (t >= 0) is in the layer: [seg.x, seg.y] and [seg.z, seg.w] (either empty), the part below its
@@ -246,8 +166,7 @@ layout(set = 0, binding = $B_LIGHT, rgba16f) uniform restrict writeonly image2D 
 layout(set = 0, binding = $B_DEPTH, rgba16f) uniform restrict writeonly image2D out_depth;
 layout(set = 0, binding = $B_HISTORY_LIGHT) uniform texture2D history_light;
 layout(set = 0, binding = $B_HISTORY_DEPTH) uniform texture2D history_depth;
-layout(set = 0, binding = $B_SHAPE) uniform texture3D shape;
-layout(set = 0, binding = $B_DETAIL) uniform texture3D detail;
+layout(set = 0, binding = $B_SPREAD) uniform texture3D spread_noise;
 layout(set = 0, binding = $B_ATMO_VOLUME) uniform texture2D atmo_volume_texture;
 layout(set = 0, binding = $B_ATMO_MULTISCATTER) uniform texture2D atmo_multiscatter_texture;
 layout(set = 0, binding = $B_SAMPLER) uniform sampler linear;
@@ -486,8 +405,7 @@ enum PassBinding : uint32_t {
     B_DEPTH,
     B_HISTORY_LIGHT,
     B_HISTORY_DEPTH,
-    B_SHAPE,
-    B_DETAIL,
+    B_SPREAD,
     B_ATMO_VOLUME,
     B_ATMO_MULTISCATTER,
     B_SAMPLER,
@@ -506,8 +424,9 @@ ov::str substitute(const ov::str &p_glsl) {
                     { "$MS_EXTINCTION", ov::format("%.3f", double(C::MS_EXTINCTION)) }, { "$MS_ECCENTRICITY", ov::format("%.3f", double(C::MS_ECCENTRICITY)) } });
 }
 
-ov::str density_glsl(const ov::str &p_shape, const ov::str &p_detail) {
-    return ov::replace_all(substitute(GLSL_DENSITY), { { "$SHAPE", p_shape }, { "$DETAIL", p_detail }, { "$MAP", "sampler3D(weather_map, linear)" } });
+ov::str density_glsl() {
+    return ov::str(WeatherCloud::glsl()) +
+            ov::replace_all(substitute(GLSL_DENSITY), { { "$SPREAD", "sampler3D(spread_noise, linear)" }, { "$MAP", "sampler3D(weather_map, linear)" } });
 }
 
 // The block's fields: the base's, the atmosphere's (the lookup's uniforms), the layer's and the frame's.
@@ -528,13 +447,13 @@ ov::str pass_glsl(const char *p_main, const WeatherGrid &p_weather, int p_levels
     visit_block(GLSLUniforms::Declarations{ members }, BaseSurface::Render(), Atmosphere::HostConstants(), 0.0f, CloudLayer(), Clouds::Frame());
     const ov::str head = ov::replace_all(ov::str(GLSL_PASS_HEAD),
             { { "$MEMBERS", members }, { "$B_BLOCK", ov::itos(B_BLOCK) }, { "$B_LIGHT", ov::itos(B_LIGHT) }, { "$B_DEPTH", ov::itos(B_DEPTH) },
-                    { "$B_HISTORY_LIGHT", ov::itos(B_HISTORY_LIGHT) }, { "$B_HISTORY_DEPTH", ov::itos(B_HISTORY_DEPTH) }, { "$B_SHAPE", ov::itos(B_SHAPE) },
-                    { "$B_DETAIL", ov::itos(B_DETAIL) }, { "$B_ATMO_VOLUME", ov::itos(B_ATMO_VOLUME) },
+                    { "$B_HISTORY_LIGHT", ov::itos(B_HISTORY_LIGHT) }, { "$B_HISTORY_DEPTH", ov::itos(B_HISTORY_DEPTH) }, { "$B_SPREAD", ov::itos(B_SPREAD) },
+                    { "$B_ATMO_VOLUME", ov::itos(B_ATMO_VOLUME) },
                     { "$B_ATMO_MULTISCATTER", ov::itos(B_ATMO_MULTISCATTER) }, { "$B_SAMPLER", ov::itos(B_SAMPLER) }, { "$B_SHADOW", ov::itos(B_SHADOW) }, { "$B_MAP", ov::itos(B_MAP) } });
     return head + BaseSurface::glsl_render() + ShadeFrame::glsl() +
             Atmosphere::glsl_lookup("sampler2D(atmo_volume_texture, linear)", "sampler2D(atmo_multiscatter_texture, linear)") + substitute(GLSL_GRID) +
             p_weather.glsl_lookup() +
-            ov::replace_all(density_glsl("sampler3D(shape, linear)", "sampler3D(detail, linear)"),
+            ov::replace_all(density_glsl(),
                     { { "$HALF_LEVEL", ov::format("%.9g", 0.5 / double(ov::max(p_levels, 1))) } }) +
             substitute(p_main);
 }
@@ -559,8 +478,7 @@ static CloudLayer scaled(double p_s, double p_bottom_m, double p_voxel_m) {
     l.shadow_min_extent_m = float(l.shadow_min_extent_m * p_s);
     l.warp_period_vox = period_vox(CloudLayer::EARTH_WARP_PERIOD_M * p_s, p_voxel_m);
     l.weather_period_vox = ov::min(period_vox(CloudLayer::EARTH_WEATHER_PERIOD_M * p_s, p_voxel_m), l.warp_period_vox / 4);
-    l.shape_period_vox = ov::min(period_vox(CloudLayer::EARTH_SHAPE_PERIOD_M * p_s, p_voxel_m), l.weather_period_vox);
-    l.detail_period_vox = ov::min(period_vox(CloudLayer::EARTH_DETAIL_PERIOD_M * p_s, p_voxel_m), l.shape_period_vox);
+    l.spread_period_vox = ov::min(period_vox(CloudLayer::EARTH_SPREAD_PERIOD_M * p_s, p_voxel_m), l.weather_period_vox);
     return l;
 }
 
@@ -571,17 +489,12 @@ CloudLayer CloudLayer::of_weather(double p_top_m, double p_cell_m, double p_voxe
     // Density 1 is FULL_CLOUD_QC of cloud water: its droplets' extinction.
     l.extinction = float(WeatherForcing::cloud_extinction(WeatherForcing::AIR_DENSITY * Weather::FULL_CLOUD_QC));
     l.weather_period_vox = ov::min(period_vox(WEATHER_CELLS * p_cell_m, p_voxel_m), l.warp_period_vox / 4);
-    l.shape_period_vox = ov::min(period_vox(SHAPE_CELLS * p_cell_m, p_voxel_m), l.weather_period_vox);
-    l.detail_period_vox = ov::min(period_vox(DETAIL_CELLS * p_cell_m, p_voxel_m), l.shape_period_vox);
+    l.spread_period_vox = ov::min(period_vox(SPREAD_CELLS * p_cell_m, p_voxel_m), l.weather_period_vox);
     return l;
 }
 
 ov::str Clouds::glsl_lookup() {
     return substitute(GLSL_GRID) + GLSL_LOOKUP;
-}
-
-ov::str Clouds::glsl_pass_noise() {
-    return ov::replace_all(ov::str(GLSL_PASS_NOISE), { { "$PCG3D", ov::str(GLSL_PCG3D) } });
 }
 
 ov::str Clouds::glsl_pass_march(const WeatherGrid &p_weather, int p_levels) {
@@ -609,12 +522,17 @@ void Clouds::start(ov::gpu::Device *p_device, const Atmosphere *p_atmosphere, co
     layer_params = p_layer;
     curvature_m = Atmosphere::ms_radius_m(p_base, p_voxel_m);
     frame_params.voxel_m = float(p_voxel_m);
-    noise_dirty = true;
+    // The spread noise (weather_cloud_fraction.hpp): exactly uniform, in R.
+    const std::vector<float> u = WeatherCloud::uniform_noise(SPREAD_SIZE, SPREAD_LATTICE, SPREAD_OCTAVES, 0x5EEDu);
+    std::vector<uint16_t> spread(u.size() * 4, 0);
+    for (size_t i = 0; i < u.size(); i++) {
+        spread[i * 4] = ov::float_to_half(u[i]);
+    }
     // Zeros (no cloud) until the weather's first state lands.
     const WeatherGrid &grid = p_weather.grid();
     Atlas atlas{ uint32_t(grid.stride_x()), uint32_t(grid.faces() * grid.stride_y()), uint32_t(p_weather.levels()),
         glsl_pass_march(grid, p_weather.levels()), glsl_pass_shadow(grid, p_weather.levels()) };
-    device->post([this, atlas]() { _rt_start(atlas); });
+    device->post([this, atlas, s = std::move(spread)]() { _rt_start(atlas, s); });
 }
 
 void Clouds::set_weather(const Weather &p_weather, const Float3 &p_wind_mps, bool p_landed) {
@@ -631,11 +549,13 @@ void Clouds::set_weather(const Weather &p_weather, const Float3 &p_wind_mps, boo
     cover_max = 0.0f;
     for (int k = 0; k < levels; k++) {
         for (size_t c = 0; c < cells; c++) {
-            const float a = prev[c * size_t(p_weather.stride()) + size_t(Weather::LOOK + k)];
-            const float b = live[c * size_t(p_weather.stride()) + size_t(Weather::LOOK + k)];
+            const size_t at = c * size_t(p_weather.stride()) + size_t(Weather::LOOK + k);
+            const float a = prev[at], b = live[at];
             uint16_t *t = &texels[(size_t(k) * cells + c) * 4];
             t[0] = ov::float_to_half(a);
             t[1] = ov::float_to_half(b);
+            t[2] = ov::float_to_half(prev[at + size_t(levels)]); // the Q1s
+            t[3] = ov::float_to_half(live[at + size_t(levels)]);
             cover_max = ov::max(cover_max, ov::max(a, b));
         }
     }
@@ -700,9 +620,7 @@ void Clouds::frame(const Float3 &p_camera_m, const Float3 &p_sun, const BaseSurf
     has_camera = true;
     frame_params = f;
     const ov::bytes data = block_bytes(p_base, atmosphere->host_constants(), atmosphere->range_m(), layer_params, f);
-    const bool noise = noise_dirty;
-    noise_dirty = false;
-    device->post([this, data, noise]() { _rt_frame(data, noise); });
+    device->post([this, data]() { _rt_frame(data); });
 }
 
 void Clouds::shift(const Float3 &p_shift_m) {
@@ -713,12 +631,11 @@ void Clouds::destroy() {
     device->post([this]() { _rt_destroy(); });
 }
 
-void Clouds::_rt_start(const Atlas &p_atlas) {
+void Clouds::_rt_start(const Atlas &p_atlas, const std::vector<uint16_t> &p_spread) {
     using ov::gpu::Binding;
     using ov::gpu::TextureFormat;
-    const uint32_t noise_usage = ov::gpu::TEXTURE_STORAGE | ov::gpu::TEXTURE_SAMPLED;
-    shape = device->create_texture_3d(TextureFormat::RGBA16_FLOAT, SHAPE_SIZE, SHAPE_SIZE, SHAPE_SIZE, noise_usage);
-    detail = device->create_texture_3d(TextureFormat::RGBA16_FLOAT, DETAIL_SIZE, DETAIL_SIZE, DETAIL_SIZE, noise_usage);
+    spread_noise = device->create_texture_3d(TextureFormat::RGBA16_FLOAT, SPREAD_SIZE, SPREAD_SIZE, SPREAD_SIZE, ov::gpu::TEXTURE_SAMPLED | ov::gpu::TEXTURE_UPDATE);
+    device->update_texture(spread_noise, p_spread.data(), p_spread.size() * sizeof(uint16_t));
     const uint32_t grid_usage = ov::gpu::TEXTURE_STORAGE | ov::gpu::TEXTURE_SAMPLED | ov::gpu::TEXTURE_COPY_SRC;
     light = device->create_texture(TextureFormat::RGBA16_FLOAT, GRID_W, GRID_H, grid_usage);
     depth = device->create_texture(TextureFormat::RGBA16_FLOAT, GRID_W, GRID_H, grid_usage);
@@ -731,17 +648,12 @@ void Clouds::_rt_start(const Atlas &p_atlas) {
     device->update_texture(weather_map, zeros.data(), zeros.size() * sizeof(uint16_t));
     block = device->create_buffer(ov::gpu::BufferKind::UNIFORM,
             block_bytes(BaseSurface::Render(), Atmosphere::HostConstants(), 0.0f, CloudLayer(), Frame()).size());
-    pipe_noise = ov::gpu::compile(*device, "clouds_noise", glsl_pass_noise());
     pipe_march = ov::gpu::compile(*device, "clouds_march", p_atlas.march);
     pipe_shadow = ov::gpu::compile(*device, "clouds_shadow", p_atlas.shadow);
-    if (pipe_noise.is_valid()) {
-        set_shape = device->create_bind_set(pipe_noise, { Binding::storage_image(0, shape) });
-        set_detail = device->create_bind_set(pipe_noise, { Binding::storage_image(0, detail) });
-    }
     // Both passes declare every binding of GLSL_PASS_HEAD.
     const std::vector<Binding> bindings = { Binding(B_BLOCK, ov::gpu::BufferKind::UNIFORM, block), Binding::storage_image(B_LIGHT, light),
         Binding::storage_image(B_DEPTH, depth), Binding::texture(B_HISTORY_LIGHT, history_light), Binding::texture(B_HISTORY_DEPTH, history_depth),
-        Binding::texture(B_SHAPE, shape), Binding::texture(B_DETAIL, detail), Binding::texture(B_ATMO_VOLUME, atmosphere->get_volume()),
+        Binding::texture(B_SPREAD, spread_noise), Binding::texture(B_ATMO_VOLUME, atmosphere->get_volume()),
         Binding::texture(B_ATMO_MULTISCATTER, atmosphere->get_multiscatter()), Binding::linear_sampler(B_SAMPLER), Binding::storage_image(B_SHADOW, shadow),
         Binding::texture(B_MAP, weather_map) };
     if (pipe_march.is_valid() && pipe_shadow.is_valid()) {
@@ -749,22 +661,15 @@ void Clouds::_rt_start(const Atlas &p_atlas) {
         set_shadow = device->create_bind_set(pipe_shadow, bindings);
     }
     // A pass that didn't compile (reported once by compile) leaves the textures unwritten: the host keeps its clouds off.
-    if (textures_fn && set_march.is_valid() && set_shape.is_valid()) {
+    if (textures_fn && set_march.is_valid() && set_shadow.is_valid()) {
         textures_fn(light, depth, shadow);
     }
 }
 
-void Clouds::_rt_frame(const ov::bytes &p_block, bool p_noise) {
+void Clouds::_rt_frame(const ov::bytes &p_block) {
     OV_TRACE("clouds", "rt_frame");
-    if (!set_march.is_valid() || !set_shadow.is_valid() || !set_shape.is_valid()) {
+    if (!set_march.is_valid() || !set_shadow.is_valid()) {
         return; // a pass that didn't compile (reported once by compile)
-    }
-    if (p_noise) {
-        const int32_t shape_push[2] = { SHAPE_SIZE, 0 };
-        const int32_t detail_push[2] = { DETAIL_SIZE, 1 };
-        device->dispatch(pipe_noise, set_shape, shape_push, sizeof(shape_push), SHAPE_SIZE / 4, SHAPE_SIZE / 4, SHAPE_SIZE / 4);
-        device->dispatch(pipe_noise, set_detail, detail_push, sizeof(detail_push), DETAIL_SIZE / 4, DETAIL_SIZE / 4, DETAIL_SIZE / 4);
-        device->timestamp("clouds_noise");
     }
     device->update_buffer(block, 0, p_block.size(), p_block.data());
     device->dispatch(pipe_shadow, set_shadow, nullptr, 0, (SHADOW_SIZE + 7) / 8, (SHADOW_SIZE + 7) / 8, 1);
@@ -778,8 +683,8 @@ void Clouds::_rt_destroy() {
     if (textures_fn) {
         textures_fn(ov::gpu::Texture(), ov::gpu::Texture(), ov::gpu::Texture());
     }
-    const ov::gpu::Handle handles[] = { set_march, set_shadow, set_shape, set_detail, pipe_march, pipe_shadow, pipe_noise, block, light, depth, history_light,
-        history_depth, shadow, shape, detail, weather_map };
+    const ov::gpu::Handle handles[] = { set_march, set_shadow, pipe_march, pipe_shadow, block, light, depth, history_light, history_depth, shadow,
+        spread_noise, weather_map };
     for (const ov::gpu::Handle h : handles) {
         if (h.is_valid()) {
             device->free(h);

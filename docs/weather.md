@@ -183,9 +183,16 @@ The air inside a 45 m cell is not uniform: a cell a little under saturation hold
   couple a mass flux to a statistical cloud scheme); `tau = z_i / w*`, the boundary layer's turnover (z_i the updraft's
   top, w* the surface buoyancy flux's; at least u* and 0.1 m/s). The updraft's own cloud is no longer added on top:
   the partial cloud is the cloud.
-- **For the render** (next): the spread's distribution is fixed by the fit (`N = P(s > 0)` makes its CDF
-  `0.5 + 0.36 atan(1.55 x)`), so a uniform noise `u` through `WeatherCloud::spread(u) = tan((u - 0.5) / 0.36) / 1.55`
-  saturates exactly the share N of a cell's points (`test_weather_cloud_fraction.cpp`).
+- **The render** (`docs/look.md` "Density"): the spread's distribution is fixed by the fit (`N = P(s > 0)` makes its
+  CDF `0.5 + 0.36 atan(1.55 x)` on `|x| <= tan(0.5 / 0.36) / 1.55`), so a uniform noise `u` through
+  `WeatherCloud::spread(u) = tan((u - 0.5) / 0.36) / 1.55` saturates exactly the share N of a cell's points. The weather
+  publishes each level's mean cloud water and its Q1 (`WeatherMoist::q1`, within +-8, a uniform cell's +-8 by its
+  sign); a point's cloud is `max(Q1 + spread(u), 0) / mean_excess(Q1)` of the cell's mean water, `mean_excess` the
+  closed form of `E[max(Q1 + n, 0)]` over the distribution: the cell's points average to the simulation's water, the
+  cloudy ones are its share. `u` is `WeatherCloud::uniform_noise`: a tileable gradient fbm (128^3, 8 lattice cells and
+  3 octaves, a period of 4 weather cells: features of half a cell to an eighth), its ranks turned into values, so it is
+  exactly uniform (each tenth holds a tenth of the texels to within one) and as smooth as the noise. The physics never
+  reads it (`test_weather_cloud_fraction.cpp`: the closed form against the sum, the noise's histogram, its wrap).
 - **Measured** (trade-wind sea, 6 x 32^2, the game's step order, minutes 15-30): cover (each column's most clouded
   level) 49% with no confinement, 37% at 0.01, 17% at 0.02, 5% at 0.05 (all-or-nothing: 86%, 54%, 1.8%, 0%): more
   stirring thins the clouds instead of clearing them. sigma_s 0.1-0.45 g/kg, largest in the cloud layer.
@@ -348,7 +355,7 @@ Agreed with the user (2026-11-24). Stacked PRs, `feature/weather-*`:
     ground.
 14. **Turbulence:** the kicks and the vorticity confinement (the curl about the up, where the air can be turbulent);
     MacCormack tried and dropped.
-15. **Partial cloud:** the statistical cloud scheme in the physics; then the render's noise through its spread.
+15. **Partial cloud:** the statistical cloud scheme in the physics, the render's noise through its spread.
 
 Later: curl-noise gusts, the FFT sea reading the wind (U10, fetch, swell), rain and ground wetness, saving the weather,
 the GPU if the CPU tick is too slow.

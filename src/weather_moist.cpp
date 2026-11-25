@@ -50,6 +50,7 @@ WeatherMoist::WeatherMoist(const WeatherFluid &p_fluid, const Sounding &p_soundi
     rain_rate.assign(p_fluid.grid().cells(), 0.0f);
     spread_s.assign(p_fluid.cell_count(), 0.0f);
     cloud_share.assign(p_fluid.cell_count(), 0.0f);
+    cloud_q1.assign(p_fluid.cell_count(), float(-WeatherCloud::Q1_LIMIT));
     surface_flux.assign(p_fluid.grid().cells(), Surface());
 }
 
@@ -92,7 +93,7 @@ double WeatherMoist::condense(double p_theta, double p_qv, double p_qc, double p
 }
 
 double WeatherMoist::kessler(double *r_theta, double *r_qv, double *r_qc, double *r_qr, const double *p_rho, const double *p_exner,
-        const double *p_z, int p_levels, double p_dt, const double *p_sigma, double *r_share) {
+        const double *p_z, int p_levels, double p_dt, const double *p_sigma, double *r_share, double *r_q1) {
     constexpr int MAX = WeatherFluid::MAX_LEVELS;
     const double f2x = 17.27;
     const double psl = P0_MB;
@@ -142,9 +143,18 @@ double WeatherMoist::kessler(double *r_theta, double *r_qv, double *r_qc, double
             r_qc[k] += cond;
             r_qr[k] -= ern;
         }
-        if (nt + 1 == split && r_share) {
+        if (nt + 1 == split) {
             for (int k = 0; k < p_levels; k++) {
-                r_share[k] = share[k];
+                if (r_share) {
+                    r_share[k] = share[k];
+                }
+                if (r_q1) {
+                    double excess;
+                    const double sigma = p_sigma ? p_sigma[k] : 0.0;
+                    condense(r_theta[k], r_qv[k], r_qc[k], p_exner[k], pc[k], sigma, share[k], excess);
+                    const double lim = WeatherCloud::Q1_LIMIT;
+                    r_q1[k] = sigma > 1e-9 ? ov::clamp(excess / sigma, -lim, lim) : (excess > 0.0 ? lim : -lim);
+                }
             }
         }
         if (nt + 1 != split) {
@@ -324,9 +334,9 @@ void WeatherMoist::apply(WeatherFluid &p_fluid, const std::vector<Ground> &p_gro
             for (int k = 0; k < levels; k++) {
                 col[THETA][k] += (heating[k] - clear) * p_dt;
             }
-            double sigma[MAX], share[MAX];
+            double sigma[MAX], share[MAX], q1[MAX];
             spread(in, col, eddy, p_convective, p_fluid, sigma);
-            rain_rate[in] = float(kessler(col[THETA], col[QV], col[QC], col[QR], sound.rho.data(), sound.exner.data(), sound.z.data(), levels, p_dt, sigma, share));
+            rain_rate[in] = float(kessler(col[THETA], col[QV], col[QC], col[QR], sound.rho.data(), sound.exner.data(), sound.z.data(), levels, p_dt, sigma, share, q1));
             for (int k = 0; k < levels; k++) {
                 for (int s = 0; s < SCALARS; s++) {
                     here[p_fluid.scalar_offset(k, s)] = float(col[s][k]);
@@ -341,6 +351,7 @@ void WeatherMoist::apply(WeatherFluid &p_fluid, const std::vector<Ground> &p_gro
                 r_buoyancy[p_fluid.cell_index(in, k)] = float(GRAVITY * ((th - theta_ref) / theta_ref + 0.61 * (qv - qv_ref) - qc - qr));
                 spread_s[p_fluid.cell_index(in, k)] = float(sigma[k]);
                 cloud_share[p_fluid.cell_index(in, k)] = float(share[k]);
+                cloud_q1[p_fluid.cell_index(in, k)] = float(q1[k]);
             }
         } }, ov::Priority::LOW);
 }

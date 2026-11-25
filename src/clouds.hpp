@@ -41,9 +41,8 @@
 // and the altitude (linear between the levels); the noises shape it and drift with the wind at the camera. Planets
 // only: no weather, no clouds.
 struct CloudLayer {
-    // Earth's: a cumulus layer from 1.5 to 4 km, the shape noise repeating every ~12 km, the detail every ~1.5 km, the
-    // weather (the coverage noise) every ~48 km, every read of them warped by an offset repeating every ~800 km (so the
-    // field does too, not every weather period); of_weather scales it.
+    // Earth's: a cumulus layer from 1.5 to 4 km, the spread noise repeating every ~12 km, the weather every ~48 km, the
+    // wind's offset wrapping every ~800 km; of_weather scales it.
     float bottom_m = 1500.0f;
     float top_m = 4000.0f;
     float extinction = 0.04f; // 1/m at density 1
@@ -51,25 +50,22 @@ struct CloudLayer {
     float shadow_reach_m = 80000.0f; // the longest path of a shadow ray through the layer (a low sun over a plane)
     float shadow_min_extent_m = 64000.0f; // the shadow map's side round the camera, at least (Frame::shadow_extent_m; no uniform)
     // The noises' periods in LOD0 voxels (powers of two: the shading frame), set by of_weather.
-    int shape_period_vox = 0;
-    int detail_period_vox = 0;
+    int spread_period_vox = 0;
     int weather_period_vox = 0;
     int warp_period_vox = 0;
 
-    static constexpr double EARTH_SHAPE_PERIOD_M = 12000.0;
-    static constexpr double EARTH_DETAIL_PERIOD_M = 1500.0;
+    static constexpr double EARTH_SPREAD_PERIOD_M = 12000.0;
     static constexpr double EARTH_WEATHER_PERIOD_M = 48000.0;
     static constexpr double EARTH_WARP_PERIOD_M = 800000.0; // 2^23 voxels at 5 cm: the frame's longest period
-    // The noises' periods in the weather's cells (of_weather): the coverage's breaks a cell's cover into clouds, the
-    // shape's draws them, the detail's frays them.
+    // The periods in the weather's cells (of_weather): the spread noise's (Clouds::SPREAD_*: its features half a cell
+    // to an eighth, inside a cell, where the simulation has its spread), the weather's (a multiple of it).
     static constexpr double WEATHER_CELLS = 16.0;
-    static constexpr double SHAPE_CELLS = 4.0;
-    static constexpr double DETAIL_CELLS = 0.5;
+    static constexpr double SPREAD_CELLS = 4.0;
 
     // The weather's layer (Weather: its levels' top p_top_m over the ground, its cells about p_cell_m wide) at LOD0
     // voxels of p_voxel_m: from the ground to the top, Earth's optical depths at that thickness (the extinction over s =
-    // top / 2.5 km, the shadow's reach times s), the noises' periods the cells' (WEATHER_CELLS, SHAPE_CELLS, DETAIL_CELLS),
-    // so the clouds' places, bases and tops are the simulation's and the noise only shapes them. The march knows nothing
+    // top / 2.5 km, the shadow's reach times s), the periods the cells' (WEATHER_CELLS, SPREAD_CELLS): the clouds' water
+    // and share are the simulation's, the noise only places them inside a cell. The march knows nothing
     // of the terrain: a hill reaching into a cloud is hidden behind the cloud's part in front of it.
     static CloudLayer of_weather(double p_top_m, double p_cell_m, double p_voxel_m);
 
@@ -81,8 +77,7 @@ struct CloudLayer {
         p_f("cloud_extinction", extinction);
         p_f("cloud_albedo", albedo);
         p_f("cloud_shadow_reach_m", shadow_reach_m);
-        p_f("cloud_shape_period_vox", shape_period_vox);
-        p_f("cloud_detail_period_vox", detail_period_vox);
+        p_f("cloud_spread_period_vox", spread_period_vox);
         p_f("cloud_weather_period_vox", weather_period_vox);
         p_f("cloud_warp_period_vox", warp_period_vox);
     }
@@ -90,8 +85,9 @@ struct CloudLayer {
 
 class Clouds {
 public:
-    static constexpr int SHAPE_SIZE = 128; // the shape noise, texels per side
-    static constexpr int DETAIL_SIZE = 32;
+    static constexpr int SPREAD_SIZE = 128; // the spread noise, texels per side
+    static constexpr int SPREAD_LATTICE = 8; // its coarsest lattice cells per side (a feature ~half a weather cell)
+    static constexpr int SPREAD_OCTAVES = 3;
     static constexpr int GRID_W = 1536; // the direction grid: azimuths
     static constexpr int GRID_H = 768; // elevations, from straight down to straight up
     static constexpr int MAX_STEPS = 64; // a view ray's samples (fewer on a short one)
@@ -199,7 +195,6 @@ public:
     // through the layer at p, under it). The host declares the samplers HOST_TEXTURES and visit_host_frame's uniforms.
     static ov::str glsl_lookup();
     // The passes' compute shaders.
-    static ov::str glsl_pass_noise();
     // The passes over a weather grid (its lookup, WeatherGrid::glsl_lookup) of p_levels levels.
     static ov::str glsl_pass_march(const WeatherGrid &p_weather, int p_levels);
     static ov::str glsl_pass_shadow(const WeatherGrid &p_weather, int p_levels);
@@ -220,8 +215,8 @@ private:
         ov::str march;
         ov::str shadow;
     };
-    void _rt_start(const Atlas &p_atlas);
-    void _rt_frame(const ov::bytes &p_block, bool p_noise);
+    void _rt_start(const Atlas &p_atlas, const std::vector<uint16_t> &p_spread);
+    void _rt_frame(const ov::bytes &p_block);
     void _rt_destroy();
 
     ov::gpu::Device *device = nullptr;
@@ -236,23 +231,18 @@ private:
     double wind_offset[3] = { 0.0, 0.0, 0.0 }; // metres, wrapped to the warp period
     uint64_t last_usec = 0;
     bool has_camera = false;
-    bool noise_dirty = true;
 
     // Device-thread objects.
-    ov::gpu::Pipeline pipe_noise;
     ov::gpu::Pipeline pipe_march;
     ov::gpu::Pipeline pipe_shadow;
     ov::gpu::Buffer block;
-    ov::gpu::Texture shape;
-    ov::gpu::Texture detail;
+    ov::gpu::Texture spread_noise; // WeatherCloud::uniform_noise in R
     ov::gpu::Texture light;
     ov::gpu::Texture depth;
     ov::gpu::Texture history_light;
     ov::gpu::Texture history_depth;
     ov::gpu::Texture shadow;
     ov::gpu::Texture weather_map; // the weather grid's padded texels x FACES
-    ov::gpu::BindSet set_shape;
-    ov::gpu::BindSet set_detail;
     ov::gpu::BindSet set_march;
     ov::gpu::BindSet set_shadow;
 };

@@ -172,6 +172,7 @@ std::vector<float> Weather::look() const {
                     const double water = sc[fluid->scalar_offset(k, WeatherMoist::QC)]; // the partial cloud's mean (the updrafts' in it)
                     const float cloud = float(water / FULL_CLOUD_QC);
                     o[LOOK + k] = cloud;
+                    o[LOOK + levels_n + k] = moist->q1()[fluid->cell_index(in, k)];
                     cover = ov::max(cover, cloud);
                     cloudy += cloud > 0.03f;
                 }

@@ -3,7 +3,9 @@
 #include "weather_cloud_fraction.hpp"
 #include "weather_moist.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <vector>
 
 // The partial cloud (weather_cloud_fraction.hpp, docs/weather.md "Partial cloud"): Cuijpers & Bechtold's fits as
 // Bechtold & Siebesma (1998) give them, the render's spread consistent with them, and the moist physics' condensation:
@@ -60,4 +62,42 @@ TEST_CASE("WeatherMoist: the condensation is Kessler's with no spread, partial w
     CHECK(share == 1.0);
     CHECK(uniform == doctest::Approx(excess));
     CHECK(uniform == doctest::Approx(0.02 * qs / (1.0 + M::LATENT / M::CP * qs * 17.27 * 237.3 / ((t - 36.0) * (t - 36.0)))).epsilon(0.05));
+}
+
+TEST_CASE("WeatherCloud: the render's mean excess is the spread's") {
+    for (const double q1 : { -3.0, -1.0, -0.3, 0.0, 0.5, 2.0 }) {
+        const int n = 200000;
+        double sum = 0.0;
+        for (int i = 0; i < n; i++) {
+            sum += std::max(q1 + WeatherCloud::spread((i + 0.5) / n), 0.0);
+        }
+        CHECK(WeatherCloud::mean_excess(q1) == doctest::Approx(sum / n).epsilon(2e-3));
+    }
+    CHECK(WeatherCloud::mean_excess(-10.0) == 0.0);
+}
+
+TEST_CASE("WeatherCloud: the render's noise is exactly uniform, tileable and the same every run") {
+    const int size = 32;
+    const std::vector<float> a = WeatherCloud::uniform_noise(size, 4, 3, 7);
+    CHECK(a == WeatherCloud::uniform_noise(size, 4, 3, 7));
+    int bins[10] = {};
+    for (const float v : a) {
+        bins[std::min(int(v * 10.0f), 9)]++;
+    }
+    for (const int b : bins) {
+        CHECK(std::abs(b - int(a.size() / 10)) <= 1);
+    }
+    // Across the wrap the values change as little as inside: the tile repeats seamlessly.
+    double inside = 0.0, wrap = 0.0;
+    for (int z = 0; z < size; z++) {
+        for (int y = 0; y < size; y++) {
+            const size_t row = (size_t(z) * size + y) * size;
+            for (int x = 0; x + 1 < size; x++) {
+                inside = std::max(inside, double(std::fabs(a[row + x + 1] - a[row + x])));
+            }
+            wrap = std::max(wrap, double(std::fabs(a[row] - a[row + size - 1])));
+        }
+    }
+    MESSAGE("largest step: inside ", inside, ", across the wrap ", wrap);
+    CHECK(wrap <= inside * 1.2);
 }

@@ -21,26 +21,24 @@ TEST_CASE("CloudLayer::of_weather: the ground to the levels' top, the droplets' 
     CHECK(ocean.extinction == doctest::Approx(0.052).epsilon(0.02));
     const double lwc_g_m3 = WeatherForcing::AIR_DENSITY * Weather::FULL_CLOUD_QC * 1000.0;
     CHECK(double(ocean.extinction) == doctest::Approx(144.7e-3 * std::pow(lwc_g_m3, 0.88)).epsilon(0.1));
-    CHECK(double(ocean.shape_period_vox) * 0.05 <= CloudLayer::SHAPE_CELLS * 45.0);
-    CHECK(double(ocean.shape_period_vox) * 0.05 > 0.5 * CloudLayer::SHAPE_CELLS * 45.0);
+    CHECK(double(ocean.spread_period_vox) * 0.05 <= CloudLayer::SPREAD_CELLS * 45.0);
+    CHECK(double(ocean.spread_period_vox) * 0.05 > 0.5 * CloudLayer::SPREAD_CELLS * 45.0);
     // The noises' periods: powers of two of voxels, the warp a multiple of the others (the wind's offset wraps at it)
     // and longer than the weather (the field repeats at the warp's).
     const CloudLayer fine = CloudLayer::of_weather(200.0, 45.0, 0.001); // the frame's longest period clamps them all
     const CloudLayer earthlike = CloudLayer::of_weather(4000.0, 20000.0, 0.5);
     for (const CloudLayer &l : { ocean, fine, earthlike }) {
-        CHECK(power_of_two(l.shape_period_vox));
-        CHECK(power_of_two(l.detail_period_vox));
+        CHECK(power_of_two(l.spread_period_vox));
         CHECK(power_of_two(l.weather_period_vox));
         CHECK(power_of_two(l.warp_period_vox));
         CHECK(l.warp_period_vox >= 4 * l.weather_period_vox);
-        CHECK(l.weather_period_vox % l.shape_period_vox == 0);
-        CHECK(l.shape_period_vox % l.detail_period_vox == 0);
+        CHECK(l.weather_period_vox % l.spread_period_vox == 0);
     }
 }
 
 TEST_CASE("Clouds: every constant of the passes' and the hosts' GLSL substituted") {
     const CubeSphereGrid grid(16, 2000.0);
-    for (const ov::str &glsl : { Clouds::glsl_pass_noise(), Clouds::glsl_pass_march(grid, 4), Clouds::glsl_pass_shadow(grid, 4), Clouds::glsl_lookup() }) {
+    for (const ov::str &glsl : { Clouds::glsl_pass_march(grid, 4), Clouds::glsl_pass_shadow(grid, 4), Clouds::glsl_lookup() }) {
         CHECK(glsl.find('$') == ov::str::npos);
     }
     CHECK(Clouds::glsl_pass_march(grid, 4).find("vec3 cloud_camera_m;") != ov::str::npos);

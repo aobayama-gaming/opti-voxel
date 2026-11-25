@@ -101,26 +101,26 @@ They are made from the base's shape like the atmosphere: a layer
 between two altitudes above the base (`base_altitude`; a ray's part in it from `base_level_span`), every noise read at
 the 3D point in the shading frame (no 2D weather map, which a curved base would tear).
 - **Density:** the simulation's alone (2026-11-25, the user's call: see the fluid's result, cells and all): at a point
-  `cloud_density` is the weather's cloud water there (`cloud_sim_cover`: the grid's and the updrafts', over
-  `Weather::FULL_CLOUD_QC`, 0.3 g/kg), and its extinction the droplets' (`WeatherForcing::cloud_extinction`:
+  `cloud_density` is the weather's partial cloud there (`docs/weather.md` "Partial cloud"): the level's mean cloud
+  water over `Weather::FULL_CLOUD_QC` (0.3 g/kg) placed by the spread noise (`WeatherCloud::uniform_noise`, exactly
+  uniform, through `cloud_spread` and over `cloud_mean_excess`): a point is cloud where the cell's Q1 plus the noise's
+  spread is above 0, so a cell shows the scheme's share of cloud and averages to its water. Its extinction is the droplets' (`WeatherForcing::cloud_extinction`:
   `3 LWC / (2 rho_w r_e)`, LWC = 1.15 kg/m^3 x q_c, droplets of 10 um, Hansen & Travis 1974; 0.052 /m at 0.3 g/kg, a
-  visibility of ~75 m, Kunkel 1984's fog fit 0.057 /m). Nothing else shapes it: the clouds are the cells' (45 m,
-  trilinear between their centres). Schneider's Perlin-Worley noises (Horizon Zero Dawn's Nubis) shaped them before,
-  their places only the simulation's: they made round clumps drifting with the camera's wind and hid the flow. TODO:
-  the noise textures and their passes are still made and unread; delete them, or bring them back as detail under a
-  cell once the simulation's own structure shows (the user's call).
+  visibility of ~75 m, Kunkel 1984's fog fit 0.057 /m). Schneider's Perlin-Worley noises (Horizon Zero Dawn's Nubis)
+  shaped them before, their places only the simulation's: they made round clumps and hid the flow; they and their
+  GPU pass are gone. The spread noise is built once on the CPU at start (128^3, on the executor) and uploaded.
 - **Weather** (`Weather`, `docs/weather.md`): the simulation's cloud per level over the whole planet. When a tick
   lands (`World::frame`: `Weather::update`), `Clouds::set_weather` uploads its last two states as one 3D RGBA16F
   texture, the grid's atlas a slice per level (below), and keeps the largest cloud of the two (`cloud_cover_max`: the
-  passes skip where it is 0, as before the first state lands). `cloud_sim_cover` reads it along the base's up at the
+  passes skip where it is 0, as before the first state lands). `cloud_density` reads it along the base's up at the
   point (`weather_uv`, `WeatherGrid::glsl_lookup`; the face's texels at their centre, so the linear sampler never blends
   two faces; the halo makes the bilinear read cross a seam) and blends the two states by `Weather::blend` (where the
-  frame stands between them: the cover moves smoothly between ticks). The noises drift with the
+  frame stands between them: the cover moves smoothly between ticks). The spread noise drifts with the
   weather's wind at the camera times its time scale (`World::camera_wind`: the pattern moves with the cells' cover).
 - **Layer** (`CloudLayer::of_weather`): the weather's, from the ground to its levels' top (`top_m`, `docs/weather.md`):
   the droplets' extinction at density 1 (above; Hillaire 2016's cumulus range is 0.05 to 0.12 /m), albedo 0.99. The march knows nothing of the terrain: a hill reaching into a cloud is hidden behind its front part.
 - **3D from the levels:** the weather texture is the grid's atlas a slice per level (R the previous state's cloud, G the
-  latest's), read at the altitude over the top (linear between the levels' middles, the lowest's down to the ground, the top's fading to none at the top), so a column's
+  latest's, B and A their Q1s), read at the altitude over the top (linear between the levels' middles, the lowest's down to the ground, the top's fading to none at the top), so a column's
   cloud has the simulation's base and top and its density in between. The light
   towards the sun and the shadow map read the levels along their rays.
 - **Light:** Hillaire's (Frostbite, "Physically Based Sky, Atmosphere and Cloud Rendering", SIGGRAPH 2016): the
@@ -153,7 +153,7 @@ the 3D point in the shading frame (no 2D weather map, which a curved base would 
   frame; the passes read the weather texture, every placeholder substituted); before the weather: origin parity
   with the clouds in view (34 rebases, 0.02% of pixels differ); `GPUDeviceCheck` covers the 3D textures and the sampler; screenshots from the forest floor, Earth's pole,
   inside the flat world's layer, Earth from 100 km and the 2 km planet from the ground and from 4 km out.
-- **Limits:** the weather's cells (~49 m on the 2 km planet at N = 64) low-pass the cover; the noises drift with
+- **Limits:** the weather's cells (~49 m on the 2 km planet at N = 64) low-pass the cover; the spread noise drifts with
   the wind at the camera, not each cell's; the layer's altitudes are the same everywhere (a cumulonimbus is a cumulus,
   not a taller layer); no clouds on a flat world or a torus (no weather there). The field still repeats every warp period, at most 2^23 voxels (`ShadeFrame::MAX_SHIFT`: 419 km at
   5 cm; a tile index from the origin's high bits could hash each tile instead); the light march reuses its start
@@ -162,7 +162,7 @@ the 3D point in the shading frame (no 2D weather map, which a curved base would 
   composited by its front and mean distances, so a hill reaching into one would be cut by texels (the layer is lifted
   over the world's largest relief instead, so no cloud wraps a peak); the wind is a render-space vector, so on a planet
   the noise drifts through the shell away from the pole; the grid's history is copied every frame (a ping-pong would
-  save the copies), the noises have no mipmaps (distant rays sample them minified) and the shadow map is marched every
+  save the copies), the spread noise has no mipmaps (distant rays sample them minified) and the shadow map is marched every
   frame; no shadow past the shadow map (faded over its last tenth); the clouds take the scene's sun
   colour, warm here, through the air (no white balance); no cloud shadows on the atmosphere (light shafts), no
   lightning, no precipitation. The Dawn viewer has no clouds yet.

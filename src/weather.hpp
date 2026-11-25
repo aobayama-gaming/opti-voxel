@@ -28,8 +28,8 @@
 // - A published state is stride() floats per padded cell: the column's LOOK (Look: the ground level's wind (m/s, planet
 //   axes), the cover (its levels' largest cloud), the type (how deep the cloud is: 0 a layer, 1 a tower over a third of
 //   the levels), the rain (mm/h at the ground), the ground level's temperature (C) and vapour (g/kg), the wind aloft
-//   (the levels' mean)), then each level's cloud water (the grid's and the updrafts') over FULL_CLOUD_QC (the clouds'
-//   density), the ground's first.
+//   (the levels' mean)), then each level's mean cloud water (the partial cloud's) over FULL_CLOUD_QC (the clouds'
+//   density), the ground's first, then each level's Q1 (WeatherMoist::q1: where in its spread the cell's mean stands).
 class Weather : public ov::WorkerLoop {
 public:
     enum Look {
@@ -93,7 +93,7 @@ public:
     int levels() const { return level_count; }
     double top_m() const { return settings.top_m; }
     // A published state's floats per padded cell: LOOK, then a cloud per level.
-    int stride() const { return LOOK + level_count; }
+    int stride() const { return LOOK + 2 * level_count; }
     // The last two states (stride() floats per padded cell of grid()): previous, latest.
     const std::vector<float> &previous() const { return prev_look; }
     const std::vector<float> &latest() const { return live_look; }

@@ -112,6 +112,9 @@ public:
     // Each cell's spread sigma_s (kg/kg) and cloudy share in the last apply(), per interior cell and level.
     const std::vector<float> &spread() const { return spread_s; }
     const std::vector<float> &share() const { return cloud_share; }
+    // Each cell's Q1 (its mean saturation excess over its spread, within +-WeatherCloud::Q1_LIMIT; a uniform cell's the
+    // limit of its sign), per interior cell and level: the render's.
+    const std::vector<float> &q1() const { return cloud_q1; }
     // The rain reaching each column's ground in the last apply() (m of water per second), per interior cell.
     const std::vector<float> &rain() const { return rain_rate; }
     // The surface fluxes of the last apply(), per interior cell.
@@ -125,7 +128,7 @@ public:
     // precipitation rate (m of water per second) returned.
     // p_sigma (or null: none) the cells' spread per level; r_share (or null) their cloudy share.
     static double kessler(double *r_theta, double *r_qv, double *r_qc, double *r_qr, const double *p_rho, const double *p_exner,
-            const double *p_z, int p_levels, double p_dt, const double *p_sigma = nullptr, double *r_share = nullptr);
+            const double *p_z, int p_levels, double p_dt, const double *p_sigma = nullptr, double *r_share = nullptr, double *r_q1 = nullptr);
     // The condensation (kg/kg, negative: evaporation) that takes a cell's theta, qv, qc to the partial cloud of spread
     // p_sigma (0: uniform), p_pc Kessler's saturation factor at its pressure; r_share its cloudy share, r_excess its mean
     // saturation excess s.
@@ -151,6 +154,6 @@ private:
     Sounding sound;
     Params params;
     std::vector<float> rain_rate;
-    std::vector<float> spread_s, cloud_share;
+    std::vector<float> spread_s, cloud_share, cloud_q1;
     std::vector<Surface> surface_flux;
 };
