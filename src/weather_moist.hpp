@@ -9,7 +9,14 @@
 // - Warm microphysics: Kessler (1969) as in Klemp & Wilhelmson (1978) and the DCMIP2016 reference code (kessler.f90,
 //   Ullrich; ported step for step: kessler()): vapour, cloud water and rain; the saturation adjustment (KW eq. 3.10,
 //   with its Clausius-Clapeyron denominator), autoconversion past 1 g/kg, accretion, rain falling at its terminal speed
-//   (sub-stepped under its CFL) and evaporating under the cloud; latent heat into the potential temperature.
+//   (sub-stepped under its CFL) and evaporating under the cloud; latent heat into the potential temperature. The
+//   saturation adjustment is partial (weather_cloud_fraction.hpp): a cell's cloud water is the statistical scheme's
+//   mean for its saturation excess and spread sigma_s, its cloudy share N; autoconversion from the cloudy part's water
+//   (q_c / N). With no spread it is Kessler's all-or-nothing adjustment.
+// - The spread sigma_s per cell: the variance budget of s in balance (Stull 1988, 4.3: production -2 w's' ds/dz,
+//   dissipation sigma^2 / tau), sigma^2 = 2 tau |w's' ds/dz|, the flux w's' the subgrid turbulence's (-K ds/dz) and the
+//   shallow convection's (its updraft's M (s_u - s); the convection sets the humidity's variance, as Lenderink &
+//   Siebesma 2000 couple them), tau the boundary layer's turnover z_i / w* (Deardorff; z_i the updraft's top).
 // - Bulk surface fluxes over each column's ground (Monin-Obukhov neutral): momentum C_D U u, sensible heat C_H U
 //   (theta_s - theta), evaporation beta C_E U (q_s(T_s) - q_v) (dew at full rate), C_D = (k / ln(z_1 / z_0))^2 at the
 //   lowest level's centre, C_H = C_E = C_D; U at least GUSTINESS (free convection at no wind).
@@ -84,6 +91,14 @@ public:
         float ustar = 0.0f;
     };
 
+    // The shallow convection's fluxes per interior cell and level (WeatherFluid::cell_index), kinematic, at the levels'
+    // centres: theta_l (K m/s) and q_t (kg/kg m/s); its updraft's top per interior cell (m, 0 where none rose). {}: none.
+    struct Convective {
+        const float *theta_l_flux;
+        const float *qt_flux;
+        const float *top_m;
+    };
+
     struct Params {
         double exchange = 15.0; // the surface fluxes' twist
         double subsidence_per_s = 1.5e-5; // D: w = -D z
@@ -93,7 +108,10 @@ public:
 
     const Sounding &reference() const { return sound; }
     // Everything above on p_fluid's state for p_dt (p_ground per interior cell), then the buoyancy (per fluid cell).
-    void apply(WeatherFluid &p_fluid, const std::vector<Ground> &p_ground, double p_dt, float *r_buoyancy);
+    void apply(WeatherFluid &p_fluid, const std::vector<Ground> &p_ground, double p_dt, float *r_buoyancy, const Convective &p_convective = {});
+    // Each cell's spread sigma_s (kg/kg) and cloudy share in the last apply(), per interior cell and level.
+    const std::vector<float> &spread() const { return spread_s; }
+    const std::vector<float> &share() const { return cloud_share; }
     // The rain reaching each column's ground in the last apply() (m of water per second), per interior cell.
     const std::vector<float> &rain() const { return rain_rate; }
     // The surface fluxes of the last apply(), per interior cell.
@@ -105,8 +123,16 @@ public:
     static double neutral_exchange(double p_z_m, double p_z0_m);
     // The Kessler step on one column (kessler.f90): theta, qv, qc, qr per level, the column's rho, exner and z; the
     // precipitation rate (m of water per second) returned.
+    // p_sigma (or null: none) the cells' spread per level; r_share (or null) their cloudy share.
     static double kessler(double *r_theta, double *r_qv, double *r_qc, double *r_qr, const double *p_rho, const double *p_exner,
-            const double *p_z, int p_levels, double p_dt);
+            const double *p_z, int p_levels, double p_dt, const double *p_sigma = nullptr, double *r_share = nullptr);
+    // The condensation (kg/kg, negative: evaporation) that takes a cell's theta, qv, qc to the partial cloud of spread
+    // p_sigma (0: uniform), p_pc Kessler's saturation factor at its pressure; r_share its cloudy share, r_excess its mean
+    // saturation excess s.
+    static double condense(double p_theta, double p_qv, double p_qc, double p_exner, double p_pc, double p_sigma, double &r_share, double &r_excess);
+    // A level's saturation coefficients at the liquid water temperature: a and b of s = a q_w - b theta_l (Bechtold &
+    // Siebesma 1998, A1), q_sl.
+    static void saturation_terms(double p_theta_l, double p_exner, double p_pc, double &r_a, double &r_b, double &r_qsl);
     // The eddy diffusivity (m^2/s) at each interface k (between levels k and k + 1) of a column: theta, qv, qc per level
     // and its horizontal wind (3 per level), p_delta_m the Smagorinsky length.
     static void eddy_diffusivity(const double *p_theta, const double *p_qv, const double *p_qc, const double (*p_wind)[3], double p_dz,
@@ -117,8 +143,14 @@ public:
     static void longwave(const double *p_qc, const double *p_rho, const double *p_exner, double p_dz, int p_levels, double *r_heating);
 
 private:
+    // The spread sigma_s per level of interior cell p_cell's column p_col (the scalars per level, after the turbulence of
+    // diffusivity p_eddy per interface).
+    void spread(size_t p_cell, const double (*p_col)[WeatherFluid::MAX_LEVELS], const double *p_eddy, const Convective &p_convective,
+            const WeatherFluid &p_fluid, double *r_sigma) const;
+
     Sounding sound;
     Params params;
     std::vector<float> rain_rate;
+    std::vector<float> spread_s, cloud_share;
     std::vector<Surface> surface_flux;
 };

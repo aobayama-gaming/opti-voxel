@@ -53,6 +53,8 @@ public:
     const std::vector<float> &cloud() const { return cloud_water; }
     // The columns' updraft tops (m; 0 where none rose).
     const std::vector<float> &tops() const { return top; }
+    // Its fluxes and tops for the moist physics' spread (WeatherMoist::Convective).
+    WeatherMoist::Convective fluxes() const { return { flux_theta_l.data(), flux_qt.data(), top.data() }; }
 
     // A column's updraft: theta, qv, qc per level, the sounding's exner, the surface fluxes, the last top.
     static void plume(const double *p_theta, const double *p_qv, const double *p_qc, const double *p_exner, double p_dz, int p_levels,
@@ -66,4 +68,5 @@ private:
     WeatherMoist::Sounding ref;
     std::vector<float> top;
     std::vector<float> cloud_water;
+    std::vector<float> flux_theta_l, flux_qt; // M (phi_u - phi) at the levels' centres, per interior cell and level
 };

@@ -130,11 +130,11 @@ void Weather::advance(double p_dt) {
     double left = p_dt;
     while (left > 1e-9) {
         const double dt = ov::min(ov::min(left, MAX_STEP_S), fluid->max_dt());
-        drive->warm(sun_at(sim_time_s + 0.5 * dt), dt, *fluid, moist->reference().rho, convection->cloud().data(), ground);
+        drive->warm(sun_at(sim_time_s + 0.5 * dt), dt, *fluid, moist->reference().rho, nullptr, ground);
         fluid->advect(dt);
         drive->apply(*fluid, dt, steps);
         convection->apply(*fluid, moist->surface(), dt);
-        moist->apply(*fluid, ground, dt, buoyancy.data());
+        moist->apply(*fluid, ground, dt, buoyancy.data(), convection->fluxes());
         fluid->force(dt, buoyancy.data());
         fluid->project(dt);
         left -= dt;
@@ -169,7 +169,7 @@ std::vector<float> Weather::look() const {
                     for (int a = 0; a < 3; a++) {
                         aloft[a] += sc[fluid->wind_offset(k) + a] / float(levels_n);
                     }
-                    const double water = double(sc[fluid->scalar_offset(k, WeatherMoist::QC)]) + double(convection->cloud()[fluid->cell_index(in, k)]);
+                    const double water = sc[fluid->scalar_offset(k, WeatherMoist::QC)]; // the partial cloud's mean (the updrafts' in it)
                     const float cloud = float(water / FULL_CLOUD_QC);
                     o[LOOK + k] = cloud;
                     cover = ov::max(cover, cloud);

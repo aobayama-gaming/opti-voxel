@@ -3,6 +3,7 @@
 #include "parallel_for.hpp"
 
 #include "ov/math.hpp"
+#include "weather_cloud_fraction.hpp"
 
 #include <cmath>
 
@@ -47,6 +48,8 @@ WeatherMoist::WeatherMoist(const WeatherFluid &p_fluid, const Sounding &p_soundi
         sound = sounding(p_fluid, sound.theta, sound.qv);
     }
     rain_rate.assign(p_fluid.grid().cells(), 0.0f);
+    spread_s.assign(p_fluid.cell_count(), 0.0f);
+    cloud_share.assign(p_fluid.cell_count(), 0.0f);
     surface_flux.assign(p_fluid.grid().cells(), Surface());
 }
 
@@ -60,19 +63,48 @@ double WeatherMoist::neutral_exchange(double p_z_m, double p_z0_m) {
 }
 
 // kessler.f90 (DCMIP2016, Ullrich after Klemp), step for step; levels from the ground up.
-double WeatherMoist::kessler(double *r_theta, double *r_qv, double *r_qc, double *r_qr, const double *p_rho, const double *p_exner,
-        const double *p_z, int p_levels, double p_dt) {
-    constexpr int MAX = WeatherFluid::MAX_LEVELS;
+void WeatherMoist::saturation_terms(double p_theta_l, double p_exner, double p_pc, double &r_a, double &r_b, double &r_qsl) {
     const double f2x = 17.27;
     const double f5 = 237.3 * f2x * LATENT / CP;
+    const double tl = p_exner * p_theta_l;
+    r_qsl = p_pc * std::exp(f2x * (tl - 273.0) / (tl - 36.0));
+    const double gamma = r_qsl * f5 / ((tl - 36.0) * (tl - 36.0)); // L / c_p dq_s/dT
+    r_a = 1.0 / (1.0 + gamma);
+    r_b = r_a * p_exner * gamma * CP / LATENT; // a (T / theta) dq_s/dT
+}
+
+double WeatherMoist::condense(double p_theta, double p_qv, double p_qc, double p_exner, double p_pc, double p_sigma, double &r_share, double &r_excess) {
+    const double theta_l = p_theta - LATENT / (CP * p_exner) * p_qc;
+    const double qw = p_qv + p_qc;
+    double a, b, qsl;
+    saturation_terms(theta_l, p_exner, p_pc, a, b, qsl);
+    r_excess = a * (qw - qsl);
+    double ql;
+    if (p_sigma > 1e-9) {
+        const double q1 = r_excess / p_sigma;
+        r_share = WeatherCloud::fraction(q1);
+        ql = ov::min(p_sigma * WeatherCloud::water(q1), qw);
+    } else {
+        r_share = r_excess > 0.0 ? 1.0 : 0.0;
+        ql = ov::max(r_excess, 0.0);
+    }
+    return ql - p_qc;
+}
+
+double WeatherMoist::kessler(double *r_theta, double *r_qv, double *r_qc, double *r_qr, const double *p_rho, const double *p_exner,
+        const double *p_z, int p_levels, double p_dt, const double *p_sigma, double *r_share) {
+    constexpr int MAX = WeatherFluid::MAX_LEVELS;
+    const double f2x = 17.27;
     const double psl = P0_MB;
     const double rhoqr = 1000.0;
-    double r[MAX], rhalf[MAX], velqr[MAX], sed[MAX], pc[MAX];
+    double r[MAX], rhalf[MAX], velqr[MAX], sed[MAX], pc[MAX], share[MAX];
     for (int k = 0; k < p_levels; k++) {
         r[k] = 0.001 * p_rho[k];
         rhalf[k] = std::sqrt(p_rho[0] / p_rho[k]);
         pc[k] = 3.8 / (std::pow(p_exner[k], 1.0 / KAPPA_EXNER) * psl);
         velqr[k] = 36.34 * std::pow(r_qr[k] * r[k], 0.1364) * rhalf[k];
+        double excess;
+        condense(r_theta[k], r_qv[k], r_qc[k], p_exner[k], pc[k], p_sigma ? p_sigma[k] : 0.0, share[k], excess);
     }
     double dt_max = p_dt;
     for (int k = 0; k + 1 < p_levels; k++) {
@@ -91,24 +123,29 @@ double WeatherMoist::kessler(double *r_theta, double *r_qv, double *r_qc, double
         const int top = p_levels - 1;
         sed[top] = -dt0 * r_qr[top] * velqr[top] / (0.5 * (p_z[top] - p_z[top - 1]));
         for (int k = 0; k < p_levels; k++) {
-            // Autoconversion and accretion (KW eq. 2.13a,b).
-            const double qrprod = r_qc[k] - (r_qc[k] - dt0 * ov::max(0.001 * (r_qc[k] - 0.001), 0.0)) / (1.0 + dt0 * 2.2 * std::pow(r_qr[k], 0.875));
+            // Autoconversion (KW eq. 2.13a, from the cloudy part's water: N k1 (q_c / N - a)) and accretion (2.13b).
+            const double qrprod = r_qc[k] - (r_qc[k] - dt0 * ov::max(0.001 * (r_qc[k] - 0.001 * share[k]), 0.0)) / (1.0 + dt0 * 2.2 * std::pow(r_qr[k], 0.875));
             r_qc[k] = ov::max(r_qc[k] - qrprod, 0.0);
             r_qr[k] = ov::max(r_qr[k] + qrprod + sed[k], 0.0);
-            // The saturation (KW eq. 2.11) and the adjustment towards it (eq. 3.10).
+            // The saturation (KW eq. 2.11) and the adjustment towards the partial cloud (eq. 3.10 when uniform).
             const double t = p_exner[k] * r_theta[k];
             const double qvs = pc[k] * std::exp(f2x * (t - 273.0) / (t - 36.0));
-            const double prod = (r_qv[k] - qvs) / (1.0 + qvs * f5 / ((t - 36.0) * (t - 36.0)));
+            double excess;
+            const double cond = condense(r_theta[k], r_qv[k], r_qc[k], p_exner[k], pc[k], p_sigma ? p_sigma[k] : 0.0, share[k], excess);
             // The rain's evaporation (KW eq. 2.14a,b).
             const double rq = r[k] * r_qr[k];
             const double ern = ov::min(dt0 * (((1.6 + 124.9 * std::pow(rq, 0.2046)) * std::pow(rq, 0.525)) / (2550000.0 * pc[k] / (3.8 * qvs) + 540000.0)) *
                             (dim(qvs, r_qv[k]) / (r[k] * qvs)),
-                    ov::min(ov::max(-prod - r_qc[k], 0.0), r_qr[k]));
-            const double cond = ov::max(prod, -r_qc[k]);
+                    ov::min(ov::max(-excess, 0.0), r_qr[k]));
             r_theta[k] += LATENT / (CP * p_exner[k]) * (cond - ern);
             r_qv[k] = ov::max(r_qv[k] - cond + ern, 0.0);
             r_qc[k] += cond;
             r_qr[k] -= ern;
+        }
+        if (nt + 1 == split && r_share) {
+            for (int k = 0; k < p_levels; k++) {
+                r_share[k] = share[k];
+            }
         }
         if (nt + 1 != split) {
             for (int k = 0; k < p_levels; k++) {
@@ -174,7 +211,42 @@ void WeatherMoist::longwave(const double *p_qc, const double *p_rho, const doubl
     }
 }
 
-void WeatherMoist::apply(WeatherFluid &p_fluid, const std::vector<Ground> &p_ground, double p_dt, float *r_buoyancy) {
+void WeatherMoist::spread(size_t p_cell, const double (*p_col)[WeatherFluid::MAX_LEVELS], const double *p_eddy, const Convective &p_convective,
+        const WeatherFluid &p_fluid, double *r_sigma) const {
+    constexpr int MAX = WeatherFluid::MAX_LEVELS;
+    const int levels = p_fluid.levels();
+    const double dz = p_fluid.dz_m();
+    double theta_l[MAX], qw[MAX], a[MAX], b[MAX];
+    for (int k = 0; k < levels; k++) {
+        const double exner = sound.exner[size_t(k)];
+        theta_l[k] = p_col[THETA][k] - LATENT / (CP * exner) * p_col[QC][k];
+        qw[k] = p_col[QV][k] + p_col[QC][k];
+        double qsl;
+        saturation_terms(theta_l[k], exner, 3.8 / (std::pow(exner, 1.0 / KAPPA_EXNER) * P0_MB), a[k], b[k], qsl);
+    }
+    // tau: the boundary layer's turnover z_i / w* (w* from the surface's buoyancy flux; at least u* and 0.1 m/s).
+    const double top = p_convective.top_m ? double(p_convective.top_m[p_cell]) : 0.0;
+    const double zi = ov::max(top, 2.0 * dz);
+    const Surface &sf = surface_flux[p_cell];
+    const double buoyancy_flux = GRAVITY / p_col[THETA][0] * (double(sf.theta_flux) + 0.61 * p_col[THETA][0] * double(sf.qv_flux));
+    const double wstar = std::cbrt(ov::max(buoyancy_flux, 0.0) * zi);
+    const double tau = zi / ov::max(ov::max(wstar, double(sf.ustar)), 0.1);
+    for (int k = 0; k < levels; k++) {
+        const int k0 = ov::max(k - 1, 0), k1 = ov::min(k + 1, levels - 1);
+        const double span = double(k1 - k0) * dz;
+        const double ds = (a[k] * (qw[k1] - qw[k0]) - b[k] * (theta_l[k1] - theta_l[k0])) / span;
+        const double eddy = 0.5 * ((k > 0 ? p_eddy[k - 1] : 0.0) + (k + 1 < levels ? p_eddy[k] : 0.0));
+        double production = eddy * ds * ds; // -w's' ds/dz, w's' = -K ds/dz
+        if (p_convective.qt_flux) {
+            const size_t at = p_fluid.cell_index(p_cell, k);
+            const double flux = a[k] * double(p_convective.qt_flux[at]) - b[k] * double(p_convective.theta_l_flux[at]);
+            production += std::fabs(flux * ds);
+        }
+        r_sigma[k] = std::sqrt(2.0 * tau * production);
+    }
+}
+
+void WeatherMoist::apply(WeatherFluid &p_fluid, const std::vector<Ground> &p_ground, double p_dt, float *r_buoyancy, const Convective &p_convective) {
     const WeatherGrid &g = p_fluid.grid();
     const int levels = p_fluid.levels();
     const int st = p_fluid.stride();
@@ -252,7 +324,9 @@ void WeatherMoist::apply(WeatherFluid &p_fluid, const std::vector<Ground> &p_gro
             for (int k = 0; k < levels; k++) {
                 col[THETA][k] += (heating[k] - clear) * p_dt;
             }
-            rain_rate[in] = float(kessler(col[THETA], col[QV], col[QC], col[QR], sound.rho.data(), sound.exner.data(), sound.z.data(), levels, p_dt));
+            double sigma[MAX], share[MAX];
+            spread(in, col, eddy, p_convective, p_fluid, sigma);
+            rain_rate[in] = float(kessler(col[THETA], col[QV], col[QC], col[QR], sound.rho.data(), sound.exner.data(), sound.z.data(), levels, p_dt, sigma, share));
             for (int k = 0; k < levels; k++) {
                 for (int s = 0; s < SCALARS; s++) {
                     here[p_fluid.scalar_offset(k, s)] = float(col[s][k]);
@@ -265,6 +339,8 @@ void WeatherMoist::apply(WeatherFluid &p_fluid, const std::vector<Ground> &p_gro
                 const double qc = here[p_fluid.scalar_offset(k, QC)];
                 const double qr = here[p_fluid.scalar_offset(k, QR)];
                 r_buoyancy[p_fluid.cell_index(in, k)] = float(GRAVITY * ((th - theta_ref) / theta_ref + 0.61 * (qv - qv_ref) - qc - qr));
+                spread_s[p_fluid.cell_index(in, k)] = float(sigma[k]);
+                cloud_share[p_fluid.cell_index(in, k)] = float(share[k]);
             }
         } }, ov::Priority::LOW);
 }

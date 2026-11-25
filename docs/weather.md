@@ -117,8 +117,8 @@ cube's 4-fold symmetry seeds what is left: clumps, no swirls. Two additions, one
   2003's clouds): the curl `w` of the wind from central differences (the neighbours' winds as they are: the sphere's
   turn over a cell is 2% of a radian; one-sided at the ground and the top), `N = grad |w| / |grad |w||`, the force
   `epsilon D (N x w)`, `D` the cell's `(width^2 dz)^(1/3)`. It feeds back the swirls the grid's dissipation takes out.
-  Only the curl's part about the up (the swirls seen from above). `epsilon` is the planet file's `confinement`, **off
-  by default**: 0.05 balances the dissipation at 2 cells (a 2-cell vortex of 4 m/s keeps 0.26 of its peak over 5
+  Only the curl's part about the up (the swirls seen from above). `epsilon` is the planet file's `confinement`, 0.02
+  (with the partial cloud, below: the eddies at 0.52 w*, under a convective layer's ~0.6, the cover BOMEX's "<20%"). 0.05 balances the dissipation at 2 cells (a 2-cell vortex of 4 m/s keeps 0.26 of its peak over 5
   minutes without it, ~1.0 at 0.05, 2.4 at 0.15, 6 at 0.3: the smoke solvers' 0.3 runs away on a grid this coarse,
   `test_weather_turbulence.cpp`), but on the planet it cleared every cloud, even at 0.02 (table below; the whole
   curl did too, sharpening the shear over the ground). Times the subgrid closure's stability factor
@@ -139,7 +139,7 @@ cube's 4-fold symmetry seeds what is left: clumps, no swirls. Two additions, one
   die long before the eddies are unphysical (0.51 w* at 0.02; convective boundary layers peak ~0.6 w*): a cell is
   cloudy only when its mean is saturated, so the cloud deck here lives at RH 0.99, kept that wet by the grid's
   under-mixing, and a 5% drier mean clears it. Real cumulus form at a mean RH of ~0.8-0.9 because the air inside a
-  cell varies; the model has no such variance (the plan: a statistical cloud fraction, Sommeria & Deardorff 1977).
+  cell varies; the model had no such variance: the partial cloud below.
 - **Kicks** (`WeatherForcing::kicks`, in `apply`): small swirls of random sign the grid's symmetry would never start,
   a stochastic backscatter (Shutts 2005, the motion under the grid fed back). Each step a column starts one with a
   chance that puts a new one over any point every `KICK_EVERY_S` (60 s) on average (a hash of the seed, the step and
@@ -163,6 +163,34 @@ cube's 4-fold symmetry seeds what is left: clumps, no swirls. Two additions, one
   | 0.05 | 1 | 0.00 / 0.00 | 25.8-26.0 | 205 / 196 m | 13.2 / 11.1 |
 
   The kicks cost a third of the cover at the start and less after; the shapes they make are judged in the viewer.
+
+## Partial cloud
+The air inside a 45 m cell is not uniform: a cell a little under saturation holds some cloud where it is moister.
+`weather_cloud_fraction.hpp` and `WeatherMoist::condense` (approved 2026-11-25):
+- **The scheme:** Sommeria & Deardorff (1977) / Mellor (1977) with Cuijpers & Bechtold's (1995) fits to large-eddy
+  simulations, as Bechtold & Siebesma (1998, JAS 55, appendices A-B) give them. `s = a (q_w - q_sl)` the mean
+  saturation excess at the liquid water temperature (`a = 1 / (1 + L/c_p dq_s/dT)`, Kessler's own denominator),
+  `Q1 = s / sigma_s`; the cloudy share `N = max(0, min(1, 0.5 + 0.36 atan(1.55 Q1)))`, the mean cloud water
+  `q_l / sigma_s = exp(1.2 Q1 - 1)` under saturation. Over it their quadratic grows as `Q1^2` and never meets the
+  uniform cell's `q_l = s`: `Q1 + exp(-1 - 1.2 Q1)` instead (continuous at 0, within 1% of theirs over [1, 2]). The
+  fit's tail is the skewed one trade cumulus need (Bechtold et al. 1995: a Gaussian suits stratocumulus only).
+- **In the physics:** Kessler's saturation adjustment goes to the partial cloud's mean (latent heat, buoyancy, the
+  cloud's longwave and the ground's shade all from it); autoconversion from the cloudy part's water `q_c / N`. No
+  spread: Kessler's all-or-nothing, unchanged.
+- **The spread** `sigma_s` per cell: s's variance budget in balance (Stull 1988: production `-2 w's' ds/dz`,
+  dissipation `sigma^2 / tau`): `sigma^2 = 2 tau |w's' ds/dz|`, the flux the subgrid turbulence's `-K ds/dz` plus the
+  shallow convection's updraft `M (s_u - s)` (convection sets the humidity's variance, as Lenderink & Siebesma 2000
+  couple a mass flux to a statistical cloud scheme); `tau = z_i / w*`, the boundary layer's turnover (z_i the updraft's
+  top, w* the surface buoyancy flux's; at least u* and 0.1 m/s). The updraft's own cloud is no longer added on top:
+  the partial cloud is the cloud.
+- **For the render** (next): the spread's distribution is fixed by the fit (`N = P(s > 0)` makes its CDF
+  `0.5 + 0.36 atan(1.55 x)`), so a uniform noise `u` through `WeatherCloud::spread(u) = tan((u - 0.5) / 0.36) / 1.55`
+  saturates exactly the share N of a cell's points (`test_weather_cloud_fraction.cpp`).
+- **Measured** (trade-wind sea, 6 x 32^2, the game's step order, minutes 15-30): cover (each column's most clouded
+  level) 49% with no confinement, 37% at 0.01, 17% at 0.02, 5% at 0.05 (all-or-nothing: 86%, 54%, 1.8%, 0%): more
+  stirring thins the clouds instead of clearing them. sigma_s 0.1-0.45 g/kg, largest in the cloud layer.
+- **Open:** the levels alternate (180 and 260 m cloudy, 140, 220 and 300 m much less; the vapour alternates too, 19.6 /
+  17.7 / 19.2 g/kg): a vertical odd-even mode, older than this, to find.
 
 ## Convection
 `WeatherConvection` (`src/weather_convection.*`, engine-free): the shallow convection the cells cannot resolve (3-4
@@ -233,7 +261,7 @@ would leave [4, 1024]), `top_m` (the levels' top over the ground, 600; the level
 `tick_hz` (5), `time_scale` (game seconds a real second simulates, 1), `prevailing_mps` (5), `storm_m` (0: 1/8 of the
 radius), `spin_up_s` (game seconds simulated before the first frame, 600), `day_s` (the weather's day, 300),
 `inversion_m` (the start sounding's inversion, 300, under `top_m`), `exchange` (the surface fluxes' twist, 15),
-`confinement` (the vorticity confinement's epsilon, 0.05, in [0, 1]), `kick_mps` (the random swirls' speed, 1).
+`confinement` (the vorticity confinement's epsilon, 0.02, in [0, 1]), `kick_mps` (the random swirls' speed, 1).
 
 ## Worker
 `Weather` (`src/weather.*`, engine-free): the fluid, its moist physics and its forcing on a worker of its own (`ov::executor().start_worker`,
@@ -318,8 +346,9 @@ Agreed with the user (2026-11-24). Stacked PRs, `feature/weather-*`:
     (thermal inertia per biome), clouds shading it; the report's day and night sides.
 13. **Shallow convection:** EDMF's updraft per column (`WeatherConvection`), its cloud published and shading the
     ground.
-14. **Turbulence:** the kicks ("Turbulence"); the vorticity confinement written but off (it clears the clouds);
+14. **Turbulence:** the kicks and the vorticity confinement (the curl about the up, where the air can be turbulent);
     MacCormack tried and dropped.
+15. **Partial cloud:** the statistical cloud scheme in the physics; then the render's noise through its spread.
 
 Later: curl-noise gusts, the FFT sea reading the wind (U10, fetch, swell), rain and ground wetness, saving the weather,
 the GPU if the CPU tick is too slow.

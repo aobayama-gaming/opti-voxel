@@ -24,7 +24,7 @@
 //     "atmosphere": { "density": 1, "tint": [1, 1, 1] },
 //     "weather": { "on": true, "cell_m": 0, "top_m": 600, "tick_hz": 5, "time_scale": 1, "prevailing_mps": 5, "storm_m": 0,
 //                  "spin_up_s": 600, "day_s": 300, "inversion_m": 300, "exchange": 15,
-//                  "confinement": 0, "kick_mps": 1 },
+//                  "confinement": 0.02, "kick_mps": 1 },
 //     "look": { "atmosphere": true, "atmosphere_scale": 0, "clouds": true },
 //     "instances": [ { "species": "conifer", "cell_m": 5, "share": 1 }... ],
 //     "features": [ { "kind": "lava_lake", "cell_m": 640, "chance": 0.6, "radius_m": [18, 45] }... ],
@@ -115,7 +115,7 @@ struct WorldFile {
         double day_s = 300.0; // the weather's day: its Coriolis (the twist: storms spin at the game's scale)
         double inversion_m = 300.0; // the trade inversion's height in the start sounding
         double exchange = 15.0; // the surface fluxes' twist (WeatherMoist::Params::exchange)
-        double confinement = 0.0; // off: it cleared the clouds; the vorticity confinement's epsilon (WeatherFluid::Params::confinement)
+        double confinement = 0.02; // the vorticity confinement's epsilon (WeatherFluid::Params::confinement)
         double kick_mps = 1.0; // the random swirls' speed (WeatherForcing::Params::kick_mps)
     };
     Weather weather;

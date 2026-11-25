@@ -180,3 +180,4 @@ src/weather.hpp
 src/weather.cpp
 src/weather_report.hpp
 src/weather_report.cpp
+src/weather_cloud_fraction.hpp

@@ -11,6 +11,8 @@ using M = WeatherMoist;
 WeatherConvection::WeatherConvection(const WeatherFluid &p_fluid, const WeatherMoist::Sounding &p_ref, double p_top_m) : ref(p_ref) {
     top.assign(p_fluid.grid().cells(), float(p_top_m));
     cloud_water.assign(p_fluid.grid().cells() * size_t(p_fluid.levels()), 0.0f);
+    flux_theta_l.assign(cloud_water.size(), 0.0f);
+    flux_qt.assign(cloud_water.size(), 0.0f);
 }
 
 double WeatherConvection::sigma_w(double p_z, double p_top_m, double p_wstar, double p_ustar) {
@@ -143,6 +145,8 @@ void WeatherConvection::apply(WeatherFluid &p_fluid, const std::vector<WeatherMo
                 here[p_fluid.scalar_offset(k, M::QV)] = float(ov::max(qv[k] - p_dt * (f_qt[k + 1] - f_qt[k]) / dz, 0.0));
                 const double area = k < u.levels ? ov::min(u.mass[k] / ov::max(u.w[k], 1e-3), MAX_AREA) : 0.0;
                 cloud_water[p_fluid.cell_index(in, k)] = float(area * (k < u.levels ? u.qc[k] : 0.0));
+                flux_theta_l[p_fluid.cell_index(in, k)] = float(0.5 * (f_tl[k] + f_tl[k + 1]));
+                flux_qt[p_fluid.cell_index(in, k)] = float(0.5 * (f_qt[k] + f_qt[k + 1]));
             }
         } });
 }
