@@ -173,22 +173,33 @@ TEST_CASE("WeatherMoist: trade-wind cumulus over a warm sea are broken, with a b
     for (M::Ground &gr : sea) {
         gr.temp_k = 299.5f;
     }
-    run(fluid, moist, sea, 1200.0);
+    // Each level's cloudy share averaged over a minute apart from 15 to 25 minutes (one snapshot is one cloud's life).
+    run(fluid, moist, sea, 840.0);
+    std::vector<double> mean(size_t(fluid.levels()), 0.0);
+    double top_level = 0.0, ground_level = 0.0;
+    const int samples = 11;
+    for (int n = 0; n < samples; n++) {
+        run(fluid, moist, sea, 60.0);
+        for (int k = 0; k < fluid.levels(); k++) {
+            mean[size_t(k)] += cloud_fraction(fluid, k) / samples;
+        }
+        ground_level = std::max(ground_level, cloud_fraction(fluid, 0));
+        top_level = std::max(top_level, cloud_fraction(fluid, fluid.levels() - 1));
+    }
     double most = 0.0;
     int most_k = 0;
     for (int k = 0; k < fluid.levels(); k++) {
-        const double c = cloud_fraction(fluid, k);
-        MESSAGE("level ", k, " (", fluid.level_m(k), " m): cloud ", c);
-        if (c > most) {
-            most = c;
+        MESSAGE("level ", k, " (", fluid.level_m(k), " m): cloud ", mean[size_t(k)]);
+        if (mean[size_t(k)] > most) {
+            most = mean[size_t(k)];
             most_k = k;
         }
     }
-    CHECK(most > 0.02); // cumulus formed
+    CHECK(most > 0.005); // cumulus formed (averaged over 10 minutes: 1.6% of a level at most)
     CHECK(most < 0.6); // and they are broken
     CHECK(fluid.level_m(most_k) > 100.0);
-    CHECK(cloud_fraction(fluid, 0) == 0.0); // a base above the ground
-    CHECK(cloud_fraction(fluid, fluid.levels() - 1) == 0.0); // a top under the lid
+    CHECK(ground_level == 0.0); // a base above the ground
+    CHECK(top_level == 0.0); // a top under the lid
 }
 
 // Moist air (98% humidity, its dew point ~6 K over the ground) over ground 6 K colder (sea fog over a cold current):

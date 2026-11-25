@@ -276,7 +276,7 @@ ov::str parse_sea(const ov::Value &p_data, WorldFile &r_world) {
 // "weather" into r_world.weather: on over a sphere unless "on" is false; refused over a flat shape or a torus.
 ov::str parse_weather(const ov::Value &p_data, WorldFile &r_world) {
     ov::str err;
-    const ov::Value d = section(p_data, "weather", { "on", "cell_m", "top_m", "tick_hz", "time_scale", "prevailing_mps", "storm_m", "spin_up_s", "day_s", "inversion_m", "exchange" }, err);
+    const ov::Value d = section(p_data, "weather", { "on", "cell_m", "top_m", "tick_hz", "time_scale", "prevailing_mps", "storm_m", "spin_up_s", "day_s", "inversion_m", "exchange", "confinement", "kick_mps" }, err);
     if (!err.empty()) {
         return err;
     }
@@ -305,10 +305,12 @@ ov::str parse_weather(const ov::Value &p_data, WorldFile &r_world) {
     w.day_s = d.get("day_s", w.day_s).as_double();
     w.inversion_m = d.get("inversion_m", w.inversion_m).as_double();
     w.exchange = d.get("exchange", w.exchange).as_double();
+    w.confinement = d.get("confinement", w.confinement).as_double();
+    w.kick_mps = d.get("kick_mps", w.kick_mps).as_double();
     const double side = CubeSphereGrid::side_for(r_world.planet_radius_m, WeatherGrid::cell_width(r_world.planet_radius_m, w.cell_m));
-    const bool ok = w.cell_m >= 0.0 && w.top_m > 0.0 && w.top_m <= 100000.0 && side >= WeatherGrid::MIN_N && side <= WeatherGrid::MAX_N && w.tick_hz > 0.0 && w.tick_hz <= 120.0 && w.time_scale > 0.0 && w.time_scale <= 10000.0 && w.prevailing_mps >= 0.0 && w.prevailing_mps <= 200.0 && w.storm_m >= 0.0 && std::isfinite(w.storm_m) && w.spin_up_s >= 0.0 && w.spin_up_s <= 86400.0 && w.day_s >= 1.0 && w.day_s <= 1e7 && w.inversion_m > 0.0 && w.inversion_m < w.top_m && w.exchange > 0.0 && w.exchange <= 1000.0;
+    const bool ok = w.cell_m >= 0.0 && w.top_m > 0.0 && w.top_m <= 100000.0 && side >= WeatherGrid::MIN_N && side <= WeatherGrid::MAX_N && w.tick_hz > 0.0 && w.tick_hz <= 120.0 && w.time_scale > 0.0 && w.time_scale <= 10000.0 && w.prevailing_mps >= 0.0 && w.prevailing_mps <= 200.0 && w.storm_m >= 0.0 && std::isfinite(w.storm_m) && w.spin_up_s >= 0.0 && w.spin_up_s <= 86400.0 && w.day_s >= 1.0 && w.day_s <= 1e7 && w.inversion_m > 0.0 && w.inversion_m < w.top_m && w.exchange > 0.0 && w.exchange <= 1000.0 && w.confinement >= 0.0 && w.confinement <= 1.0 && w.kick_mps >= 0.0 && w.kick_mps <= 50.0;
     if (!ok) {
-        return ov::format("world: weather: cell_m giving a cube face of [%d, %d] cells (%g m: %g), top_m in (0, 100000], tick_hz in (0, 120], time_scale in (0, 10000], prevailing_mps in [0, 200], storm_m >= 0, spin_up_s in [0, 86400], day_s in [1, 1e7], inversion_m in (0, top_m), exchange in (0, 1000].",
+        return ov::format("world: weather: cell_m giving a cube face of [%d, %d] cells (%g m: %g), top_m in (0, 100000], tick_hz in (0, 120], time_scale in (0, 10000], prevailing_mps in [0, 200], storm_m >= 0, spin_up_s in [0, 86400], day_s in [1, 1e7], inversion_m in (0, top_m), exchange in (0, 1000], confinement in [0, 1], kick_mps in [0, 50].",
                 WeatherGrid::MIN_N, WeatherGrid::MAX_N, w.cell_m, side);
     }
     r_world.weather = w;

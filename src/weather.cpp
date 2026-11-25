@@ -81,6 +81,8 @@ void Weather::build() {
     dp.prevailing_mps = settings.prevailing_mps;
     dp.storm_m = settings.storm_m;
     dp.inversion_m = settings.inversion_m;
+    dp.kick_mps = settings.kick_mps;
+    fp.confinement = settings.confinement;
     dp.seed = seed;
     fp.omega_rad_s = 2.0 * 3.14159265358979323846 / settings.day_s;
     fluid = std::make_unique<WeatherFluid>(cells, fp);

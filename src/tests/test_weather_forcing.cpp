@@ -127,7 +127,7 @@ Day slab_day(double p_inertia) {
 
 TEST_CASE("WeatherForcing::warm_slab: land warms into the afternoon, a sea barely moves, the day's mean kept") {
     const Day soil = slab_day(1500.0), sand = slab_day(300.0), sea = slab_day(1e5);
-    MESSAGE(ov::format("swing: soil %.2f K (warmest %.3f day after noon), sand %.2f K, sea %.3f K", soil.swing, soil.lag, sand.swing, sea.swing).c_str());
+    MESSAGE(std::string(ov::format("swing: soil %.2f K (warmest %.3f day after noon), sand %.2f K, sea %.3f K", soil.swing, soil.lag, sand.swing, sea.swing).c_str()));
     CHECK(soil.mean == doctest::Approx(299.0).epsilon(1e-4));
     CHECK(sea.mean == doctest::Approx(299.0).epsilon(1e-4));
     CHECK(soil.swing > 2.0);

@@ -117,6 +117,8 @@ void WeatherForcing::start(WeatherFluid &p_fluid, const WeatherMoist::Sounding &
             }
         }
     }
+    const double kick_cells = 3.14159265358979323846 * KICK_RADIUS_CELLS * KICK_RADIUS_CELLS;
+    kicks(p_fluid, 1.0 / kick_cells, 0x57A7u, 0);
     p_fluid.fill_halo();
 }
 
@@ -225,6 +227,9 @@ void WeatherForcing::apply(WeatherFluid &p_fluid, double p_dt, uint64_t p_step) 
                 }
             }
         } }, ov::Priority::LOW);
+    // The kicks: a new one over any point every KICK_EVERY_S.
+    const double kick_cells = 3.14159265358979323846 * KICK_RADIUS_CELLS * KICK_RADIUS_CELLS;
+    kicks(p_fluid, p_dt / (KICK_EVERY_S * kick_cells), 0x6157u, p_step);
     // The storms' seeds.
     if (!any_storms) {
         return;
@@ -277,6 +282,57 @@ void WeatherForcing::day_night(const WeatherFluid &p_fluid, const Float3 &p_towa
     }
     r_day = area[1] > 0.0 ? sum[1] / area[1] : 0.0;
     r_night = area[0] > 0.0 ? sum[0] / area[0] : 0.0;
+}
+
+void WeatherForcing::kicks(WeatherFluid &p_fluid, double p_chance, uint32_t p_salt, uint64_t p_step) const {
+    if (!(params.kick_mps > 0.0)) {
+        return;
+    }
+    for (size_t c = 0; c < climate.size(); c++) {
+        const uint32_t h = hash3(params.seed ^ p_salt, uint32_t(p_step), uint32_t(c));
+        if (unit(h) < p_chance) {
+            kick(p_fluid, c, (h & 1u) ? 1.0 : -1.0);
+        }
+    }
+}
+
+void WeatherForcing::kick(WeatherFluid &p_fluid, size_t p_cell, double p_sign) const {
+    const WeatherGrid &g = p_fluid.grid();
+    const size_t per_face = size_t(g.width()) * size_t(g.height());
+    const int face = int(p_cell / per_face);
+    const int cj = int((p_cell % per_face) / size_t(g.width()));
+    const int ci = int(p_cell % size_t(g.width()));
+    double centre[3];
+    p_fluid.column_pos(p_cell, centre);
+    const double r0 = KICK_RADIUS_CELLS * g.cell_m();
+    const int reach = int(std::ceil(3.0 * KICK_RADIUS_CELLS));
+    for (int j = ov::max(cj - reach, 0); j <= ov::min(cj + reach, g.height() - 1); j++) {
+        for (int i = ov::max(ci - reach, 0); i <= ov::min(ci + reach, g.width() - 1); i++) {
+            const size_t in = g.interior(face, i, j);
+            double pos[3], up[3];
+            p_fluid.column_pos(in, pos);
+            p_fluid.column_up(in, up);
+            double d[3] = { pos[0] - centre[0], pos[1] - centre[1], pos[2] - centre[2] };
+            const double along = dot3(d, up);
+            for (int a = 0; a < 3; a++) {
+                d[a] -= along * up[a];
+            }
+            const double r = std::sqrt(dot3(d, d)) / r0;
+            if (r < 1e-9 || r > 3.0) {
+                continue;
+            }
+            // A Gaussian vortex: its speed r exp((1 - r^2) / 2) of its peak, at r0.
+            double turn[3];
+            cross3(up, d, turn);
+            const double s = p_sign * params.kick_mps * r * std::exp(0.5 * (1.0 - r * r)) / (r * r0);
+            float *here = &p_fluid.state()[g.index(face, i, j) * size_t(p_fluid.stride())];
+            for (int k = 0; k < p_fluid.levels(); k++) {
+                for (int a = 0; a < 3; a++) {
+                    here[p_fluid.wind_offset(k) + a] += float(s * turn[a]);
+                }
+            }
+        }
+    }
 }
 
 void WeatherForcing::seed_storm(WeatherFluid &p_fluid, const double p_pos[3]) const {

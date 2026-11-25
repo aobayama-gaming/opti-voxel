@@ -16,10 +16,18 @@
 //   a level's cells share their column's surface metric). A padded cell's record (stride() floats) holds per level the
 //   wind (a 3D vector in the planet's axes: its tangent part and its vertical part w along the up) and `scalars` scalars
 //   the physics owns (WeatherPhysics: the potential temperature first).
-// - A step (the caller's, at most max_dt() long): advect(dt) (semi-Lagrangian: each field read where the air comes
-//   from, bilinear in the face's cells and linear between the levels), then the caller's physics on state() (it may
-//   change the scalars), then force(dt, buoyancy) (the buoyancy along the up, the Coriolis turn about it, the sponge
-//   under the top), then project(dt) (the pressure that takes the wind's divergence out).
+// - A step (the caller's, at most max_dt() long): advect(dt), then the caller's physics on state() (it may change the
+//   scalars), then force(dt, buoyancy) (the vorticity confinement, the buoyancy along the up, the Coriolis turn about
+//   it, the sponge under the top), then project(dt) (the pressure that takes the wind's divergence out).
+// - The advection: semi-Lagrangian (each field read where the air comes from, bilinear in the face's cells and linear
+//   between the levels). Its interpolation smears eddies under ~4-8 cells. Tried (2026-11-25): MacCormack's second-order
+//   correction (Selle et al. 2008, with their limiter); on every field the trade cumulus became a deck (0.83 of a level)
+//   and a fog rose to 180 m, on the wind alone the resolved convection nearly stopped (0.07% of a level, a bubble's air
+//   5% unbalanced): the moist physics are tuned to this trace's mixing, so it stays.
+// - The vorticity confinement (Fedkiw, Stam & Jensen 2001, "Visual simulation of smoke"; Harris 2003's clouds): the
+//   curl w of the wind (central differences, the neighbours' winds as they are: the sphere's turn over a cell is 2% of a
+//   radian), N = grad |w| / |grad |w||, the force confinement D (N x w), D the cell's (width^2 dz)^(1/3): it puts back
+//   the small swirls the grid's dissipation takes out.
 // - The projection is the fluxes through each cell's 6 faces (4 sides, a top, a bottom; ground and top rigid): the
 //   pressure solves sum_f a_f (p_f - p) = (sum_f flux_f) / dt with a_f = face area over the centres' distance,
 //   red-black Gauss-Seidel (over-relaxed) warm-started from the last step's pressure; the wind at the centres then
@@ -50,6 +58,7 @@ public:
         // top), at a rate rising as the square of the depth into it to 1 / sponge_tau_s at the top.
         double sponge_m = 0.0;
         double sponge_tau_s = 30.0;
+        double confinement = 0.0; // epsilon, the vorticity confinement's strength (0: none)
     };
 
     WeatherFluid(std::shared_ptr<const WeatherGrid> p_grid, const Params &p_params);
@@ -121,12 +130,19 @@ private:
     std::vector<float> next;
     std::vector<float> p; // per padded cell and level
     std::vector<float> rhs; // per interior cell and level
+    std::vector<float> vort, vort_mag; // the confinement's: the curl (3 per padded cell and level), its length
     double min_spacing_m = 1.0;
 
     // The padded indices of an interior cell's 4 side neighbours (+x, -x, +y, -y).
     void neighbours(int p_face, int p_i, int p_j, size_t r_nb[SIDES]) const;
     void make_columns();
     void sweep(int p_colour);
+    // The vorticity confinement's push over p_dt (the halo filled first).
+    void confine(double p_dt);
+    // The 3D gradient at an interior cell of a per-level field p_f (p_stride floats per padded cell, p_at its offset in a
+    // level, p_per its floats per level), from the neighbours p_nb and the levels round p_level.
+    void gradient(const Column &p_c, const float *p_f, size_t p_here, const size_t p_nb[SIDES], int p_stride, int p_per, int p_at, int p_level,
+            double r_g[3]) const;
     // The wind r_wind brought from the departure point p_c.pos + p_d turned into the column's frame: the rotation
     // carrying the departure's up onto the column's (parallel transport over the sphere; its vertical speed kept).
     static void transport(const Column &p_c, const double p_d[3], float *r_wind);

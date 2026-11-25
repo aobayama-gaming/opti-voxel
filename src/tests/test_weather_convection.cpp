@@ -97,7 +97,7 @@ TEST_CASE("WeatherConvection: over a trade-wind sea the updraft saturates under 
             base = k;
         }
     }
-    MESSAGE(ov::format("base level %d (%.0f m), top %.0f m, M %.3f m/s at the ground", base, (base + 0.5) * f.dz_m(), u.top_m, u.mass[0]).c_str());
+    MESSAGE(std::string(ov::format("base level %d (%.0f m), top %.0f m, M %.3f m/s at the ground", base, (base + 0.5) * f.dz_m(), u.top_m, u.mass[0]).c_str()));
     CHECK(base >= 1);
     CHECK((base + 0.5) * f.dz_m() < 300.0); // under the inversion
     CHECK(u.top_m > (base + 0.5) * f.dz_m());
