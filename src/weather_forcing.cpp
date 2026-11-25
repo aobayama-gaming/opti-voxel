@@ -147,9 +147,13 @@ double WeatherForcing::mean_light(double p_sin_lat, double p_sin_decl) {
     return (h0 * sl * sd + cl * cd * std::sin(h0)) / PI;
 }
 
+double WeatherForcing::cloud_extinction(double p_lwc) {
+    return 1.5 * ov::max(p_lwc, 0.0) / (1000.0 * DROPLET_RADIUS_M);
+}
+
 double WeatherForcing::cloud_albedo(double p_lwp) {
-    // The optical depth of droplets of r_e (3 LWP / (2 rho_w r_e)), the two-stream albedo (1 - g) tau / (2 + (1 - g) tau).
-    const double tau = 1.5 * ov::max(p_lwp, 0.0) / (1000.0 * DROPLET_RADIUS_M);
+    // The optical depth of the path (cloud_extinction's integral), the two-stream albedo (1 - g) tau / (2 + (1 - g) tau).
+    const double tau = cloud_extinction(p_lwp);
     const double t = (1.0 - CLOUD_ASYMMETRY) * tau;
     return t / (2.0 + t);
 }

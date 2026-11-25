@@ -13,12 +13,14 @@ bool power_of_two(int p_v) {
 
 } // namespace
 
-TEST_CASE("CloudLayer::of_weather: the ground to the levels' top, Earth's optical depth, the noises the cells'") {
-    const CloudLayer earth;
+TEST_CASE("CloudLayer::of_weather: the ground to the levels' top, the droplets' extinction, the noises the cells'") {
     const CloudLayer ocean = CloudLayer::of_weather(200.0, 45.0, 0.05);
     CHECK(ocean.bottom_m == 0.0f);
     CHECK(ocean.top_m == 200.0f);
-    CHECK(double(ocean.extinction) * 200.0 == doctest::Approx(double(earth.extinction) * double(earth.top_m - earth.bottom_m)).epsilon(1e-5));
+    // Full cloud (0.3 g/kg): ~0.052 /m, a visibility of ~75 m, Kunkel's fog fit within 10%.
+    CHECK(ocean.extinction == doctest::Approx(0.052).epsilon(0.02));
+    const double lwc_g_m3 = WeatherForcing::AIR_DENSITY * Weather::FULL_CLOUD_QC * 1000.0;
+    CHECK(double(ocean.extinction) == doctest::Approx(144.7e-3 * std::pow(lwc_g_m3, 0.88)).epsilon(0.1));
     CHECK(double(ocean.shape_period_vox) * 0.05 <= CloudLayer::SHAPE_CELLS * 45.0);
     CHECK(double(ocean.shape_period_vox) * 0.05 > 0.5 * CloudLayer::SHAPE_CELLS * 45.0);
     // The noises' periods: powers of two of voxels, the warp a multiple of the others (the wind's offset wraps at it)

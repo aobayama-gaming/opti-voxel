@@ -100,25 +100,15 @@ false}`) has no clouds. `World` starts the atmosphere and the clouds only for a 
 They are made from the base's shape like the atmosphere: a layer
 between two altitudes above the base (`base_altitude`; a ray's part in it from `base_level_span`), every noise read at
 the 3D point in the shading frame (no 2D weather map, which a curved base would tear).
-- **Density:** Schneider's (Horizon Zero Dawn's Nubis, SIGGRAPH 2015 / 2017; ported from clayjohn's
-  godot-volumetric-cloud-demo, MIT): a 128^3 Perlin-Worley shape noise (R; G B A Worley fbms) and a 32^3 Worley detail
-  noise, 3D RGBA16F textures made once by a compute pass, read through the device's linear sampler (hardware
-  trilinear). The cover and the cloud type come from the weather (below), shaped by the shape noise read at a weather
-  scale (its R past a threshold set by the cover, measured on the noise so the cover is about the fraction of sky
-  covered); the type
-  blends Schneider's stratus / stratocumulus / cumulus height gradients; the detail erodes the base (billows below,
-  wisps above). Periods (Earth): shape ~12 km, detail ~1.5 km, weather ~48 km, each a power of two of voxels (the
-  shading frame). On their own the whole field repeated every weather period (on the flat world at 5 cm: the same clouds
-  every 26.2 km, the same shapes every 6.55 km, `--cam_pos` shifted top-down shots: 4% of cloud pixels differed a
-  weather period over). So every read is **warped** (`cloud_warp`): a smooth offset of two sine waves per axis, whole
-  cycles per a ~800 km period (`warp_period_vox`; at most 2^23 voxels, at least 4 weather periods), |k| = sqrt(5) cycles
-  and 0.015 periods each (`WARP_AMPLITUDE`: 6 km at 5 cm), carried by the wind with the noises (the clouds drift whole):
-  points a shape period apart read noises ~1.5 to 2 km apart (its features ~1.6 km), a weather period apart 5 to 9 km
-  (~6.5 km), the clouds stretched by 2 x 2 pi sqrt(5) x 0.015 = 0.42 at most (~0.2 typical). The field now repeats every
-  warp period (419 km at 5 cm; 34% of cloud pixels differ a weather period over, 42% a shape period over, ~42% for
-  unrelated fields at that cover), for +0.17 ms of cloud passes (1280x720, the video preset; measured before the passes
-  skipped the weather outside the layer). A warp read from the shape noise itself sheared the clouds into streaks (its
-  fine octaves: gradients ~1.5). The wind's offset wraps at the warp's period.
+- **Density:** the simulation's alone (2026-11-25, the user's call: see the fluid's result, cells and all): at a point
+  `cloud_density` is the weather's cloud water there (`cloud_sim_cover`: the grid's and the updrafts', over
+  `Weather::FULL_CLOUD_QC`, 0.3 g/kg), and its extinction the droplets' (`WeatherForcing::cloud_extinction`:
+  `3 LWC / (2 rho_w r_e)`, LWC = 1.15 kg/m^3 x q_c, droplets of 10 um, Hansen & Travis 1974; 0.052 /m at 0.3 g/kg, a
+  visibility of ~75 m, Kunkel 1984's fog fit 0.057 /m). Nothing else shapes it: the clouds are the cells' (45 m,
+  trilinear between their centres). Schneider's Perlin-Worley noises (Horizon Zero Dawn's Nubis) shaped them before,
+  their places only the simulation's: they made round clumps drifting with the camera's wind and hid the flow. TODO:
+  the noise textures and their passes are still made and unread; delete them, or bring them back as detail under a
+  cell once the simulation's own structure shows (the user's call).
 - **Weather** (`Weather`, `docs/weather.md`): the simulation's cloud per level over the whole planet. When a tick
   lands (`World::frame`: `Weather::update`), `Clouds::set_weather` uploads its last two states as one 3D RGBA16F
   texture, the grid's atlas a slice per level (below), and keeps the largest cloud of the two (`cloud_cover_max`: the
@@ -128,14 +118,10 @@ the 3D point in the shading frame (no 2D weather map, which a curved base would 
   frame stands between them: the cover moves smoothly between ticks). The noises drift with the
   weather's wind at the camera times its time scale (`World::camera_wind`: the pattern moves with the cells' cover).
 - **Layer** (`CloudLayer::of_weather`): the weather's, from the ground to its levels' top (`top_m`, `docs/weather.md`):
-  Earth's extinction (0.04 /m at density 1, Hillaire 2016's cumulus range is 0.05 to 0.12) over s = top / 2.5 km, the
-  same optical depths, albedo 0.99; the noises' periods the weather's cells (`WEATHER_CELLS` 16 for the coverage noise,
-  `SHAPE_CELLS` 4, `DETAIL_CELLS` 0.5), so the clouds' places, bases and tops are the simulation's and the noise only
-  shapes them. The march knows nothing of the terrain: a hill reaching into a cloud is hidden behind its front part.
+  the droplets' extinction at density 1 (above; Hillaire 2016's cumulus range is 0.05 to 0.12 /m), albedo 0.99. The march knows nothing of the terrain: a hill reaching into a cloud is hidden behind its front part.
 - **3D from the levels:** the weather texture is the grid's atlas a slice per level (R the previous state's cloud, G the
   latest's), read at the altitude over the top (linear between the levels' middles, the lowest's down to the ground, the top's fading to none at the top), so a column's
-  cloud has the simulation's base and top; the coverage is the cover there past its threshold on the coverage noise,
-  then Schneider's remap of the shape noise (no per-type height gradient: the levels give the profile). The light
+  cloud has the simulation's base and top and its density in between. The light
   towards the sun and the shadow map read the levels along their rays.
 - **Light:** Hillaire's (Frostbite, "Physically Based Sky, Atmosphere and Cloud Rendering", SIGGRAPH 2016): the
   energy-conserving step, a dual-lobe Henyey-Greenstein phase (0.8 forward, -0.3 back, 0.7 / 0.3), the sun through the

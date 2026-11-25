@@ -47,6 +47,7 @@ public:
     static constexpr double GROUND_ALBEDO = 0.15;
     static constexpr double DROPLET_RADIUS_M = 1e-5; // the clouds' effective radius
     static constexpr double CLOUD_ASYMMETRY = 0.85; // g, the droplets' forward scattering
+    static constexpr double AIR_DENSITY = 1.15; // kg/m^3, the cloud layer's (the sounding's at the ground; 6% less at 600 m)
 
     struct Params {
         double day_s = 300.0; // the weather's day (Omega = 2 pi / day_s)
@@ -79,6 +80,11 @@ public:
     static double mean_light(double p_sin_lat, double p_sin_decl);
     // The albedo of a cloud of p_lwp kg/m^2 of water.
     static double cloud_albedo(double p_lwp);
+    // The extinction (1/m) of p_lwc kg/m^3 of cloud water: 3 LWC / (2 rho_w r_e) (droplets far larger than the light's
+    // wavelength: an extinction efficiency of 2; Hansen & Travis 1974, Stephens 1978). Through a path the opacity is
+    // 1 - exp(-integral of it), the visibility 3.912 / it (Koschmieder); 0.3 g/kg of air at AIR_DENSITY: 0.052 /m, ~75 m
+    // (Kunkel 1984's fog fit, 144.7 LWC^0.88 /km in g/m^3: 0.057 /m).
+    static double cloud_extinction(double p_lwc);
     // p_sun turned round the pole (y) by p_angle (radians, right-handed: the planet's spin turns it by -Omega t).
     static Float3 turn_sun(const Float3 &p_sun, double p_angle);
     // The large-scale wind and the storms' seeds for p_dt of step p_step; the storms started so far.
