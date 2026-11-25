@@ -161,9 +161,9 @@ static func edits(p_mixer: Object) -> Dictionary:
 	r.muted = float(hn.rows[0].get("x", 1.0)) == 0.0 and float(Graph.rows(Graph.node(g, mix))[0].get("x", 1.0)) != 0.0
 	p_mixer.row_flags.clear()
 	# A weather key set through the mixer's row: in the biome's "weather" block, the file the engine takes.
-	p_mixer.set_weather("moisture", 1.25)
+	p_mixer.set_weather("wetness", 0.25)
 	var sent: Dictionary = World.preview_file(w, i)
-	r.weather = float(sent.biomes[0].get("weather", {}).get("moisture", -1.0)) == 1.25 and World.check(w) == ""
+	r.weather = float(sent.biomes[0].get("weather", {}).get("wetness", -1.0)) == 0.25 and World.check(w) == ""
 	r.ok = r.row and r.node and r.loop_refused and r.drawn and r.muted and r.weather
 	return r
 

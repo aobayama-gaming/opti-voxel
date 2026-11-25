@@ -123,22 +123,21 @@ struct Surface {
     float roughness = 1.0f;
 };
 
-// How a biome pushes the weather ("weather"; WeatherSim, docs/weather.md "Forcing"): the cells over it blend their biomes
-// values by weight. wind: times the planet's prevailing wind there; drag: the ground's drag on the air (forest high, sea
-// and ice low); heat: the temperature the air relaxes to, in [-1, 1] (hot: a thermal low drawing the air in); moisture:
-// the vapour the ground gives up to (saturation 1: a biome over it makes cloud by itself); gust: the gusts' strength (the
-// look's, not the simulation's); storms: the storms a whole planet of this biome would start in an hour.
+// How a biome's ground drives the weather ("weather"; WeatherForcing, docs/weather.md "Forcing"): the columns over it
+// blend their biomes' values by weight. ground_k: the ground's (or the sea's) mean temperature (K); diurnal_k: how much
+// the sun warms it by day and the night cools it (0 a sea, ~10 a desert); wetness: how freely it gives up water (1 a
+// sea or a swamp, 0 a desert); z0_m: its roughness length (1.5e-4 a calm sea, 0.03 grass, 1 a forest); storms: the
+// storms' seeds a whole planet of this biome would start in an hour.
 struct BiomeWeather {
-    float wind = 1.0f;
-    float drag = 1.0f;
-    float heat = 0.0f;
-    float moisture = 0.7f;
-    float gust = 0.5f;
+    float ground_k = 299.0f;
+    float diurnal_k = 0.0f;
+    float wetness = 1.0f;
+    float z0_m = 1.5e-4f;
     float storms = 0.0f;
 };
 
-// The "weather" block's keys: each one's range and member (the parser's, and the mixer's rows through
-// ClimateReportNode.weather_keys; the default is BiomeWeather's).
+// The "weather" block's keys: each one's range and member (the parser's, the forcing's blend, and the mixer's rows
+// through ClimateReportNode.weather_keys; the default is BiomeWeather's).
 struct WeatherKey {
     const char *name;
     float min;
@@ -146,11 +145,10 @@ struct WeatherKey {
     float BiomeWeather::*member;
 };
 inline constexpr WeatherKey WEATHER_KEYS[] = {
-    { "wind", 0.0f, 10.0f, &BiomeWeather::wind },
-    { "drag", 0.0f, 100.0f, &BiomeWeather::drag },
-    { "heat", -1.0f, 1.0f, &BiomeWeather::heat },
-    { "moisture", 0.0f, 2.0f, &BiomeWeather::moisture },
-    { "gust", 0.0f, 10.0f, &BiomeWeather::gust },
+    { "ground_k", 200.0f, 400.0f, &BiomeWeather::ground_k },
+    { "diurnal_k", 0.0f, 40.0f, &BiomeWeather::diurnal_k },
+    { "wetness", 0.0f, 1.0f, &BiomeWeather::wetness },
+    { "z0_m", 1e-5f, 3.0f, &BiomeWeather::z0_m },
     { "storms", 0.0f, 1000.0f, &BiomeWeather::storms },
 };
 

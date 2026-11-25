@@ -12,12 +12,21 @@
 //   (sub-stepped under its CFL) and evaporating under the cloud; latent heat into the potential temperature.
 // - Bulk surface fluxes over each column's ground (Monin-Obukhov neutral): momentum C_D U u, sensible heat C_H U
 //   (theta_s - theta), evaporation beta C_E U (q_s(T_s) - q_v) (dew at full rate), C_D = (k / ln(z_1 / z_0))^2 at the
-//   lowest level's centre, C_H = C_E = C_D, times Params::exchange (the approved twist: the storms' spin-up is set by
-//   it, their intensity by the ratio, kept); U at least GUSTINESS (free convection at no wind).
+//   lowest level's centre, C_H = C_E = C_D; U at least GUSTINESS (free convection at no wind).
 // - Radiation: the clear air cools CLEAR_COOLING K/day; the cloud's longwave flux is DYCOMS-II RF01's (Stevens et al.
 //   2005): F(z) = F0 exp(-Q(z, top)) + F1 exp(-Q(0, z)), Q = KAPPA int rho q_c dz, so a cloud top cools hard and drives
 //   the stratocumulus' turnover.
+// - The subgrid turbulence in the vertical (Smagorinsky-Lilly, Lilly 1962): at each interface of a column K = (C_S D)^2
+//   sqrt(max(S^2 - N^2 / PRANDTL, 0)), D the cell's (width^2 dz)^(1/3), S the wind's vertical shear, N^2 the
+//   buoyancy frequency of the virtual potential temperature: mixing where the air shears or is unstable, none in the
+//   inversion; implicit on the scalars (rain falls on its own) and the horizontal wind. The cells resolve the thermals,
+//   not the surface layer under them: without it the lowest level takes the ground's own state (a sea's saturated
+//   air, fog over a warm sea).
 // - Large-scale subsidence w = -D z on the scalars (upwind): it holds the inversion against the boundary layer's growth.
+// - The twist, Params::exchange: the surface fluxes' coefficients (all three, their ratio kept) times exchange: a
+//   storm's intensity, set by the ratio, is kept, its spin-up shortened. Only these: radiation and subsidence sped up
+//   as well (tried, one time compression of the slow processes) outrun the boundary layer's turbulence, which runs at
+//   its own speed: the humid layer cools to fog, a cloud top overturns its fog into a deck.
 // - The buoyancy the fluid takes: b = g ((theta - theta_ref) / theta_ref + 0.61 (q_v - q_v,ref) - q_c - q_r) (vapour
 //   lightens the air, the water weighs it).
 // The reference column (Sounding): the hydrostatic Exner function and density of the sounding the world gives, from
@@ -44,6 +53,8 @@ public:
     static constexpr double LW_F0 = 70.0; // W/m^2, DYCOMS-II RF01
     static constexpr double LW_F1 = 22.0;
     static constexpr double LW_KAPPA = 85.0; // m^2/kg
+    static constexpr double C_S = 0.18; // Smagorinsky's (Lilly)
+    static constexpr double PRANDTL = 1.0 / 3.0;
 
     // The sounding: the reference potential temperature and vapour per level (the buoyancy's reference; the world's
     // air at rest), and their hydrostatic Exner function, density and pressure.
@@ -66,7 +77,7 @@ public:
     };
 
     struct Params {
-        double exchange = 15.0; // the bulk coefficients' twist (both, the ratio kept)
+        double exchange = 15.0; // the surface fluxes' twist
         double subsidence_per_s = 1.5e-5; // D: w = -D z
     };
 
@@ -86,6 +97,12 @@ public:
     // precipitation rate (m of water per second) returned.
     static double kessler(double *r_theta, double *r_qv, double *r_qc, double *r_qr, const double *p_rho, const double *p_exner,
             const double *p_z, int p_levels, double p_dt);
+    // The eddy diffusivity (m^2/s) at each interface k (between levels k and k + 1) of a column: theta, qv, qc per level
+    // and its horizontal wind (3 per level), p_delta_m the Smagorinsky length.
+    static void eddy_diffusivity(const double *p_theta, const double *p_qv, const double *p_qc, const double (*p_wind)[3], double p_dz,
+            double p_delta_m, int p_levels, double *r_k);
+    // r_x per level diffused for p_dt by r_k per interface (implicit, the ground and the top closed).
+    static void diffuse(double *r_x, const double *p_k, double p_dz, double p_dt, int p_levels);
     // The heating rate (K/s) of the cloud's longwave flux per level of one column (qc per level).
     static void longwave(const double *p_qc, const double *p_rho, const double *p_exner, double p_dz, int p_levels, double *r_heating);
 

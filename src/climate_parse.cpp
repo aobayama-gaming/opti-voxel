@@ -33,7 +33,7 @@ namespace Climate {
 //             "at": { "temperature": [0.5, 0.3] (centre, span), "humidity": { "min": 0.1, "max": 0.5 } },
 //             "graph": { "nodes": [ node... ] },
 //             "surface": { "flat": "#2a2420", "steep": "#1a1614" (optional, else flat), "roughness": 1 },
-//             "weather": { "wind": 1, "drag": 1, "heat": 0, "moisture": 0.7, "gust": 0.5, "storms": 0 } (optional, each key too),
+//             "weather": { "ground_k": 299, "diurnal_k": 0, "wetness": 1, "z0_m": 0.00015, "storms": 0 } (optional, each key too),
 //             "instances": [ { "species": "conifer", "cell_m": 5, "share": 2 } ] (optional), "features": [ { "kind": "lava_lake", "cell_m": 640, "chance": 0.6, "radius_m": [18, 45] } ]
 //             (optional),
 //             "debug_color": "#c04020" }
@@ -41,8 +41,8 @@ namespace Climate {
 //     middle and half their gap); on each it is whole within 0.71 of the span and gone a span away, overlapping biomes
 //     blend by their kernels (climate.hpp, Weights), a field it doesn't name doesn't matter to it. The last biome is the
 //     default: no "at", it fills what the others leave. "surface": the biome's ground colours (sRGB) on gentle and
-//     steep slopes; without it, the procedural ground's. "weather": how the biome pushes the simulated weather (its
-//     clouds included) (Climate::BiomeWeather, docs/weather.md); without it, the neutral biome's. "instances": the world's species (species.hpp) its sites grow, one site per cell of cell_m
+//     steep slopes; without it, the procedural ground's. "weather": the biome's ground as the simulated weather feels it (its
+//     temperature and day, wetness, roughness, storms) (Climate::BiomeWeather, docs/weather.md); without it, the neutral biome's. "instances": the world's species (species.hpp) its sites grow, one site per cell of cell_m
 //     metres, each by its integer share among the biome's entries of its kind and cell (BiomePick); without the key
 //     the world's "instances", [] none. "features": the features standing on it
 //     (biome_features.hpp: a kind, its cell, the chance a cell holds one, its radius range); without the key the

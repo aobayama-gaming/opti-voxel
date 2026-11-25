@@ -127,4 +127,7 @@ private:
     void neighbours(int p_face, int p_i, int p_j, size_t r_nb[SIDES]) const;
     void make_columns();
     void sweep(int p_colour);
+    // The wind r_wind brought from the departure point p_c.pos + p_d turned into the column's frame: the rotation
+    // carrying the departure's up onto the column's (parallel transport over the sphere; its vertical speed kept).
+    static void transport(const Column &p_c, const double p_d[3], float *r_wind);
 };

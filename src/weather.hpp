@@ -2,7 +2,7 @@
 
 #include "debug_log.hpp"
 #include "level_program.hpp"
-#include "weather_sim.hpp"
+#include "weather_forcing.hpp"
 #include "world_file.hpp"
 
 #include "ov/executor.hpp"
@@ -14,16 +14,18 @@
 #include <mutex>
 #include <vector>
 
-// The weather over a planet (docs/weather.md "Worker"): a WeatherSim on a worker of its own (ov::executor's start_worker),
-// ticking on a fixed clock away from the frame. The frame thread advances the clock (update) and collects each state the
+// The weather over a planet (docs/weather.md "Worker"): the fluid (WeatherFluid), its moist physics (WeatherMoist) and
+// its forcing (WeatherForcing) on a worker of its own (ov::executor's start_worker), ticking on a fixed clock away from
+// the frame. The frame thread advances the clock (update) and collects each state the
 // worker publishes; the renderer blends the last two (blend()). Engine-free.
 // - The worker's first step builds the forcing (each cell's biome weather, from the climate under its centre: ForcingFn,
-//   in parallel at LOW priority) and runs the spin-up; then one tick (time_scale / tick_hz game seconds) per step while
-//   the clock is ahead of it. More than MAX_BEHIND ticks behind (a stall, a slow machine), it drops the excess: the
+//   in parallel at LOW priority) and runs the spin-up; then one tick (time_scale / tick_hz game seconds, in steps the
+//   fluid's max_dt and MAX_STEP_S allow) per step while the clock is ahead of it. More than MAX_BEHIND ticks behind (a stall, a slow machine), it drops the excess: the
 //   weather slows, it never runs away.
 // - A published state is stride() floats per padded cell: the column's LOOK (Look: the ground level's wind (m/s, planet
-//   axes), the cover, the type, the rain, the ground level's temperature and vapour, the wind aloft (the levels' mean)),
-//   then each level's cloud water over FULL_CLOUD (the clouds' density), the ground's first.
+//   axes), the cover (its levels' largest cloud), the type (how deep the cloud is: 0 a layer, 1 a tower over a third of
+//   the levels), the rain (mm/h at the ground), the ground level's temperature (C) and vapour (g/kg), the wind aloft
+//   (the levels' mean)), then each level's cloud water over FULL_CLOUD_QC (the clouds' density), the ground's first.
 class Weather : public ov::WorkerLoop {
 public:
     enum Look {
@@ -41,6 +43,8 @@ public:
         LOOK
     };
     static constexpr int MAX_BEHIND = 20;
+    static constexpr double FULL_CLOUD_QC = 3e-4; // kg/kg: a level's cloud 1
+    static constexpr double MAX_STEP_S = 5.0;
     // The largest real time a frame advances the clock (seconds): a hitch is not a storm's worth of weather.
     static constexpr double MAX_FRAME_S = 0.25;
 
@@ -81,21 +85,23 @@ public:
     bool at(const double p_pos[3], Sample &r_sample) const;
     // Each level's cloud (over FULL_CLOUD) under a position: r_levels gets levels() floats (false before the first state).
     bool clouds_at(const double p_pos[3], float *r_levels) const;
-    // The levels (WeatherSim's: the planet file's top_m over about its cells' width), each one top_m / levels thick.
-    int levels() const { return params.levels; }
-    double top_m() const { return params.top_m; }
+    // The levels (the planet file's top_m over about its cells' width), each one top_m / levels thick.
+    int levels() const { return level_count; }
+    double top_m() const { return settings.top_m; }
     // A published state's floats per padded cell: LOOK, then a cloud per level.
-    int stride() const { return LOOK + params.levels; }
+    int stride() const { return LOOK + level_count; }
     // The last two states (stride() floats per padded cell of grid()): previous, latest.
     const std::vector<float> &previous() const { return prev_look; }
     const std::vector<float> &latest() const { return live_look; }
     const WeatherGrid &grid() const { return *cells; }
     // The sphere's radius (metres): the report's maps are equirectangular over it.
-    double radius_m() const { return params.radius_m; }
+    double radius_m() const { return radius; }
     // The latest state's game time (the spin-up's included) and the storms started up to it.
     double game_s() const { return live_time_s; }
     uint64_t storms() const { return live_storms; }
     const WorldFile::Weather &get_settings() const { return settings; }
+    // The direction towards the sun (planet axes, unit): the grounds' day from the next tick on.
+    void set_sun(const Float3 &p_towards_sun);
     ov::Value get_stats() const;
 
     // The worker's: the forcing and the spin-up first, then one tick per call while ticks are due.
@@ -104,12 +110,21 @@ public:
 private:
     WorldFile::Weather settings;
     std::shared_ptr<const WeatherGrid> cells;
-    WeatherSim::Params params;
+    int level_count = 1;
+    double radius = 1.0;
+    uint32_t seed = 0;
     BaseSurface base;
     double voxel_m = 1.0;
     ForcingFn forcing;
     int forcing_level = 0;
-    std::unique_ptr<WeatherSim> sim; // the worker's
+    // The worker's.
+    std::unique_ptr<WeatherFluid> fluid;
+    std::unique_ptr<WeatherMoist> moist;
+    std::unique_ptr<WeatherForcing> drive;
+    std::vector<WeatherMoist::Ground> ground;
+    std::vector<float> buoyancy;
+    uint64_t steps = 0;
+    double sim_time_s = 0.0;
     std::unique_ptr<ov::Worker> worker;
 
     mutable std::mutex mutex;
@@ -125,10 +140,12 @@ private:
     uint64_t next_done = 0;
     double next_time_s = 0.0;
     uint64_t next_storms = 0;
+    Float3 sun_dir{ 0.0f, 1.0f, 0.0f };
     TimingStat tick_stat;
     TimingStat forcing_stat;
     double substep_s = 0.0;
     double omega_rad_s = 0.0;
+    ov::Value forcing_summary;
 
     // The frame thread's.
     uint64_t last_usec = 0;
@@ -142,5 +159,7 @@ private:
     std::vector<float> prev_look;
 
     void build();
+    // p_dt game seconds of fluid, physics and forcing.
+    void advance(double p_dt);
     std::vector<float> look() const;
 };

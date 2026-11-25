@@ -57,7 +57,7 @@ WeatherReport::Frame map_state(const Weather &p_weather, int p_w, double p_full_
             Weather::Sample s;
             p_weather.at(pos, s);
             const size_t o = (size_t(y) * size_t(p_w) + size_t(x)) * 3;
-            const double rain = ov::clamp(double(s.rain) * 100.0, 0.0, 1.0);
+            const double rain = ov::clamp(double(s.rain) / 10.0, 0.0, 1.0); // mm/h, full at 10
             cover[o + 0] = byte(s.cover * (1.0 - rain));
             cover[o + 1] = byte(s.cover * (1.0 - 0.5 * rain));
             cover[o + 2] = byte(s.cover + rain * (1.0 - s.cover));
@@ -72,7 +72,7 @@ WeatherReport::Frame map_state(const Weather &p_weather, int p_w, double p_full_
             // Area weights (cos latitude) for the means.
             const double a = std::sqrt(1.0 - d[1] * d[1]);
             cover_sum += a * s.cover;
-            raining += s.rain > 0.0f ? a : 0.0;
+            raining += s.rain > 0.1f ? a : 0.0; // mm/h
             weight += a;
             wind_max = ov::max(wind_max, speed);
         }
@@ -210,7 +210,7 @@ ov::Value WeatherReport::run(const ov::str &p_out_dir, const ov::str &p_world_pa
     const ov::Value &stats = f.stats;
     ov::str md = ov::format("# Weather report: %s\n\nGrid %s, cells of %g m (%d cells), time scale %g, %g ticks a second, storm radius %s, Omega %.4f rad/s, substep %.3f s.\n\n",
             p_world_path, stats["grid"].as_str(), stats["cell_m"].as_double(), int(stats["cells"].as_int()), world.weather.time_scale, world.weather.tick_hz,
-            world.weather.storm_m > 0.0 ? ov::format("%g m", world.weather.storm_m) : ov::str("a quarter of the radius"), stats["omega_rad_s"].as_double(),
+            world.weather.storm_m > 0.0 ? ov::format("%g m", world.weather.storm_m) : ov::str("1/8 of the radius"), stats["omega_rad_s"].as_double(),
             stats["substep_s"].as_double());
     md += ov::format("%d levels up to %g m. Cloudy levels: each level's share of the planet with cloud past a quarter of full cover, the ground first.\n\n",
             int(stats["levels"].as_int()), stats["top_m"].as_double());
@@ -224,6 +224,7 @@ ov::Value WeatherReport::run(const ov::str &p_out_dir, const ov::str &p_world_pa
         md += ov::format("| %g | %d | %.2f | %.1f | %.1f%% | %s |\n", m["minutes"].as_double(), int(m["storms"].as_int()), m["mean_cover"].as_double(),
                 m["max_wind_mps"].as_double(), 100.0 * m["raining"].as_double(), levels);
     }
+    md += "\nForcing: " + ov::to_json(stats["forcing_summary"]) + "\n";
     md += ov::format("\nForcing and spin-up: %.0f ms. Tick: %.2f ms on average, %.2f ms at most (%d ticks).\n", stats["forcing"]["total_ms"].as_double(),
             stats["tick"]["avg_ms"].as_double(), stats["tick"]["max_ms"].as_double(), int(stats["tick"]["count"].as_int()));
     ov::write_file(ov::path_join(p_out_dir, "report.md"), md);

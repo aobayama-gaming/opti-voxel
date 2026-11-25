@@ -22,8 +22,8 @@
 //     "climate": "climate.json" or { "fields": "fields.json" or [ field... ],
 //                                    "<field name>": { "mean": 0.4, "poles": -0.9 }... },
 //     "atmosphere": { "density": 1, "tint": [1, 1, 1] },
-//     "weather": { "on": true, "cell_m": 0, "top_m": 300, "tick_hz": 10, "time_scale": 1, "prevailing_mps": 8, "storm_m": 500,
-//                  "spin_up_s": 60 },
+//     "weather": { "on": true, "cell_m": 0, "top_m": 600, "tick_hz": 5, "time_scale": 1, "prevailing_mps": 5, "storm_m": 0,
+//                  "spin_up_s": 600, "day_s": 300, "inversion_m": 300, "exchange": 15 },
 //     "look": { "atmosphere": true, "atmosphere_scale": 0, "clouds": true },
 //     "instances": [ { "species": "conifer", "cell_m": 5, "share": 1 }... ],
 //     "features": [ { "kind": "lava_lake", "cell_m": 640, "chance": 0.6, "radius_m": [18, 45] }... ],
@@ -105,12 +105,15 @@ struct WorldFile {
     struct Weather {
         bool on = false;
         double cell_m = 0.0; // the grid's cells' width (WeatherGrid::for_base; 0: DEFAULT_SIDE cells a face side)
-        double top_m = 300.0; // the levels' top over the ground, about cell_m apart (WeatherSim)
-        double tick_hz = 10.0;
+        double top_m = 600.0; // the levels' top over the ground, about cell_m apart (WeatherFluid)
+        double tick_hz = 5.0;
         double time_scale = 1.0;
-        double prevailing_mps = 8.0;
-        double storm_m = 0.0; // 0: a quarter of the planet's radius
-        double spin_up_s = 60.0;
+        double prevailing_mps = 5.0; // the large-scale wind (WeatherForcing)
+        double storm_m = 0.0; // a storm seed's radius; 0: 1 / 8 of the planet's
+        double spin_up_s = 600.0;
+        double day_s = 300.0; // the weather's day: its Coriolis (the twist: storms spin at the game's scale)
+        double inversion_m = 300.0; // the trade inversion's height in the start sounding
+        double exchange = 15.0; // the surface fluxes' twist (WeatherMoist::Params::exchange)
     };
     Weather weather;
     // The volumetric atmosphere over the base (Atmosphere) and its scale (AtmosphereMedium::for_base: 0 from the base).

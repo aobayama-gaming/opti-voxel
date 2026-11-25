@@ -35,25 +35,25 @@ TEST_CASE("Weather::forcing_at: the biomes' weather blended by their weights") {
     ov::Value data;
     CHECK(load_table("res://climate/example.json", data) == ov::str());
     for (size_t b = 0; b < data["biomes"].size(); b++) {
-        data["biomes"].at(b)["weather"] = json(R"({"wind": 2, "moisture": 1.2, "storms": 4})");
+        data["biomes"].at(b)["weather"] = json(R"({"ground_k": 305, "wetness": 0.4, "storms": 4})");
     }
     ClimateSDF same(data, 15);
     CHECK_OR_RETURN(same.sdf.get_climate() != nullptr);
     for (int k = 0; k < 8; k++) {
         const Climate::BiomeWeather w = Weather::forcing_at(*same.sdf.get_climate(), same.sdf.program(), VoxelPos(k * 70001, 0, -k * 50003), 9);
-        CHECK(w.wind == doctest::Approx(2.0f));
-        CHECK(w.moisture == doctest::Approx(1.2f));
+        CHECK(w.ground_k == doctest::Approx(305.0f));
+        CHECK(w.wetness == doctest::Approx(0.4f));
         CHECK(w.storms == doctest::Approx(4.0f));
-        CHECK(w.drag == doctest::Approx(Climate::BiomeWeather().drag));
+        CHECK(w.z0_m == doctest::Approx(Climate::BiomeWeather().z0_m));
     }
     // One biome wetter than the rest: every blend lies between the two.
-    data["biomes"].at(0)["weather"] = json(R"({"moisture": 2})");
+    data["biomes"].at(0)["weather"] = json(R"({"wetness": 1})");
     ClimateSDF mixed(data, 15);
     CHECK_OR_RETURN(mixed.sdf.get_climate() != nullptr);
     for (int k = 0; k < 16; k++) {
         const Climate::BiomeWeather w = Weather::forcing_at(*mixed.sdf.get_climate(), mixed.sdf.program(), VoxelPos(k * 90001, 0, k * 30011), 9);
-        CHECK(w.moisture >= 1.2f - 1e-5f);
-        CHECK(w.moisture <= 2.0f + 1e-5f);
+        CHECK(w.wetness >= 0.4f - 1e-5f);
+        CHECK(w.wetness <= 1.0f + 1e-5f);
     }
 }
 
@@ -77,8 +77,8 @@ TEST_CASE("Weather: the worker's states follow the clock") {
     CHECK(weather.game_s() == doctest::Approx(6.0));
     CHECK(weather.blend() >= 0.0f);
     CHECK(weather.blend() <= 1.0f);
-    CHECK(weather.levels() == 2); // 300 m over 196 m cells
-    CHECK(weather.stride() == Weather::LOOK + 2);
+    CHECK(weather.levels() == 3); // 600 m over 196 m cells
+    CHECK(weather.stride() == Weather::LOOK + 3);
     CHECK(weather.latest().size() == weather.grid().padded_cells() * size_t(weather.stride()));
     CHECK(weather.previous().size() == weather.latest().size());
     const double pos[3] = { 600.0, 1600.0, -1000.0 };

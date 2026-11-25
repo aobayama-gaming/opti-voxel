@@ -234,6 +234,56 @@ TEST_CASE("WeatherFluid: a warm bubble rises at the thermal's speed, the air rou
     }
 }
 
+// A 5 m/s rotation about the pole axis, the wind at every cell (halo included) the field's at its surface point.
+// Semi-Lagrangian in planet axes, a wind taken from upstream points along the upstream tangent plane: one step without
+// the parallel transport (WeatherFluid::transport) left it turned by the distance travelled, 0.125 m/s at the faces'
+// edges in one 5 s step, and the error grew to 6.5 m/s in 10 minutes.
+TEST_CASE("WeatherFluid: the advection turns the wind with the sphere") {
+    const auto grid = std::make_shared<CubeSphereGrid>(32, 1000.0);
+    WeatherFluid::Params p;
+    p.levels = 2;
+    p.top_m = 80.0;
+    p.scalars = 1;
+    WeatherFluid fluid(grid, p);
+    const WeatherGrid &g = fluid.grid();
+    auto rotation = [](const double p_pos[3], double r_wind[3]) {
+        const double l = std::sqrt(p_pos[0] * p_pos[0] + p_pos[1] * p_pos[1] + p_pos[2] * p_pos[2]);
+        r_wind[0] = 5.0 * p_pos[2] / l;
+        r_wind[1] = 0.0;
+        r_wind[2] = -5.0 * p_pos[0] / l;
+    };
+    for (int f = 0; f < g.faces(); f++) {
+        for (int j = 0; j < g.height(); j++) {
+            for (int i = 0; i < g.width(); i++) {
+                float *here = &fluid.state()[g.index(f, i, j) * size_t(fluid.stride())];
+                double pos[3], up[3], u[3];
+                g.cell_surface(f, i, j, pos, up);
+                rotation(pos, u);
+                for (int k = 0; k < fluid.levels(); k++) {
+                    for (int a = 0; a < 3; a++) {
+                        here[fluid.wind_offset(k) + a] = float(u[a]);
+                    }
+                }
+            }
+        }
+    }
+    fluid.fill_halo();
+    fluid.advect(5.0);
+    double worst = 0.0;
+    for (int f = 0; f < g.faces(); f++) {
+        for (int j = 0; j < g.height(); j++) {
+            for (int i = 0; i < g.width(); i++) {
+                const float *here = &fluid.state()[g.index(f, i, j) * size_t(fluid.stride())];
+                double pos[3], up[3], u[3];
+                g.cell_surface(f, i, j, pos, up);
+                rotation(pos, u);
+                worst = std::max(worst, std::sqrt(std::pow(here[0] - u[0], 2) + std::pow(here[1] - u[1], 2) + std::pow(here[2] - u[2], 2)));
+            }
+        }
+    }
+    MESSAGE("one step of a 5 m/s rotation: worst error ", worst, " m/s");
+    CHECK(worst < 0.08);
+}
 TEST_CASE("WeatherFluid: the same bits run to run") {
     const auto grid = std::make_shared<CubeSphereGrid>(12, 1000.0);
     std::vector<float> state[2];

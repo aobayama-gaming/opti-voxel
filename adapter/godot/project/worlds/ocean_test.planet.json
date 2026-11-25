@@ -5,7 +5,7 @@
   "lods": 15
  },
  "seed": 48211,
- "weather": {"cell_m": 45, "top_m": 400, "spin_up_s": 1200},
+ "weather": {"cell_m": 45, "top_m": 600, "spin_up_s": 1500},
  "shape": {
   "kind": "sphere",
   "radius_m": 2000

@@ -10,7 +10,7 @@
 
 // The weather's grid (docs/weather.md "Grid"): a planet's surface as faces of width x height cells, each face padded with
 // a halo of HALO cells read from its neighbours, so a stencil or a bilinear read crosses a seam like any other cell. The
-// interface the simulation (WeatherSim), the worker and the clouds see; a base's shape is one implementation of it
+// interface the simulation (WeatherFluid), the worker and the clouds see; a base's shape is one implementation of it
 // (CubeSphereGrid for a sphere). Engine-free and in double; positions are metres from the base's centre.
 // - The padded layout: x fastest, then y, then the face (index()); x in [-HALO, width + HALO), y likewise. A field has
 //   `comps` floats per padded cell, interleaved. The layout is also the renderer's atlas: a 2D texture of stride_x()

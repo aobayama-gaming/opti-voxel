@@ -118,6 +118,39 @@ double WeatherMoist::kessler(double *r_theta, double *r_qv, double *r_qc, double
     return precl / split;
 }
 
+void WeatherMoist::eddy_diffusivity(const double *p_theta, const double *p_qv, const double *p_qc, const double (*p_wind)[3], double p_dz,
+        double p_delta_m, int p_levels, double *r_k) {
+    const double l2 = (C_S * p_delta_m) * (C_S * p_delta_m);
+    for (int k = 0; k + 1 < p_levels; k++) {
+        const double tv0 = p_theta[k] * (1.0 + 0.61 * p_qv[k] - p_qc[k]);
+        const double tv1 = p_theta[k + 1] * (1.0 + 0.61 * p_qv[k + 1] - p_qc[k + 1]);
+        const double n2 = GRAVITY * (tv1 - tv0) / (0.5 * (tv0 + tv1) * p_dz);
+        double s2 = 0.0;
+        for (int a = 0; a < 3; a++) {
+            const double d = (p_wind[k + 1][a] - p_wind[k][a]) / p_dz;
+            s2 += d * d;
+        }
+        r_k[k] = l2 * std::sqrt(ov::max(s2 - n2 / PRANDTL, 0.0));
+    }
+}
+
+void WeatherMoist::diffuse(double *r_x, const double *p_k, double p_dz, double p_dt, int p_levels) {
+    constexpr int MAX = WeatherFluid::MAX_LEVELS;
+    // Thomas: -a_k x_(k-1) + (1 + a_k + b_k) x_k - b_k x_(k+1) = x_k, a and b the interfaces below and above.
+    double c[MAX], d[MAX];
+    const double s = p_dt / (p_dz * p_dz);
+    for (int k = 0; k < p_levels; k++) {
+        const double below = k > 0 ? p_k[k - 1] * s : 0.0;
+        const double above = k + 1 < p_levels ? p_k[k] * s : 0.0;
+        const double diag = 1.0 + below + above - (k > 0 ? below * c[k - 1] : 0.0);
+        c[k] = above / diag;
+        d[k] = (r_x[k] + (k > 0 ? below * d[k - 1] : 0.0)) / diag;
+    }
+    for (int k = p_levels - 1; k >= 0; k--) {
+        r_x[k] = d[k] + (k + 1 < p_levels ? c[k] * r_x[k + 1] : 0.0);
+    }
+}
+
 void WeatherMoist::longwave(const double *p_qc, const double *p_rho, const double *p_exner, double p_dz, int p_levels, double *r_heating) {
     constexpr int MAX = WeatherFluid::MAX_LEVELS;
     // The optical depth of each level, then the flux at each interface (0 the ground, levels the top).
@@ -146,6 +179,8 @@ void WeatherMoist::apply(WeatherFluid &p_fluid, const std::vector<Ground> &p_gro
     const int st = p_fluid.stride();
     const double dz = p_fluid.dz_m();
     const double clear = CLEAR_COOLING / 86400.0;
+    const double sink = params.subsidence_per_s;
+    const double delta = std::cbrt(g.cell_m() * g.cell_m() * dz);
     std::vector<float> &state = p_fluid.state();
     parallel_for(uint32_t(g.faces() * g.height()), "WeatherMoist::apply", [&](uint32_t p_row) {
         constexpr int MAX = WeatherFluid::MAX_LEVELS;
@@ -162,7 +197,7 @@ void WeatherMoist::apply(WeatherFluid &p_fluid, const std::vector<Ground> &p_gro
             }
             // Subsidence: w = -D z, upwind (from above; the top level's air from its own level).
             for (int k = 0; k + 1 < levels; k++) {
-                const double a = params.subsidence_per_s * sound.z[size_t(k)] * p_dt / dz;
+                const double a = sink * sound.z[size_t(k)] * p_dt / dz;
                 for (int s = 0; s < SCALARS; s++) {
                     col[s][k] += a * (col[s][k + 1] - col[s][k]);
                 }
@@ -184,6 +219,29 @@ void WeatherMoist::apply(WeatherFluid &p_fluid, const std::vector<Ground> &p_gro
             const double qs = saturation(gr.temp_k, P0_MB);
             const double ae = qs > col[QV][0] ? a * double(gr.wetness) : a;
             col[QV][0] += (qs - col[QV][0]) * ae / (1.0 + ae);
+            // The subgrid turbulence: theta, vapour, cloud and the horizontal wind.
+            double wind[MAX][3], vert[MAX], eddy[MAX];
+            for (int k = 0; k < levels; k++) {
+                const float *uk = here + p_fluid.wind_offset(k);
+                vert[k] = uk[0] * up[0] + uk[1] * up[1] + uk[2] * up[2];
+                for (int a = 0; a < 3; a++) {
+                    wind[k][a] = uk[a] - vert[k] * up[a];
+                }
+            }
+            eddy_diffusivity(col[THETA], col[QV], col[QC], wind, dz, delta, levels, eddy);
+            for (const int s : { int(THETA), int(QV), int(QC) }) {
+                diffuse(col[s], eddy, dz, p_dt, levels);
+            }
+            for (int a = 0; a < 3; a++) {
+                double x[MAX];
+                for (int k = 0; k < levels; k++) {
+                    x[k] = wind[k][a];
+                }
+                diffuse(x, eddy, dz, p_dt, levels);
+                for (int k = 0; k < levels; k++) {
+                    here[p_fluid.wind_offset(k) + a] = float(x[k] + vert[k] * up[a]);
+                }
+            }
             // Radiation: the cloud's longwave and the clear air's cooling.
             double heating[MAX];
             longwave(col[QC], sound.rho.data(), sound.exner.data(), dz, levels, heating);

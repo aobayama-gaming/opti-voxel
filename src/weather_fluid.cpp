@@ -163,6 +163,32 @@ double WeatherFluid::max_dt() const {
     return rate > 0.0 ? MAX_COURANT / rate : 1e30;
 }
 
+void WeatherFluid::transport(const Column &p_c, const double p_d[3], float *r_wind) {
+    double from[3];
+    for (int a = 0; a < 3; a++) {
+        from[a] = p_c.pos[a] + p_d[a];
+    }
+    const double len = length3(from);
+    if (!(len > 0.0)) {
+        return;
+    }
+    const double up[3] = { p_c.up[0], p_c.up[1], p_c.up[2] };
+    for (int a = 0; a < 3; a++) {
+        from[a] /= len;
+    }
+    // Rodrigues with k = from x up (|k| = sin, cos = from . up): v' = v cos + k x v + k (k . v) / (1 + cos).
+    double k[3];
+    cross3(from, up, k);
+    const double cosine = dot3(from, up);
+    const double v[3] = { r_wind[0], r_wind[1], r_wind[2] };
+    double kv[3];
+    cross3(k, v, kv);
+    const double kdv = dot3(k, v) / (1.0 + cosine);
+    for (int a = 0; a < 3; a++) {
+        r_wind[a] = float(v[a] * cosine + kv[a] + k[a] * kdv);
+    }
+}
+
 void WeatherFluid::advect(double p_dt) {
     const WeatherGrid &g = *cells;
     const int st = stride();
@@ -203,6 +229,7 @@ void WeatherFluid::advect(double p_dt) {
                     }
                     out[f] = float(v);
                 }
+                transport(c, d, out);
             }
         } }, ov::Priority::LOW);
     cur.swap(next);

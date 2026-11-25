@@ -5,7 +5,8 @@ rain. It is not the climate. The climate (`docs/climate.md`) is a fixed function
 and shapes the ground; the weather is simulated, forced by the climate, and read by what is drawn (clouds, leaves, later
 the sea and rain). It never feeds the SDF: the terrain stays a function of the absolute position.
 
-Status: the grid (`src/weather_grid.*`), the simulation (`src/weather_sim.*`), its worker in `World`
+Status: the grid (`src/weather_grid.*`), the simulation (the fluid `src/weather_fluid.*`, its moist physics
+`src/weather_moist.*`, its forcing `src/weather_forcing.*`), its worker in `World`
 (`src/weather.*`) with a report (`tools/weather_report.sh`), and the clouds drawn from it (`docs/look.md` "Weather") are
 in, and the mixer edits a biome's weather and plays a world's as a time-lapse. Later steps at the end. Planets only: the weather is simulated over a sphere, never over a
 flat shape (decided with the user, 2026-11-24: the engine is for planets); a torus gets its grid next.
@@ -46,74 +47,24 @@ ways) is the next, nothing else changes for it.
   filtering): the weather is a look, not a terrain input, so the float-mirror rule (`docs/gotchas.md`) does not apply.
 
 ## Simulation
-`WeatherSim` (`src/weather_sim.*`, engine-free, CPU): the air over the whole planet in levels on the grid, hydrostatic
-and rotating, carrying vapour and cloud water. Every column is written from the previous state only, so `parallel_for`
-over the rows (LOW priority) gives the same bits on any thread count; the halos are refilled between passes.
-- **Levels:** the planet file's `top_m` over about `cell_m` (`levels = round(top_m / cell_m)`, at most 32), so the
-  cells are near cubes: on `ocean_test` (45 m cells, top 400 m) 9 levels of 44 m. A level's cells share their column's
-  surface metric (the shallow-atmosphere approximation: on the 2 km planets a cell 300 m up is 15% wider than its
-  metric says, which a look doesn't show).
-- **State** per padded cell (`stride()` floats): per level (`Field`) the wind, a 3D vector tangent to the surface in the
-  planet's axes (no per-face frames at the seams); `TEMP`, the air's potential temperature anomaly; `VAPOUR`
-  (saturation 1 at the ground) and `CLOUD`, cloud water; then the column's `ETA`, its top's height anomaly, the surface
-  pressure `c^2 ETA` (`WAVE_MPS` = 20 m/s). **Diagnostics** (`Diag`): the column's cover (its largest `CLOUD /
-  FULL_CLOUD`), its type (its cloudy depth: stratus 0, a tower 1) and its rain. Clouds are only the simulation's:
-  biomes don't set them.
-- **A substep** (`step(dt)` cuts dt into substeps of at most half a cell over the wave speed, the gravity waves' CFL):
-  1. Each level's air from upstream (semi-Lagrangian: the level sampled where its wind brings it from), the Coriolis as
-     an exact rotation of the wind about the up by `-f dt` (`f = 2 Omega n_y`), the wind relaxed towards its target.
-     The ground touches the lowest level only: its drag, its temperature relaxed to the biome's heat, its vapour raised
-     towards `GROUND_HUMIDITY` times the biome's moisture. The levels above relax towards an inversion
-     (`ambient_temp`: the potential temperature even up to `INVERSION_BASE` (half the top: a neutral layer a
-     thermal rises freely through), then rising to `INVERSION_TEMP` at the top (a stable layer: thermals stop in it)).
-  2. The pressure: each level's wind pushed by `-grad(phi)`, `phi = c^2 ETA - BUOYANCY` (the warmth above the level,
-     its own half included): hydrostatic, so a warm column is a low at the ground and a high aloft. Central
-     differences through each cell's dual vectors (made once from its neighbours' surface points, so the cube's
-     distortion is in them).
-  3. The column: `ETA` follows the column's mean divergence; the levels' divergences give the vertical wind through
-     their interfaces (zero at the ground: `w = w_below - div dz`), which carries every field upwind between levels
-     (`lift`, at most half a level a substep). **Convection** (`convect`, a parcel scheme): a parcel of the lowest
-     level's air rises while it is no cooler than the level it reaches less `CONVECT_EXCESS` (its overshoot), its
-     vapour past each level's saturation condensing into latent warmth (`LATENT`: moist thermals punch higher); the
-     levels it rises through mix their air (wind, vapour, cloud; not the temperature, the forcing's profile) towards
-     their mean (`CONVECT_TAU_S`), and above its top the air sinks and dries (`DRY_TAU_S`). Then each level's vapour
-     past its saturation (`exp(SATURATION_RATE (TEMP - LAPSE altitude / top))`: Clausius-Clapeyron in the actual
-     temperature, the potential one less the cooling with height; cold air aloft holds little) condenses, cloud under
-     it evaporates at once (cloud mixed below its base goes, the base stays sharp), cloud past `RAIN_CLOUD` rains out; a
-     little horizontal diffusion (`DIFFUSION`, a stabiliser).
-- **What makes a cloud:** the air gets colder with height, so its saturation falls: a thermal's mixed layer, the
-  ground's warmth and vapour through it, saturates at a base (the lifting condensation level) and its cloud goes up
-  to where the thermals stop, in the stable layer above `INVERSION_BASE`. The sky above is clear because no thermal
-  reaches it and its sinking air dries (`DRY_TAU_S`), not because it is warm: so `top_m` must leave room above the
-  clouds (about twice their tops). Hot ground or a storm's warm core punches higher; dry ground's base is above the
-  inversion (no cloud); cold moist ground saturates its lowest level (fog). The renderer fades the top level to none at
-  `top_m` (`docs/look.md`), so even a cloud reaching it has no flat top. On `ocean_test` (warm sea, hotter dry land,
-  top 400 m): a tropical deck and bands, every cloud in levels 3 to 6 (155 to 290 m), the three above clear, cover
-  0.09 at load growing to ~0.3 after 20 game minutes, no fog (`tools/weather_report.sh`, its cross-section).
-- **Coriolis:** a game value from the storm radius: `Omega = c / (storm_m sqrt 2)`, so the Rossby radius at 45 degrees
-  is the planet file's `storm_m` (a quarter of the radius by default). The real Omega on a 2 km planet makes no storm;
-  on it the default gives a 222 s rotation of the weather (not the sun's day).
-- **The prevailing wind** (`prevailing`): east (the pole is +y) times `-sin(6 |latitude|)`: trade easterlies peaking at
-  15 degrees, westerlies at 45, polar easterlies at 75, calm at the equator and the poles.
-- **Storms:** each substep a cell starts one with its biome's chance (`storms`: what a whole planet of that biome
-  starts in an hour), drawn from a hash of the seed, the tick, the substep and the cell; a storm is a warm, moist low of
-  the storm radius (`inject_storm`) which the Coriolis spins up: counterclockwise in the north, clockwise in the south.
-- **Cost** (`tools/weather_report.sh`, this laptop, 2026-11-24): `ocean_test`'s 29.4k columns of 9 levels take ~8-10 ms a
-  0.1 s tick on the worker (4 levels: ~4 ms), its 20 game minutes of spin-up ~14 s at load (TODO: start the columns
-  nearer their balance, which the spin-up only waits for). At 10 ticks a second that is ~10% of a core, off the frame.
+The first simulation, `WeatherSim` (2D, then hydrostatic levels with a parcel convection, #179 and the levels PR), is
+gone: at 45 m cells, as tall as they are wide, a hydrostatic model cannot hold a thermal nor the air sinking round it,
+so it made one flat deck (seen in game, 2026-11-25). The weather is now the fluid below, its moist physics and its
+forcing, stepped by the worker.
 
-## Fluid (the rebuild, not wired yet)
-The levelled `WeatherSim` above is hydrostatic: at 45 m cells, as tall as they are wide, it cannot hold a thermal
-nor the air sinking round it, the clear gaps between cumulus, so it makes one flat deck (seen in game, 2026-11-25).
-Its replacement, approved with the user: the non-hydrostatic moist Boussinesq equations of the cloud-resolving models
+## Fluid
+The simulation, approved with the user (2026-11-25): the non-hydrostatic moist Boussinesq equations of the cloud-resolving models
 (SAM, Khairoutdinov & Randall 2003; Harris et al. 2003; Hadrich et al. 2020 "Stormscapes"), real constants, the
 forcing physical and 2D (relief ignored: the SDF as the ground boundary comes later). Built in stages, each with its
-tests; `WeatherSim` stays the live path until the moisture lands.
+tests.
 - **`WeatherFluid`** (`src/weather_fluid.*`, engine-free): the dynamics only, `du/dt + u . grad u = -grad p + b up -
   f up x u`, `div u = 0`, over a `WeatherGrid`'s columns in `levels` levels of `top / levels` (shallow atmosphere).
   A padded cell's record holds per level the wind (3D, planet axes: tangent part and w) and the physics' scalars.
   A step: `advect` (semi-Lagrangian, the departure point in the face's own cells through the cell's dual vectors, no
-  `locate`, bilinear in the cells and linear in the levels; `max_dt` keeps the wind within half a cell or level),
+  `locate`, bilinear in the cells and linear in the levels; `max_dt` keeps the wind within half a cell or level; the
+  wind brought from upstream turned into the cell's frame, `transport`: the rotation carrying the departure's up onto
+  the cell's. Without it a wind keeps its upstream direction: a 5 m/s rotation drifted 6.5 m/s off in 10 minutes at
+  the faces' edges),
   the caller's physics on the state, `force` (the buoyancy along the up, the Coriolis turn about it, a sponge damping
   w in the top fifth), `project` (the pressure from the fluxes through each cell's 6 faces, ground and top rigid,
   red-black Gauss-Seidel over-relaxed 1.6, 20 sweeps warm-started; the wind at the centres loses dt times its
@@ -149,42 +100,74 @@ tests; `WeatherSim` stays the live path until the moisture lands.
   only 4 K colder no fog forms in 30 minutes: cooled and dried at the same rate the lowest level moves on the mixing
   line to the ground's saturated state, which only crosses saturation near its end; the 40 m lowest cell averages the
   surface layer where real fog starts.
-- **Next:** the physical forcing (each biome's ground temperature and its day, wetness, roughness; the sea's
-  temperature; the sounding from the world) and the wiring: `Weather` steps the fluid and the physics at 5 Hz,
-  publishes each level's cloud water, the clouds blend the last two states carried by the wind; `WeatherSim` goes.
-  Then the typhoon test on an f-plane and the clouds' cost.
+- **Subgrid turbulence** (in `WeatherMoist`): Smagorinsky-Lilly in the vertical, `K = (0.18 D)^2 sqrt(max(S^2 -
+  N^2 / Pr, 0))` per interface (D the cell's `(width^2 dz)^(1/3)`, Pr 1/3), implicit on theta, vapour, cloud and the
+  horizontal wind: mixing where the wind shears or the air is unstable, none in the inversion. The cells resolve the
+  thermals, not the surface layer: without it the lowest level took the ground's own state, a sea's saturated air, and
+  fogged over a sea warmer than the air (5% of the lowest level, the cloudiest).
+- **The twist** (`Params::exchange`, 15): the surface fluxes' coefficients only. Sped up as well, radiation and
+  subsidence (one time compression of the slow processes, tried) outran the boundary layer's turbulence, which runs at
+  its own speed: the humid layer cooled to fog, the fog case's top overturned it into a deck at 180 m.
 
 ## Forcing
-Each cell's biome weather (`Climate::BiomeWeather`, a biome's `"weather"` block, `docs/climate.md`): the cell's biome
-weights at its centre on the ground blend their biomes' values. `wind` scales the prevailing wind there, `drag` the
-ground's drag (forest high, sea and ice low: wind builds over open water), `heat` the temperature the air relaxes to
-(hot ground: a thermal low the air flows into, and thermals up to the inversion), `moisture` the vapour the ground gives
-(times `GROUND_HUMIDITY`; the cloud forms where the thermals carry it past the saturation), `gust` the look's gusts, `storms` the storms it starts. The forcing is
-sampled once when the weather starts (the climate never changes); the weather never changes the ground.
+`WeatherForcing` (`src/weather_forcing.*`, engine-free): what drives the air from outside it.
+- **The ground** per column, 2D (relief ignored): the blend of its biomes' `"weather"` (`Climate::BiomeWeather`,
+  `docs/climate.md`; their weights at the column's ground point, `Weather::forcing_at`, sampled once at start):
+  `ground_k` the ground's or the sea's mean temperature, `diurnal_k` its day (`ground_k + diurnal_k (max(up . sun, 0)
+  - 1 / pi)`: the day's mean is `ground_k`; the sun is the game's, `World::set_sun`), `wetness` (1 a sea, 0 a desert),
+  `z0_m` its roughness, `storms`. The weather never changes the ground.
+- **The large scale:** the pressure gradient holding the prevailing wind in geostrophic balance, `f up x u_g` on every
+  level (`u_g`: east times `-sin(6 |latitude|)`, trades at 15 degrees, westerlies at 45). `f = 2 Omega up_y`, `Omega`
+  the weather's day (`day_s` 300 s: the twist, storms spin at the game's scale). The jets are unstable: they roll up
+  into mid-latitude eddies, which the cube's 4-fold symmetry seeds at wavenumber 4 (without the prevailing wind there
+  are none: the grid makes no wind by itself).
+- **Storm seeds:** each step a column starts one with the chance its `storms` gives (a planet of storms 1 starts one an
+  hour; a hash of the seed, the step and the column): +2 K and +2 g/kg in a bubble of `storm_m` over the lower half of
+  the levels. What it grows into is the physics'.
+- **The sounding** (the air's start and the buoyancy's reference): a trade-wind boundary layer, BOMEX's shape scaled to
+  `inversion_m`: a mixed layer 1.5 K under the grounds' mean up to 0.53 of the inversion, its vapour saturating a
+  ground parcel exactly there (the cloud base at the mixed layer's top, as in BOMEX; at 88% humidity the base sat 80 m
+  over the thermals' reach and nothing formed in 20 minutes), a cloud layer (+4 K/km, drying), a 4 K inversion over
+  40 m, dry stable air above. 0.1 K of noise on the two lowest levels.
+- **Tests** (`test_weather_forcing.cpp`): the sounding saturates at the base and not under it; the ground's noon, night
+  and day's mean; the trades from the east, the westerlies from the west; storms at their rate, the same from the same
+  seed. **A trade-wind sea** (all of it at once on 6 x 32^2 columns: a sea 1.5 K over its air, the rotation, the
+  prevailing wind), sampled each minute from 15 to 40: cumulus with their base at 140-180 m, nothing at the ground nor
+  above 340 m, 0.8% of the columns cloudy on average and 5.6% at most. BOMEX's ~10%: the twisted rotation (f up to
+  0.04 /s, a thermal's Rossby number ~0.5) stiffens the thermals (a 50-minute day gave 5.6% on average).
 
 ## Planet file
 `"weather"`: on by default over a sphere (`"on": false` turns it off), refused over a flat shape or a torus (until its
 grid lands). `cell_m` (the cells' width in metres; 0 or absent: 64 cells a cube face's side; refused where the side
-would leave [4, 1024]), `tick_hz` (10), `time_scale` (game seconds a real second simulates, 1), `prevailing_mps` (8),
-`storm_m` (0: a quarter of the radius), `spin_up_s` (game seconds simulated before the first frame, 60), `top_m` (the
-levels' top over the ground, 300; the levels about `cell_m` apart). At
-`time_scale` 1 and the default prevailing wind a 2 km planet's weather crosses its half circumference in ~10 minutes.
+would leave [4, 1024]), `top_m` (the levels' top over the ground, 600; the levels about `cell_m` apart, at least 2),
+`tick_hz` (5), `time_scale` (game seconds a real second simulates, 1), `prevailing_mps` (5), `storm_m` (0: 1/8 of the
+radius), `spin_up_s` (game seconds simulated before the first frame, 600), `day_s` (the weather's day, 300),
+`inversion_m` (the start sounding's inversion, 300, under `top_m`), `exchange` (the surface fluxes' twist, 15).
 
 ## Worker
-`Weather` (`src/weather.*`, engine-free): the simulation on a worker of its own (`ov::executor().start_worker`,
+`Weather` (`src/weather.*`, engine-free): the fluid, its moist physics and its forcing on a worker of its own (`ov::executor().start_worker`,
 "weather"), owned by `World` when the world file's weather is on. It needs no GPU: it runs headless too.
 - **Start:** the worker's first step builds the forcing (each cell's `forcing_at` at its ground point, the climate read at
-  the level whose cells are about the grid's, `parallel_for` at LOW priority) and runs the spin-up. On `ocean_test`: 98 ms.
+  the level whose cells are about the grid's, `parallel_for` at LOW priority), the sounding and the start, and runs the
+  spin-up.
 - **The clock:** `World::frame` calls `update(now)`: the real time since the last frame (0.25 s at most) times `tick_hz`,
-  from the first state on. The worker runs one tick (`time_scale / tick_hz` game seconds) per step while ticks are due;
+  from the first state on. The worker runs one tick (`time_scale / tick_hz` game seconds, in steps of at most the
+fluid's `max_dt` and 5 s: advect, forcing, moist physics, force, project) per step while ticks are due;
   more than `MAX_BEHIND` (20) behind, the excess is dropped (the weather slows, it never runs away).
-- **States:** each tick publishes `LOOK` floats per padded cell (wind, cover, type, rain, temperature, vapour); `update`
+- **States:** each tick publishes `LOOK` floats per padded cell (the lowest level's wind, the cover: the column's
+  largest cloud, the type: its cloudy depth over a third of the levels, the rain in mm/h, the lowest level's
+  temperature in C and vapour in g/kg, the levels' mean wind), then each level's cloud water over `FULL_CLOUD_QC`
+  (0.3 g/kg: the clouds' density 1); `update`
   collects the latest and keeps the previous one. The frame shows the time one tick behind the clock: `blend()` is where
   it stands between the two (the clouds' texture blend, next step).
 - **Queries:** `World::weather_at(render position)` (the base's up there, sampled on the latest state), Godot's
   `VoxelTerrain.get_weather_at` (a Dictionary), the player's HUD line (wind, cover, rain); `debug_stats()["weather"]`
-  (ticks, game seconds, storms, dropped and behind ticks, the tick's and the forcing's times, Omega, the substep).
-- **Cost:** in Godot (its pool runs the rows), a tick at N = 64 takes 1.0 ms on average, 3.6 ms at most, on the worker.
+  (ticks, game seconds, storms, dropped and behind ticks, the tick's and the forcing's times, Omega, the substep, the
+  forcing's summary per hemisphere).
+- **Cost** (`tools/weather_report.sh`, `ocean_test`: 6 x 70^2 columns of 13 levels, this laptop, 2026-11-25): a 0.2 s
+  tick takes 53 ms on average, 112 ms at most, on the worker (5 Hz: ~26% of the worker's time); the forcing and 1500 s
+  of spin-up 42 s at load (TODO: a warm start or a saved state; the spin-up waits for the boundary layer's first
+  adjustment, ~20 game minutes).
 
 ## Report
 `tools/weather_report.sh` (`WeatherReport`, CPU only, headless): the world's weather on a clock of its own, each tick
@@ -192,12 +175,14 @@ waited for, mapped at game minutes after the spin-up: `cover_<min>.png` (cover g
 way the wind blows as a hue: east red, north yellow-green, west cyan, south violet; its speed as the brightness),
 equirectangular with the +y pole at the top, `section_<min>.png` (a cross-section along the equator: longitude across,
 the levels up from the ground, the cloud water white at full cover) and `report.md` (per map: storms, mean cover, top
-wind, raining share, and each level's cloudy share of the planet). The test biomes of `ocean_test.planet.json` carry a
-weather block (the ocean a warm sea, moist, smooth and stormy; the land drier, hotter, rougher).
+wind, raining share (rain over 0.1 mm/h), each level's cloudy share of the planet, and the forcing's summary). The test biomes of `ocean_test.planet.json` carry a
+weather block (the ocean a sea at 300.5 K, smooth and stormy; the land at 299 K with a 3 K day, 30% wet, z0 0.1 m;
+with an 8 K day the fixed sun's night side fogged whole, its land 1 K under the trade air's dew point). On it
+(2026-11-25): no fog, a sparse cumulus field at 180 m along the eddies' edges, 4% of that level, mean cover 0.05.
 
 ## Mixer
 The biome mixer (`debug/biome_mixer/`) edits a biome's weather and shows a world's.
-- **A biome's push:** its output node carries one slider per key of the `"weather"` block (`_weather_row` in
+- **A biome's ground:** its output node carries one slider per key of the `"weather"` block (`_weather_row` in
   `nodes.gd`). The keys, ranges and defaults are the engine's (`Climate::WEATHER_KEYS`, which the parser reads too,
   through `ClimateReportNode.weather_keys`); `set_weather` writes the biome's block.
 - **The time-lapse** (the toolbar's "Weather", `weather_lapse.gd`): the engine runs the mixer's world on the CPU on a
@@ -223,8 +208,10 @@ Agreed with the user (2026-11-24). Stacked PRs, `feature/weather-*`:
    inversion, latent heat, drying aloft, saturation from the actual temperature), the report's cross-section.
 8. **3D clouds:** the cloud layer from the ground to `top_m`, each level's cloud a slice of the texture (`docs/look.md`).
 9. **Fluid** (the rebuild, "Fluid" above): the 3D dynamics and its tests.
-10. **Moist physics:** `WeatherMoist` and its tests (cumulus, fog). Then the physical forcing and the wiring, the
-    typhoon test and the clouds' cost, then the torus's grid.
+10. **Moist physics:** `WeatherMoist` and its tests (cumulus, fog).
+11. **Forcing and wiring:** `WeatherForcing`, the biome block's physical keys, `Weather` on the fluid at 5 Hz,
+    `WeatherSim` deleted; the advection's parallel transport, the subgrid turbulence. Then the typhoon test on an
+    f-plane, the clouds' blend carried by the wind and their cost, then the torus's grid.
 
 Later: curl-noise gusts, the FFT sea reading the wind (U10, fetch, swell), rain and ground wetness, saving the weather,
 the GPU if the CPU tick is too slow.

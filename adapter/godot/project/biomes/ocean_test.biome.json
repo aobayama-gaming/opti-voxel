@@ -4,7 +4,7 @@
  "debug_color": "#2a4a7a",
  "surface": {"flat": "#6a6458", "steep": "#4a463e"},
  "at": {"humidity": [0.6, 0.5]},
- "weather": {"moisture": 1.05, "drag": 0.3, "heat": 0.1, "storms": 6},
+ "weather": {"ground_k": 300.5, "storms": 6},
  "graph": {
   "nodes": [
    {"id": "level", "kind": "sea"},

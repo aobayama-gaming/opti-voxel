@@ -326,6 +326,7 @@ void World::frame(const Float3 *p_camera_pos, const Float3 *p_camera_forward, do
         has_camera = true;
     }
     if (weather) {
+        weather->set_sun(sun); // render axes are the planet's, shifted
         const bool landed = weather->update(now_usec());
         Weather::Sample here;
         if (p_camera_pos != nullptr) {
