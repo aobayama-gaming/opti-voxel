@@ -89,6 +89,7 @@ void Weather::build() {
     mp.exchange = settings.exchange;
     const WeatherMoist::Sounding sounding = drive->sounding(*fluid);
     moist = std::make_unique<WeatherMoist>(*fluid, sounding, mp);
+    convection = std::make_unique<WeatherConvection>(*fluid, sounding, settings.inversion_m);
     drive->start(*fluid, sounding);
     const ov::Value summary = drive->summary(*fluid);
     buoyancy.assign(fluid->cell_count(), 0.0f);
@@ -127,9 +128,10 @@ void Weather::advance(double p_dt) {
     double left = p_dt;
     while (left > 1e-9) {
         const double dt = ov::min(ov::min(left, MAX_STEP_S), fluid->max_dt());
-        drive->warm(sun_at(sim_time_s + 0.5 * dt), dt, *fluid, moist->reference().rho, ground);
+        drive->warm(sun_at(sim_time_s + 0.5 * dt), dt, *fluid, moist->reference().rho, convection->cloud().data(), ground);
         fluid->advect(dt);
         drive->apply(*fluid, dt, steps);
+        convection->apply(*fluid, moist->surface(), dt);
         moist->apply(*fluid, ground, dt, buoyancy.data());
         fluid->force(dt, buoyancy.data());
         fluid->project(dt);
@@ -165,7 +167,8 @@ std::vector<float> Weather::look() const {
                     for (int a = 0; a < 3; a++) {
                         aloft[a] += sc[fluid->wind_offset(k) + a] / float(levels_n);
                     }
-                    const float cloud = float(double(sc[fluid->scalar_offset(k, WeatherMoist::QC)]) / FULL_CLOUD_QC);
+                    const double water = double(sc[fluid->scalar_offset(k, WeatherMoist::QC)]) + double(convection->cloud()[fluid->cell_index(in, k)]);
+                    const float cloud = float(water / FULL_CLOUD_QC);
                     o[LOOK + k] = cloud;
                     cover = ov::max(cover, cloud);
                     cloudy += cloud > 0.03f;
@@ -205,11 +208,18 @@ bool Weather::step() {
     std::vector<float> state = look();
     double day_k = 0.0, night_k = 0.0;
     drive->day_night(*fluid, sun_at(sim_time_s), ground, day_k, night_k);
+    double rising = 0.0, top_sum = 0.0;
+    for (const float t : convection->tops()) {
+        rising += t > 0.0f ? 1.0 : 0.0;
+        top_sum += double(t);
+    }
     bool more;
     {
         std::lock_guard<std::mutex> lock(mutex);
         ground_day_k = day_k;
         ground_night_k = night_k;
+        convecting = rising / double(ov::max(convection->tops().size(), size_t(1)));
+        convection_top_m = rising > 0.0 ? top_sum / rising : 0.0;
         next_look = std::move(state);
         next_tick = steps;
         next_done = done;
@@ -319,5 +329,7 @@ ov::Value Weather::get_stats() const {
     d["forcing_summary"] = forcing_summary;
     d["ground_day_k"] = ground_day_k;
     d["ground_night_k"] = ground_night_k;
+    d["convecting"] = convecting;
+    d["convection_top_m"] = convection_top_m;
     return d;
 }

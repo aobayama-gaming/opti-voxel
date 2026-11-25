@@ -109,6 +109,29 @@ tests.
   subsidence (one time compression of the slow processes, tried) outran the boundary layer's turbulence, which runs at
   its own speed: the humid layer cooled to fog, the fog case's top overturned it into a deck at 180 m.
 
+## Convection
+`WeatherConvection` (`src/weather_convection.*`, engine-free): the shallow convection the cells cannot resolve (3-4
+levels in the mixed layer, a thermal ~2 cells wide: without it the ground's heat only diffused, and a warm afternoon
+made no cumulus). The mass-flux half of EDMF (Siebesma, Soares & Teixeira 2007, JAS 64, equation numbers theirs), its
+eddy diffusivity the moist physics' Smagorinsky turbulence; one updraft per column, each step before the moist physics
+(whose saturation adjustment condenses what it brings).
+- **Start** (17): the lowest level's mean plus `ALPHA w'phi'_s / sigma_w(z_1)` (ALPHA 1) of the ground's last fluxes
+  (`WeatherMoist::surface`), `w_u = sigma_w / sqrt(0.15)` (section 3's `mu`); only while the ground heats the air (a
+  buoyancy flux over 0: by day over land, day and night over a sea warmer than its air).
+- **Rise:** `d phi_u / dz = -eps (phi_u - phi)` (10), `eps = 0.4 (1 / z + 1 / (z* - z))` (16, both distances at least
+  a level, `z*` the column's last top), `1/2 (1 - 2 mu) dw_u^2 / dz = -0.5 eps w_u^2 + B` (15), 8 steps a level; it
+  carries `theta_l` and `q_t`, saturation-adjusted on the way (the cloudy extension, Soares et al. 2004): its base where
+  it saturates, its top `z*` where `w_u` reaches 0.
+- **Transport:** `M = 0.3 sigma_w` (21), `sigma_w` Holtslag and Moeng's (7) of `w*` over `z*` and `u*`; the column's
+  `theta_l` and `q_t` change by `-d/dz (M (phi_u - phi))` (22; explicit, `M dt / dz` under 0.1; the column's totals
+  kept).
+- **Its cloud:** the updraft's water over its area `M / w_u` (0.3 at most) per level, the columns' convective cloud: the
+  published cloud and the ground's shade add it to the grid's (a cumulus narrower than a cell). It does not rain.
+- **Tests** (`test_weather_convection.cpp`): the plume's saturation adjustment keeps `theta_l` and `q_t`; `sigma_w`
+  peaks at 0.6 w* near a third of `z*`; over the trade-wind sounding with BOMEX's fluxes the updraft saturates under
+  the inversion and stops at it, none over a ground colder than its air; a step keeps the column's totals, carries
+  the surface's vapour up, makes a convective cloud.
+
 ## Forcing
 `WeatherForcing` (`src/weather_forcing.*`, engine-free): what drives the air from outside it.
 - **The ground** per column, 2D (relief ignored): the blend of its biomes' `"weather"` (`Climate::BiomeWeather`,
@@ -197,8 +220,11 @@ land), the air at the ground 0.1 K at most, the cover the same by day and night 
 (and its slower spin) gives the ground 1.6 K, the air still ~0.1 K, and no cloud at all: the clouds come from the
 eddies' convergence lines, not from the ground's thermals. The mixed layer is 3-4 levels deep and a thermal ~2
 cells wide: the surface's heat mixes through the subgrid turbulence instead of rising as resolved plumes, so a warm
-afternoon makes no cumulus (TODO: the convection's resolution or a shallow convection scheme, to decide with the
-user).
+afternoon made no cumulus. **With the shallow convection** ("Convection"): updrafts over 83-87% of the columns (the
+sea always, the land by day), their tops at 265-300 m (the inversion); the cover from 0.38 after the spin-up down to
+0.16-0.18 from 15 to 30 minutes on, the day side's 0.18-0.22 and the night side's 0.13-0.15; the cumulus at ~200 m
+over 26-29% of the planet, wrapped in bands round the eddies; no fog, no rain. A tick 55 ms on average (44 without),
+the forcing and the spin-up 48 s at load.
 
 ## Mixer
 The biome mixer (`debug/biome_mixer/`) edits a biome's weather and shows a world's.
@@ -234,6 +260,8 @@ Agreed with the user (2026-11-24). Stacked PRs, `feature/weather-*`:
     f-plane, the clouds' blend carried by the wind and their cost, then the torus's grid.
 12. **The day:** the sun turning with the planet's spin (the scene's light too), the ground a force-restore slab
     (thermal inertia per biome), clouds shading it; the report's day and night sides.
+13. **Shallow convection:** EDMF's updraft per column (`WeatherConvection`), its cloud published and shading the
+    ground.
 
 Later: curl-noise gusts, the FFT sea reading the wind (U10, fetch, swell), rain and ground wetness, saving the weather,
 the GPU if the CPU tick is too slow.

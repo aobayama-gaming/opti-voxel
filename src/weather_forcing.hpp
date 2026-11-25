@@ -67,8 +67,9 @@ public:
     // Each column's ground at its day's mean (ground_k), its wetness and roughness.
     void grounds(std::vector<WeatherMoist::Ground> &r_ground) const;
     // The grounds' temperatures p_dt on under the sun (towards it, planet axes) and the cloud over them (p_rho: the
-    // air's density per level, the sounding's).
-    void warm(const Float3 &p_towards_sun, double p_dt, const WeatherFluid &p_fluid, const std::vector<double> &p_rho,
+    // air's density per level, the sounding's; p_extra_cloud, null or per WeatherFluid::cell_index: cloud water the grid
+    // does not hold, the updrafts').
+    void warm(const Float3 &p_towards_sun, double p_dt, const WeatherFluid &p_fluid, const std::vector<double> &p_rho, const float *p_extra_cloud,
             std::vector<WeatherMoist::Ground> &r_ground);
     // A thermal inertia's slab (force-restore over a day of p_day_s) p_dt on, absorbing p_q W/m^2 over its day's mean,
     // restored to p_mean_k.

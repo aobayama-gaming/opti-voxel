@@ -2,6 +2,7 @@
 
 #include "debug_log.hpp"
 #include "level_program.hpp"
+#include "weather_convection.hpp"
 #include "weather_forcing.hpp"
 #include "world_file.hpp"
 
@@ -22,10 +23,13 @@
 //   in parallel at LOW priority) and runs the spin-up; then one tick (time_scale / tick_hz game seconds, in steps the
 //   fluid's max_dt and MAX_STEP_S allow) per step while the clock is ahead of it. More than MAX_BEHIND ticks behind (a stall, a slow machine), it drops the excess: the
 //   weather slows, it never runs away.
+// - Each step: the fluid's advection, the forcing, the shallow convection (WeatherConvection), the moist physics, the
+//   buoyancy and the projection.
 // - A published state is stride() floats per padded cell: the column's LOOK (Look: the ground level's wind (m/s, planet
 //   axes), the cover (its levels' largest cloud), the type (how deep the cloud is: 0 a layer, 1 a tower over a third of
 //   the levels), the rain (mm/h at the ground), the ground level's temperature (C) and vapour (g/kg), the wind aloft
-//   (the levels' mean)), then each level's cloud water over FULL_CLOUD_QC (the clouds' density), the ground's first.
+//   (the levels' mean)), then each level's cloud water (the grid's and the updrafts') over FULL_CLOUD_QC (the clouds'
+//   density), the ground's first.
 class Weather : public ov::WorkerLoop {
 public:
     enum Look {
@@ -130,6 +134,7 @@ private:
     std::unique_ptr<WeatherFluid> fluid;
     std::unique_ptr<WeatherMoist> moist;
     std::unique_ptr<WeatherForcing> drive;
+    std::unique_ptr<WeatherConvection> convection;
     std::vector<WeatherMoist::Ground> ground;
     std::vector<float> buoyancy;
     uint64_t steps = 0;
@@ -156,6 +161,7 @@ private:
     double omega_rad_s = 0.0;
     ov::Value forcing_summary;
     double ground_day_k = 0.0, ground_night_k = 0.0; // the latest tick's grounds, the sun's side and the other
+    double convecting = 0.0, convection_top_m = 0.0; // the latest tick's share of columns with an updraft, their mean top
 
     // The frame thread's.
     uint64_t last_usec = 0;

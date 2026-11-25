@@ -47,6 +47,7 @@ WeatherMoist::WeatherMoist(const WeatherFluid &p_fluid, const Sounding &p_soundi
         sound = sounding(p_fluid, sound.theta, sound.qv);
     }
     rain_rate.assign(p_fluid.grid().cells(), 0.0f);
+    surface_flux.assign(p_fluid.grid().cells(), Surface());
 }
 
 double WeatherMoist::saturation(double p_t, double p_p_mb) {
@@ -215,10 +216,13 @@ void WeatherMoist::apply(WeatherFluid &p_fluid, const std::vector<Ground> &p_gro
             for (int k = 0; k < 3; k++) {
                 u[k] = float(h[k] / (1.0 + a) + w * up[k]);
             }
-            col[THETA][0] += (double(gr.temp_k) - col[THETA][0]) * a / (1.0 + a); // the ground's exner is 1 (P0)
+            const double d_theta = (double(gr.temp_k) - col[THETA][0]) * a / (1.0 + a); // the ground's exner is 1 (P0)
+            col[THETA][0] += d_theta;
             const double qs = saturation(gr.temp_k, P0_MB);
             const double ae = qs > col[QV][0] ? a * double(gr.wetness) : a;
-            col[QV][0] += (qs - col[QV][0]) * ae / (1.0 + ae);
+            const double d_qv = (qs - col[QV][0]) * ae / (1.0 + ae);
+            col[QV][0] += d_qv;
+            surface_flux[in] = Surface{ float(d_theta * dz / p_dt), float(d_qv * dz / p_dt), float(std::sqrt(c) * speed) };
             // The subgrid turbulence: theta, vapour, cloud and the horizontal wind.
             double wind[MAX][3], vert[MAX], eddy[MAX];
             for (int k = 0; k < levels; k++) {

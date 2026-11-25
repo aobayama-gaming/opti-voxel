@@ -161,7 +161,7 @@ Float3 WeatherForcing::turn_sun(const Float3 &p_sun, double p_angle) {
 }
 
 void WeatherForcing::warm(const Float3 &p_towards_sun, double p_dt, const WeatherFluid &p_fluid, const std::vector<double> &p_rho,
-        std::vector<WeatherMoist::Ground> &r_ground) {
+        const float *p_extra_cloud, std::vector<WeatherMoist::Ground> &r_ground) {
     const WeatherGrid &g = p_fluid.grid();
     const double sun[3] = { double(p_towards_sun.x), double(p_towards_sun.y), double(p_towards_sun.z) };
     const double len = std::sqrt(dot3(sun, sun));
@@ -189,7 +189,8 @@ void WeatherForcing::warm(const Float3 &p_towards_sun, double p_dt, const Weathe
             const float *here = &state[g.index(face, i, j) * size_t(p_fluid.stride())];
             double lwp = 0.0;
             for (int k = 0; k < levels; k++) {
-                lwp += double(here[p_fluid.scalar_offset(k, WeatherMoist::QC)]) * p_rho[size_t(k)] * dz;
+                const double extra = p_extra_cloud != nullptr ? double(p_extra_cloud[p_fluid.cell_index(c, k)]) : 0.0;
+                lwp += (double(here[p_fluid.scalar_offset(k, WeatherMoist::QC)]) + extra) * p_rho[size_t(k)] * dz;
             }
             const double light = ov::max(dot3(&ups[c * 3], sun) / len, 0.0);
             const double q = absorbed * ((1.0 - cloud_albedo(lwp)) * light - light_mean[c]);

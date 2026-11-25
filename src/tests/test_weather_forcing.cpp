@@ -158,7 +158,7 @@ TEST_CASE("WeatherForcing::warm: the ground under the noon sun warms, less under
         std::vector<M::Ground> ground;
         drive.grounds(ground);
         for (int t = 0; t < 30; t++) {
-            drive.warm(noon, 1.0, *s.fluid, snd.rho, ground);
+            drive.warm(noon, 1.0, *s.fluid, snd.rho, nullptr, ground);
         }
         return double(ground[0].temp_k);
     };

@@ -76,6 +76,14 @@ public:
         float z0_m = 1.5e-4f;
     };
 
+    // A column's surface fluxes in the last apply(), kinematic: theta (K m/s), vapour (kg/kg m/s), and the friction
+    // velocity (m/s). The shallow convection's closure (WeatherConvection).
+    struct Surface {
+        float theta_flux = 0.0f;
+        float qv_flux = 0.0f;
+        float ustar = 0.0f;
+    };
+
     struct Params {
         double exchange = 15.0; // the surface fluxes' twist
         double subsidence_per_s = 1.5e-5; // D: w = -D z
@@ -88,6 +96,8 @@ public:
     void apply(WeatherFluid &p_fluid, const std::vector<Ground> &p_ground, double p_dt, float *r_buoyancy);
     // The rain reaching each column's ground in the last apply() (m of water per second), per interior cell.
     const std::vector<float> &rain() const { return rain_rate; }
+    // The surface fluxes of the last apply(), per interior cell.
+    const std::vector<Surface> &surface() const { return surface_flux; }
 
     // The saturation mixing ratio at temperature p_t (K) and pressure p_p_mb (Tetens as in KW eq. 2.11).
     static double saturation(double p_t, double p_p_mb);
@@ -110,4 +120,5 @@ private:
     Sounding sound;
     Params params;
     std::vector<float> rain_rate;
+    std::vector<Surface> surface_flux;
 };
