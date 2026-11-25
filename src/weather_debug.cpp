@@ -18,6 +18,7 @@ constexpr FieldInfo FIELD_INFO[FIELDS] = {
     { "wind east", "m/s", true },
     { "wind north", "m/s", true },
     { "w (up)", "m/s", true },
+    { "w (interface below)", "m/s", true },
     { "wind speed", "m/s", false },
     { "theta", "K", false },
     { "theta - sounding", "K", true },
@@ -79,6 +80,7 @@ void capture_levels(const WeatherFluid &p_fluid, const WeatherMoist &p_moist, co
         v[WIND_EAST * per] = float(we);
         v[WIND_NORTH * per] = float(wn);
         v[WIND_UP * per] = float(wu);
+        v[WIND_UP_FACE * per] = p_fluid.vertical_w(p_c, k);
         v[SPEED * per] = float(std::sqrt(we * we + wn * wn));
         v[THETA * per] = float(theta);
         v[THETA_ANOMALY * per] = float(theta - ref.theta[size_t(k)]);
@@ -190,6 +192,120 @@ std::shared_ptr<const Snapshot> Snapshot::capture(const WeatherFluid &p_fluid, c
         }
     }
     return out;
+}
+
+namespace {
+
+// p_fn(level, value) over every cell of p_columns, per level of p_field (one for a column field).
+template <class F>
+void each(const Snapshot &p_snap, int p_field, Columns p_columns, F &&p_fn) {
+    const int rows = per_level(p_field) ? p_snap.levels : 1;
+    for (size_t c = 0; c < p_snap.cells(); c++) {
+        const bool sea = p_snap.at(WETNESS, c, 0) >= 0.9f;
+        if ((p_columns == SEA && !sea) || (p_columns == LAND && sea)) {
+            continue;
+        }
+        for (int k = 0; k < rows; k++) {
+            p_fn(k, double(p_snap.at(p_field, c, k)));
+        }
+    }
+}
+
+std::vector<double> reduce(const Snapshot &p_snap, int p_field, Columns p_columns, int p_kind, float p_above) {
+    const size_t rows = size_t(per_level(p_field) ? p_snap.levels : 1);
+    std::vector<double> sum(rows, p_kind == 2 ? -1e300 : 0.0), count(rows, 0.0);
+    each(p_snap, p_field, p_columns, [&](int p_k, double p_v) {
+        const size_t k = size_t(p_k);
+        count[k] += 1.0;
+        switch (p_kind) {
+            case 0:
+                sum[k] += p_v;
+                break;
+            case 1:
+                sum[k] += p_v * p_v;
+                break;
+            case 2:
+                sum[k] = ov::max(sum[k], p_v);
+                break;
+            default:
+                sum[k] += p_v > double(p_above) ? 1.0 : 0.0;
+                break;
+        }
+    });
+    for (size_t k = 0; k < rows; k++) {
+        if (count[k] == 0.0) {
+            sum[k] = 0.0;
+        } else if (p_kind != 2) {
+            sum[k] /= count[k];
+        }
+        if (p_kind == 1) {
+            sum[k] = std::sqrt(sum[k]);
+        }
+    }
+    return sum;
+}
+
+} // namespace
+
+std::vector<double> mean(const Snapshot &p_snap, int p_field, Columns p_columns) {
+    return reduce(p_snap, p_field, p_columns, 0, 0.0f);
+}
+
+std::vector<double> rms(const Snapshot &p_snap, int p_field, Columns p_columns) {
+    return reduce(p_snap, p_field, p_columns, 1, 0.0f);
+}
+
+std::vector<double> maximum(const Snapshot &p_snap, int p_field, Columns p_columns) {
+    return reduce(p_snap, p_field, p_columns, 2, 0.0f);
+}
+
+std::vector<double> share_above(const Snapshot &p_snap, int p_field, Columns p_columns, float p_above) {
+    return reduce(p_snap, p_field, p_columns, 3, p_above);
+}
+
+ov::str profile_table(const Snapshot &p_snap, Columns p_columns) {
+    const std::vector<double> theta = mean(p_snap, THETA, p_columns), qv = mean(p_snap, QV, p_columns), rh = mean(p_snap, RH, p_columns);
+    const std::vector<double> qc = mean(p_snap, QC, p_columns), qc_max = maximum(p_snap, QC, p_columns), share = mean(p_snap, SHARE, p_columns);
+    const std::vector<double> cloudy = share_above(p_snap, QC, p_columns, 0.01f), w = rms(p_snap, WIND_UP, p_columns), w_max = maximum(p_snap, WIND_UP, p_columns);
+    const std::vector<double> sigma = mean(p_snap, SIGMA, p_columns), updraft = mean(p_snap, UPDRAFT_QC, p_columns), speed = mean(p_snap, SPEED, p_columns);
+    ov::str s = "| z m | theta K | qv g/kg | RH | qc g/kg | qc max | cloud frac (share) | cells qc>0.01 | w rms | w max | sigma_s g/kg | updraft qc | wind m/s |\n"
+                "|---|---|---|---|---|---|---|---|---|---|---|---|---|\n";
+    for (int k = p_snap.levels - 1; k >= 0; k--) {
+        const size_t i = size_t(k);
+        s += ov::format("| %.0f | %.2f | %.2f | %.3f | %.4f | %.3f | %.3f | %.3f | %.3f | %.2f | %.3f | %.4f | %.2f |\n", (k + 0.5) * p_snap.dz_m, theta[i], qv[i], rh[i],
+                qc[i], qc_max[i], share[i], cloudy[i], w[i], w_max[i], sigma[i], updraft[i], speed[i]);
+    }
+    s += "\nColumns:";
+    for (int f = LEVEL_FIELDS; f < FIELDS; f++) {
+        if (f == Z0_M || f == INERTIA || f == STORMS || f == GROUND_MEAN_K) {
+            continue;
+        }
+        s += ov::format(" %s %.3g %s,", info(f).name, mean(p_snap, f, p_columns)[0], info(f).unit);
+    }
+    s += ov::format(" updraft columns %.3f.\n", share_above(p_snap, UPDRAFT_TOP_M, p_columns, 0.0f)[0]);
+    // The vertical checkerboard: each column's field (its column mean out) projected on (-1)^k, its rms over the columns
+    // against the field's own (noise alone gives about the field's over the root of the levels).
+    s += "Checkerboard (-1)^k part / rms / noise level:";
+    for (const int f : { WIND_UP_FACE, QV, QC, THETA }) {
+        double mode = 0.0, all = 0.0, count = 0.0;
+        for (size_t c = 0; c < p_snap.cells(); c++) {
+            double m = 0.0;
+            for (int k = 0; k < p_snap.levels; k++) {
+                m += double(p_snap.at(f, c, k)) / double(p_snap.levels);
+            }
+            double a = 0.0;
+            for (int k = 0; k < p_snap.levels; k++) {
+                const double v = double(p_snap.at(f, c, k)) - m;
+                a += (k & 1 ? -v : v) / double(p_snap.levels);
+                all += v * v / double(p_snap.levels);
+            }
+            mode += a * a;
+            count += 1.0;
+        }
+        s += ov::format(" %s %.4f / %.4f / %.4f,", info(f).name, std::sqrt(mode / count), std::sqrt(all / count), std::sqrt(all / count / double(p_snap.levels)));
+    }
+    s += "\n";
+    return s;
 }
 
 Session::Session() = default;

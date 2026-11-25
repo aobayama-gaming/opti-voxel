@@ -23,7 +23,8 @@ namespace WeatherDebug {
 enum Field {
     WIND_EAST, // m/s, the tangent wind's east part (east = pole x up)
     WIND_NORTH,
-    WIND_UP, // w
+    WIND_UP, // w at the centre (the mean of its interfaces')
+    WIND_UP_FACE, // w on the interface under the level (the prognostic one; the ground's 0)
     SPEED, // the tangent wind's
     THETA, // K, potential temperature
     THETA_ANOMALY, // K, over the sounding's (the buoyancy's reference)
@@ -93,6 +94,22 @@ struct Snapshot {
     static std::shared_ptr<const Snapshot> capture(const WeatherFluid &p_fluid, const WeatherMoist &p_moist, const WeatherConvection &p_convection,
             const WeatherForcing &p_forcing, const std::vector<WeatherMoist::Ground> &p_ground, const std::vector<float> &p_buoyancy, double p_game_s);
 };
+
+// Which columns a profile averages: all, the seas (wetness 0.9 and more) or the land.
+enum Columns {
+    ALL,
+    SEA,
+    LAND,
+};
+// Per level (a column field: one value) over p_columns' cells (equal weights: the cube sphere's cells differ by up to
+// ~30% in area): the mean of p_field, the root of its square's mean, its largest, the share of cells above p_above.
+std::vector<double> mean(const Snapshot &p_snap, int p_field, Columns p_columns);
+std::vector<double> rms(const Snapshot &p_snap, int p_field, Columns p_columns);
+std::vector<double> maximum(const Snapshot &p_snap, int p_field, Columns p_columns);
+std::vector<double> share_above(const Snapshot &p_snap, int p_field, Columns p_columns, float p_above);
+// The large-eddy simulations' profiles (Siebesma et al. 2003's: the means per level, the cloud fraction, w's rms) over
+// p_columns as a markdown table, then the column fields' means.
+ov::str profile_table(const Snapshot &p_snap, Columns p_columns);
 
 // A world's weather on a clock of its own (the report's and the debugger's): the world's SDF for the forcing, the
 // weather, its ticks asked for by hand.

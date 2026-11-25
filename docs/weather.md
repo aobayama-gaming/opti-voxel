@@ -67,15 +67,20 @@ tests.
   the faces' edges),
   the caller's physics on the state, `force` (the vorticity confinement, "Turbulence" below; the buoyancy along the up, the Coriolis turn about it, a sponge damping
   w in the top fifth), `project` (the pressure from the fluxes through each cell's 6 faces, ground and top rigid,
-  red-black Gauss-Seidel over-relaxed 1.6, 20 sweeps warm-started; the wind at the centres loses dt times its
-  central gradient: an approximate projection, collocated, no checkerboard). Rows run in `parallel_for`, the same
+  red-black Gauss-Seidel over-relaxed 1.6, 20 sweeps warm-started). The vertical wind lives on the levels' interfaces
+  (staggered, SAM's C grid in the vertical: `vertical_w`; a centre's is the mean of its two): the buoyancy and the
+  sponge act there, the divergence's top and bottom fluxes are its and it loses the difference of the two pressures
+  round it, so the vertical projection is exact; the tangent wind at the centres loses the central gradient (approximate
+  sideways). Collocated in the vertical before (2026-11-25), a w alternating level by level was invisible to the
+  projection's face means and held 70-90% of w's rms on `ocean_test` (the debugger's checkerboard line: its (-1)^k
+  part 0.18-0.21 m/s of 0.23-0.27): it layered the vapour and the cloud by level. Staggered: 0.019 m/s, under the
+  noise level (0.045). Rows run in `parallel_for`, the same
   bits on any thread count.
 - **Tests** (`test_weather_fluid.cpp`): stratified air at rest stays exactly at rest; three projections take a
   converging updraft's divergence down 68x; a 2 K warm bubble of 150 m (the dry thermal of Robert 1993 / Bryan &
   Fritsch 2002 at the game's scale) rises 86 m in 120 s at 3.2 m/s, the thermal's `sqrt(g' R)` (3.1 m/s), every
   level's net vertical flux within 5% of its total (the air round it sinks as much: the return flow spreads wide,
-  ~0.25 m/s over a ring twice its radius); the same bits run to run. A 300-sweep solve changes nothing: what
-  divergence is left (~5% of `w / dz`) is the collocated projection's, not the solver's.
+  ~0.25 m/s over a ring twice its radius); the same bits run to run.
 - **Cost** (unit test, this laptop, 2026-11-25): a dry step at `ocean_test`'s size (6 x 70^2 columns x 15 levels,
   441k cells) takes ~34 ms on the worker pool. At 5 Hz that is ~17% of the tick's time.
 - **`WeatherMoist`** (`src/weather_moist.*`, engine-free): the moist physics between `advect` and `force`, per column,

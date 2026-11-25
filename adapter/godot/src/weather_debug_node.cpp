@@ -24,6 +24,7 @@ void WeatherDebugNode::_bind_methods() {
     ClassDB::bind_method(D_METHOD("column", "face", "i", "j"), &WeatherDebugNode::column);
     ClassDB::bind_method(D_METHOD("pick", "pos"), &WeatherDebugNode::pick);
     ClassDB::bind_method(D_METHOD("planet_mesh", "altitude_m"), &WeatherDebugNode::planet_mesh);
+    ClassDB::bind_method(D_METHOD("profile_table", "columns"), &WeatherDebugNode::profile_table);
     ClassDB::bind_method(D_METHOD("wind_lines", "level", "altitude_m", "seconds", "every"), &WeatherDebugNode::wind_lines);
 }
 
@@ -133,6 +134,11 @@ Array WeatherDebugNode::column(int p_face, int p_i, int p_j) const {
         out.push_back(v);
     }
     return out;
+}
+
+String WeatherDebugNode::profile_table(int p_columns) const {
+    const auto snap = session.is_open() ? session.weather().probe() : nullptr;
+    return snap ? godot_str(WeatherDebug::profile_table(*snap, WeatherDebug::Columns(ov::clamp(p_columns, 0, 2)))) : String();
 }
 
 Vector3i WeatherDebugNode::pick(const Vector3 &p_pos) const {

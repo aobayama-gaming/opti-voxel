@@ -181,7 +181,7 @@ TEST_CASE("WeatherFluid: the projection takes the divergence out") {
             }
         }
     }
-    fluid.fill_halo();
+    fluid.vertical_from_centres(); // the w set at the centres
     const double before = fluid.max_divergence();
     for (int t = 0; t < 3; t++) {
         fluid.project(1.0); // warm-started: each projection takes out more

@@ -49,6 +49,9 @@ public:
     // ground, then that point plus the wind times p_seconds.
     PackedVector3Array wind_lines(int p_level, double p_altitude_m, double p_seconds, int p_every) const;
 
+    // WeatherDebug::profile_table over p_columns (WeatherDebug::Columns: 0 all, 1 the seas, 2 the land).
+    String profile_table(int p_columns) const;
+
 private:
     WeatherDebug::Session session;
 };

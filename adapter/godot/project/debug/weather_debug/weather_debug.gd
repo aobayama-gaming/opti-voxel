@@ -4,7 +4,8 @@ extends Node3D
 ## fluxes); click a cell for its column (every level's values) and the section through it (its face's row, the levels up).
 ## Run: godot --path project res://debug/weather_debug/weather_debug.tscn -- [--world=res://worlds/ocean_test.planet.json]
 ##   [--spin_up=<s>, the world's by default] [--field=<name>] [--level=<k>] [--pick=<face,i,j>] [--shot=<png>
-##   --ticks=<n>: n ticks, a screenshot, quit]
+##   --ticks=<n>: n ticks, a screenshot, quit] [--profiles=<m,m,...>: headless, the profile tables (all, sea, land) at
+##   those game minutes after the start, printed, then quit]
 ## Keys: space run / pause, N one tick, M ten, up / down the level, left / right the field, W the wind, R the range.
 ## Mouse: left click picks a cell, right drag turns the planet, the wheel zooms.
 
@@ -243,6 +244,9 @@ func _process(delta: float) -> void:
 	sim.run(delta * speed if running else 0.0)
 	if not sim.is_ready():
 		return
+	if args.has("profiles"):
+		_profiles()
+		return
 	if shot_ticks >= 0:
 		sim.step(shot_ticks)
 		_refresh(true)
@@ -256,6 +260,22 @@ func _process(delta: float) -> void:
 		get_tree().quit(0)
 		return
 	_refresh(false)
+
+
+# The profile tables at each game minute of --profiles, printed between WEATHER_PROFILE markers; then quit.
+func _profiles() -> void:
+	var start: float = sim.stats().get("snapshot_game_s", 0.0)
+	var mins := String(args["profiles"]).split(",")
+	args.erase("profiles")
+	for m in mins:
+		while float(sim.stats().get("snapshot_game_s", 0.0)) < start + float(m) * 60.0 - 1e-3:
+			sim.step(1)
+		var st: Dictionary = sim.stats()
+		print("WEATHER_PROFILE minute %s (game %.0f s, tick %.1f ms)" % [m, st.get("snapshot_game_s", 0.0), st.get("tick", {}).get("avg_ms", 0.0)])
+		for c in 3:
+			print("### ", ["all", "sea", "land"][c], "\n", sim.profile_table(c))
+	print("WEATHER_PROFILE end")
+	get_tree().quit(0)
 
 
 func _refresh(force: bool) -> void:

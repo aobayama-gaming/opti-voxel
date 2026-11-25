@@ -119,7 +119,7 @@ void WeatherForcing::start(WeatherFluid &p_fluid, const WeatherMoist::Sounding &
     }
     const double kick_cells = 3.14159265358979323846 * KICK_RADIUS_CELLS * KICK_RADIUS_CELLS;
     kicks(p_fluid, 1.0 / kick_cells, 0x57A7u, 0);
-    p_fluid.fill_halo();
+    p_fluid.vertical_from_centres();
 }
 
 void WeatherForcing::grounds(std::vector<WeatherMoist::Ground> &r_ground) const {

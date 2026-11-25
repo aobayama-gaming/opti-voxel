@@ -33,9 +33,13 @@
 //   above it), mixed the dry air above into the cloud layer and cleared every cloud.
 // - The projection is the fluxes through each cell's 6 faces (4 sides, a top, a bottom; ground and top rigid): the
 //   pressure solves sum_f a_f (p_f - p) = (sum_f flux_f) / dt with a_f = face area over the centres' distance,
-//   red-black Gauss-Seidel (over-relaxed) warm-started from the last step's pressure; the wind at the centres then
-//   loses dt times the pressure's central gradient (an approximate projection on a collocated grid: the divergence left
-//   is small, not zero, and no checkerboard). Across a seam a neighbour is the halo's (WeatherGrid::fill_halo).
+//   red-black Gauss-Seidel (over-relaxed) warm-started from the last step's pressure. The vertical wind lives on the
+//   levels' interfaces (vertical staggering, as SAM's C grid and Harlow & Welch's MAC grid): the top and bottom fluxes
+//   are its, it loses dt times the difference of the two levels' pressures round it, so the vertical part is exact.
+//   The tangent wind stays at the centres and loses the pressure's central gradient (an approximate projection
+//   sideways). Collocated in the vertical (until 2026-11-25), a w alternating level by level had zero face means: the
+//   projection never saw it, the buoyancy drove it, and it held 70-90% of w's rms on ocean_test, layering the vapour
+//   and the cloud level by level. Across a seam a neighbour is the halo's (WeatherGrid::fill_halo).
 // - The departure point is found in the face's own cells (the cell's dual vectors, no locate): it stays within the
 //   halo while the wind crosses at most half a cell in dt (max_dt; across a seam the halo's bilinear values are the
 //   neighbour face's).
@@ -81,10 +85,18 @@ public:
     size_t cell_index(size_t p_interior, int p_level) const { return p_interior * size_t(params.levels) + size_t(p_level); }
     size_t cell_count() const { return cells->cells() * size_t(params.levels); }
 
-    // The state (stride() floats per padded cell): the caller sets its scalars and wind, then fill_halo().
+    // The state (stride() floats per padded cell): the caller sets its scalars and wind, then fill_halo(). The wind's
+    // vertical part at a centre is the mean of the interfaces' round it (vertical_w): a caller that sets it calls
+    // vertical_from_centres() first, else what it wrote there is replaced at the next step.
     std::vector<float> &state() { return cur; }
     const std::vector<float> &state() const { return cur; }
     void fill_halo();
+    // The interfaces' vertical wind from the centres' (each interface the mean of the two levels round it; the ground's
+    // and the top's 0).
+    void vertical_from_centres();
+    // The vertical wind (m/s) at interface p_m of a padded cell: p_m in [0, levels], the bottom of level p_m (0 the ground,
+    // levels the top: both 0).
+    float vertical_w(size_t p_padded, int p_m) const { return wf[p_padded * size_t(params.levels + 1) + size_t(p_m)]; }
     // A column's unit up and its surface point (metres from the base's centre).
     void column_up(size_t p_interior, double r_up[3]) const;
     void column_pos(size_t p_interior, double r_pos[3]) const;
@@ -132,6 +144,11 @@ private:
     std::vector<Column> column;
     std::vector<float> cur;
     std::vector<float> next;
+    // The vertical wind on the levels' interfaces (levels + 1 per padded cell, the ground's and the top's 0): the
+    // prognostic one (a vertically staggered grid, Lorenz / SAM's C grid): the projection's vertical difference and
+    // divergence are exact on it, so no level-by-level checkerboard escapes the pressure.
+    std::vector<float> wf;
+    std::vector<float> wf_next;
     std::vector<float> p; // per padded cell and level
     std::vector<float> rhs; // per interior cell and level
     std::vector<float> vort, vort_mag; // the confinement's: the curl (3 per padded cell and level), its length
@@ -139,7 +156,15 @@ private:
 
     // The padded indices of an interior cell's 4 side neighbours (+x, -x, +y, -y).
     void neighbours(int p_face, int p_i, int p_j, size_t r_nb[SIDES]) const;
+    // Both halos (the state's and the interfaces').
+    void halo();
+    // Each interior centre's vertical wind set to the mean of its interfaces', then the halos.
+    void centre_vertical();
+    float *face_w(size_t p_padded) { return &wf[p_padded * size_t(params.levels + 1)]; }
+    const float *face_w(size_t p_padded) const { return &wf[p_padded * size_t(params.levels + 1)]; }
     void make_columns();
+    // advect's interfaces of one column: their w read where the air comes from (into wf_next).
+    void advect_interfaces(int p_face, int p_i, int p_j, double p_dt);
     void sweep(int p_colour);
     // The vorticity confinement's push over p_dt (the halo filled first).
     void confine(double p_dt);
