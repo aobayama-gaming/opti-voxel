@@ -121,6 +121,19 @@ up alike (Margolin, Smolarkiewicz & Sorbjan 1999 ran the convective boundary lay
   from the true cell across it (across a seam the neighbour face's, not the halo's interpolation), so what one cell
   loses the other gains to the bit. The pressure is solved over the same faces and corrects the same face speeds (a
   MAC projection: Bell, Colella & Glaz 1989), so the fluxes are divergence-free to the solver's residual.
+- **The faces' geometry** is the true cells': a side's normal perpendicular to its edge in the tangent plane, its
+  distance the true neighbour's centre's offset along it, and the centre's pressure gradient the least-squares fit
+  over the true neighbours' offsets (exact for a linear pressure), the same differences the faces lose. Measured
+  (2026-11-26): the game's weather (the `fix` world) blew up from a cube corner, the strongest wind 17 -> 32 -> 74 m/s
+  over game minutes 3-5, then 1.4 g/kg condensed everywhere and warmed the planet 3.5 K. The faces' geometry had been
+  the halo's points' (the face's own grid past its edge, tens of metres off the cell across the seam near a corner)
+  and the centres lost a gradient read from the halo; with rotation (a 5-minute day) the seams' error became wind the
+  projection can't take out. A random wind over stable air with nothing forcing it (`test_weather_fluid.cpp`): the
+  mean energy x95 between minutes 3 and 20 before, now it decays (6.5 -> 0.024 m^2/s^2 in 16 minutes), a corner
+  regrows it x2.9 once, then it holds over 40 minutes. The `fix` world over 20 game minutes: the strongest wind
+  10-14 m/s inside the faces, the mean 3.85 m/s, the cover 0.21-0.26; the air warms ~0.2 K and dries ~0.2 g/kg an hour.
+  Open: the corner's regrowth (the two-point pressure flux assumes the centres' line perpendicular to their edge, far
+  from it at a cube corner).
 - **Why not MacCormack** (Selle et al. 2008; the scheme before, same day): a semi-Lagrangian step corrected by its
   traced-back error. It passed the dry benchmark (0.65 w*) but isn't conservative: on BOMEX it created +0.25 g/kg of
   water every 5 minutes at the clouds' sharp edges, rained it and evaporated it into a 5 K/h cooling, updrafts at

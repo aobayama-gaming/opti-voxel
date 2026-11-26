@@ -77,16 +77,16 @@ void WeatherFluid::make_columns() {
                 g.surface(face, i + 1, j + 1, c11, ignored);
                 const double *edge[SIDES][2] = { { c10, c11 }, { c00, c01 }, { c01, c11 }, { c00, c10 } };
                 for (int s = 0; s < SIDES; s++) {
-                    double n[3], e[3];
+                    double out[3], e[3], n[3];
                     for (int a = 0; a < 3; a++) {
-                        n[a] = nb[s][a] - pos[a];
+                        out[a] = nb[s][a] - pos[a];
                         e[a] = edge[s][1][a] - edge[s][0][a];
                     }
-                    c.distance[s] = float(length3(n));
                     c.length[s] = float(length3(e));
-                    min_spacing_m = ov::min(min_spacing_m, double(c.distance[s]));
+                    // Perpendicular to the edge in the tangent plane, towards the side's neighbour.
+                    cross3(e, up, n);
                     tangent(up, n);
-                    const double l = length3(n);
+                    const double l = length3(n) * (dot3(n, out) < 0.0 ? -1.0 : 1.0);
                     for (int a = 0; a < 3; a++) {
                         c.normal[s][a] = float(n[a] / l);
                     }
@@ -164,6 +164,47 @@ void WeatherFluid::make_faces() {
             OV_ERR_FAIL_COND_MSG(c.back[s] == 0xff, "WeatherFluid: a cell's neighbour across a side doesn't face it back.");
             const size_t n = c.across[s];
             c.across_pad[s] = uint32_t(g.index(int(n / per_face), int(n % size_t(g.width())), int((n % per_face) / size_t(g.width()))));
+        }
+        // The offsets to the true neighbours' centres (across a seam the neighbour face's cell, not the halo's point),
+        // in the tangent plane: the distances along the normals (the two-point pressure flux's), and the least squares
+        // of g . r_s = p_s - p over the sides: g = M^-1 sum_s (p_s - p) r_s, M = sum_s r_s r_s^T + |r|^2 up up^T (the
+        // up's term only makes M invertible: the offsets are tangent). Exact for a linear pressure on any cell.
+        double r[SIDES][3], scale = 0.0;
+        for (int s = 0; s < SIDES; s++) {
+            const Column &o = column[c.across[s]];
+            for (int a = 0; a < 3; a++) {
+                r[s][a] = o.pos[a] - c.pos[a];
+            }
+            const double up[3] = { c.up[0], c.up[1], c.up[2] };
+            tangent(up, r[s]);
+            c.distance[s] = float(r[s][0] * c.normal[s][0] + r[s][1] * c.normal[s][1] + r[s][2] * c.normal[s][2]);
+            OV_ERR_FAIL_COND_MSG(!(c.distance[s] > 0.0f), "WeatherFluid: a cell's neighbour is behind its side.");
+            min_spacing_m = ov::min(min_spacing_m, double(c.distance[s]));
+            scale += dot3(r[s], r[s]) / SIDES;
+        }
+        double m[3][3];
+        for (int a = 0; a < 3; a++) {
+            for (int b = 0; b < 3; b++) {
+                m[a][b] = scale * c.up[a] * c.up[b];
+                for (int s = 0; s < SIDES; s++) {
+                    m[a][b] += r[s][a] * r[s][b];
+                }
+            }
+        }
+        const double det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) +
+                m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+        double inv[3][3];
+        for (int a = 0; a < 3; a++) {
+            for (int b = 0; b < 3; b++) {
+                // The adjugate's (a, b): the cofactor of (b, a).
+                const int r0 = (b + 1) % 3, r1 = (b + 2) % 3, c0 = (a + 1) % 3, c1 = (a + 2) % 3;
+                inv[a][b] = (m[r0][c0] * m[r1][c1] - m[r0][c1] * m[r1][c0]) / det;
+            }
+        }
+        for (int s = 0; s < SIDES; s++) {
+            for (int a = 0; a < 3; a++) {
+                c.gradient[s][a] = float(inv[a][0] * r[s][0] + inv[a][1] * r[s][1] + inv[a][2] * r[s][2]);
+            }
         }
     }
 }
@@ -584,9 +625,8 @@ void WeatherFluid::project(double p_dt) {
         const int face = int(p_row) / g.height();
         const int j = int(p_row) % g.height();
         for (int i = 0; i < g.width(); i++) {
-            const Column &c = column[g.interior(face, i, j)];
-            size_t nb[SIDES];
-            neighbours(face, i, j, nb);
+            const size_t in = g.interior(face, i, j);
+            const Column &c = column[in];
             const size_t at = g.index(face, i, j) * size_t(levels);
             float *here = &cur[g.index(face, i, j) * size_t(st)];
             float *wi = face_w(g.index(face, i, j));
@@ -594,11 +634,16 @@ void WeatherFluid::project(double p_dt) {
                 wi[m] = float(wi[m] - p_dt * (double(p[at + size_t(m)]) - p[at + size_t(m - 1)]) / dz);
             }
             for (int k = 0; k < levels; k++) {
-                const double di = double(p[nb[0] * size_t(levels) + size_t(k)]) - p[nb[1] * size_t(levels) + size_t(k)];
-                const double dj = double(p[nb[2] * size_t(levels) + size_t(k)]) - p[nb[3] * size_t(levels) + size_t(k)];
+                double grad[3] = { 0.0, 0.0, 0.0 };
+                for (int s = 0; s < SIDES; s++) {
+                    const double gs = double(p[size_t(c.across_pad[s]) * size_t(levels) + size_t(k)]) - p[at + size_t(k)];
+                    for (int a = 0; a < 3; a++) {
+                        grad[a] += gs * c.gradient[s][a];
+                    }
+                }
                 float *u = here + wind_offset(k);
                 for (int a = 0; a < 3; a++) {
-                    u[a] = float(u[a] - p_dt * (c.ax[a] * di + c.ay[a] * dj));
+                    u[a] = float(u[a] - p_dt * grad[a]);
                 }
             }
         } }, ov::Priority::LOW);

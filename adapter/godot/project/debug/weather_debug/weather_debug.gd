@@ -5,7 +5,10 @@ extends Node3D
 ## Run: godot --path project res://debug/weather_debug/weather_debug.tscn -- [--world=res://worlds/ocean_test.planet.json]
 ##   [--spin_up=<s>, the world's by default] [--field=<name>] [--level=<k>] [--pick=<face,i,j>] [--shot=<png>
 ##   --ticks=<n>: n ticks, a screenshot, quit] [--profiles=<m,m,...>: headless, the profile tables (all, sea, land) at
-##   those game minutes after the start, printed, then quit]
+##   those game minutes after the start, printed, then quit] [--trace=<m>: headless, one line a game minute for m minutes
+##   (the strongest wind and its cell, the mean, the strongest w, theta's departure, qv, qc, the cover; the strongest
+##   wind's column the first time it passes 25 m/s), then quit; --trace_s=<s> another interval, --trace_from=<m> a later
+##   first line]
 ## Keys: space run / pause, N one tick, M ten, up / down the level, left / right the field, W the wind, R the range.
 ## Mouse: left click picks a cell, right drag turns the planet, the wheel zooms.
 
@@ -247,6 +250,9 @@ func _process(delta: float) -> void:
 	if args.has("profiles"):
 		_profiles()
 		return
+	if args.has("trace"):
+		_trace()
+		return
 	if shot_ticks >= 0:
 		sim.step(shot_ticks)
 		_refresh(true)
@@ -275,6 +281,73 @@ func _profiles() -> void:
 		for c in 3:
 			print("### ", ["all", "sea", "land"][c], "\n", sim.profile_table(c))
 	print("WEATHER_PROFILE end")
+	get_tree().quit(0)
+
+
+# One line a game minute for --trace minutes, between WEATHER_TRACE markers (the drift's time series); then quit.
+func _trace() -> void:
+	var minutes := float(args["trace"])
+	var every := float(args.get("trace_s", 60.0))
+	var from := float(args.get("trace_from", 0.0))
+	args.erase("trace")
+	var shown := false
+	var names := {}
+	for n in fields.size():
+		names[fields[n]["name"]] = n
+	var levels: int = grid["levels"]
+	var start: float = sim.stats().get("snapshot_game_s", 0.0)
+	print("WEATHER_TRACE   min  game_s  tick_ms  max|u| (level, face, i, j)  mean|u|  max|w|  mean th'  mean qv  mean qc  cover")
+	var lines := int(round((minutes - from) * 60.0 / every))
+	for line in lines + 1:
+		var m := from + float(line) * every / 60.0
+		while float(sim.stats().get("snapshot_game_s", 0.0)) < start + m * 60.0 - 1e-3:
+			sim.step(1)
+		var st: Dictionary = sim.stats()
+		var umax := 0.0
+		var ulev := 0
+		var uat := 0
+		var usum := 0.0
+		var wmax := 0.0
+		var th := 0.0
+		var qv := 0.0
+		var qc := 0.0
+		var count := 0
+		for k in levels:
+			var u: PackedFloat32Array = sim.slice(names["wind speed"], k)
+			var w: PackedFloat32Array = sim.slice(names["w (up)"], k)
+			var t: PackedFloat32Array = sim.slice(names["theta - sounding"], k)
+			var v: PackedFloat32Array = sim.slice(names["qv"], k)
+			var c: PackedFloat32Array = sim.slice(names["qc (cloud)"], k)
+			for i in u.size():
+				if u[i] > umax:
+					umax = u[i]
+					ulev = k
+					uat = i
+				usum += u[i]
+				wmax = maxf(wmax, absf(w[i]))
+				th += t[i]
+				qv += v[i]
+				qc += c[i]
+			count += u.size()
+		var cov: PackedFloat32Array = sim.slice(names["cover (max share)"], 0)
+		var cover := 0.0
+		for x in cov:
+			cover += x
+		var wd: int = grid["width"]
+		var face := uat / (wd * int(grid["height"]))
+		var cj := (uat / wd) % int(grid["height"])
+		var ci := uat % wd
+		print("WEATHER_TRACE %5.2f %7.0f %7.1f %7.2f (%2d, %d, %2d, %2d) %7.2f %7.2f %+8.3f %7.3f %7.4f %6.3f" % [m, st.get("snapshot_game_s", 0.0),
+				st.get("tick", {}).get("avg_ms", 0.0), umax, ulev, face, ci, cj, usum / count, wmax, th / count, qv / count, qc / count, cover / cov.size()])
+		if umax > 25.0 and not shown:
+			shown = true
+			var col: Array = sim.column(face, ci, cj)
+			print("WEATHER_TRACE column (face %d, %d, %d), level: |u|, w, w below, theta', qv, qs, qc, buoyancy, pressure" % [face, ci, cj])
+			for k in levels:
+				print("WEATHER_TRACE   %2d %7.2f %7.2f %7.2f %+7.3f %7.3f %7.3f %7.4f %+8.4f %+9.3f" % [k, col[names["wind speed"]][k], col[names["w (up)"]][k],
+						col[names["w (interface below)"]][k], col[names["theta - sounding"]][k], col[names["qv"]][k], col[names["qs (saturation)"]][k],
+						col[names["qc (cloud)"]][k], col[names["buoyancy"]][k], col[names["pressure"]][k]])
+	print("WEATHER_TRACE end")
 	get_tree().quit(0)
 
 

@@ -31,15 +31,18 @@
 // - Faces: each cell's 4 sides and its top and bottom. A side's neighbour is the true cell across it, across a seam the
 //   neighbour face's (Column::across; the faces' cells meet one to one along their edges), and a face belongs to its
 //   lower-index cell: its length, normal, speed and flux are computed once, from that side, so both cells see the same
-//   bits. The sides' speeds are the two centres' mean normal wind, then corrected by the projection.
+//   bits. A side's normal is perpendicular to its edge (in the tangent plane), its distance the true neighbour's
+//   centre's offset along it. The sides' speeds are the two centres' mean normal wind, then corrected by the projection.
 // - The projection: the pressure solves sum_f a_f (p_f - p) = (sum_f flux_f) / dt over the same faces, a_f the face's
 //   area over the centres' distance (ground and top rigid), red-black Gauss-Seidel over-relaxed (a seam's neighbour read
 //   at the half sweep's start), warm-started from the last step's pressure. Each side's speed then loses dt times the
 //   difference of the two pressures across it, the solve's own (the MAC projection of a cell-centred grid: Bell,
 //   Colella & Glaz 1989; Almgren et al. 1998), so the fluxes that move the fields keep only the solver's residual
 //   divergence; the vertical wind lives on the levels' interfaces (staggered: SAM's C grid in the vertical) and loses
-//   the difference of the two levels' pressures round it. The centres' tangent wind loses the pressure's central
-//   gradient (the halo's). Collocated in the vertical (until 2026-11-25), a w alternating level by level had zero face
+//   the difference of the two levels' pressures round it. The centres' tangent wind loses the gradient fitted to the
+//   same faces' differences (Column::gradient): with a gradient read from the halo instead (interpolated across a
+//   seam), the centres kept a divergent part at the seams each step, which the rotation turned into a wind the
+//   projection can't take out: the game's weather blew up from a cube corner (2026-11-26). Collocated in the vertical (until 2026-11-25), a w alternating level by level had zero face
 //   means: the projection never saw it.
 // - Measured (2026-11-25) on the dry convective boundary layer (test_weather_cbl.cpp; Moeng & Sullivan 1994's peak w
 //   rms 0.63 w* near 0.35 h, entrainment flux ~-0.2 Q): 0.625 w* at 0.44 h, -0.26 Q. MacCormack (a semi-Lagrangian
@@ -141,6 +144,10 @@ private:
         uint32_t across[4];
         uint32_t across_pad[4];
         uint8_t back[4];
+        // The centre's pressure gradient from the 4 sides' differences: sum_s (p_s - p) gradient[s], the least-squares
+        // fit over the true neighbours' offsets (exact for a linear pressure), so the centres and the faces lose the
+        // same pressures (no second, halo-read gradient that differs at the seams).
+        float gradient[4][3];
     };
     static constexpr int SIDES = 4;
 

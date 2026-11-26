@@ -379,3 +379,92 @@ TEST_CASE("WeatherFluid: the advection conserves a scalar and keeps it within it
     CHECK(lo >= -1e-6);
     CHECK(hi <= 1.0 + 1e-6);
 }
+
+namespace {
+
+// A random wind over stable air run p_minutes (p_n cells a face side, Coriolis p_omega), nothing forcing it: the
+// largest ratio of the mean kinetic energy at a minute to its lowest before.
+double random_wind_regrowth(int p_n, double p_omega, int p_minutes) {
+    const auto grid = std::make_shared<CubeSphereGrid>(p_n, 1000.0);
+    WeatherFluid::Params params = params15();
+    params.omega_rad_s = p_omega;
+    WeatherFluid fluid(grid, params);
+    const WeatherGrid &g = fluid.grid();
+    std::vector<double> ref;
+    for (int k = 0; k < fluid.levels(); k++) {
+        ref.push_back(300.0 + 0.005 * fluid.level_m(k));
+    }
+    set_profile(fluid, ref);
+    uint32_t key = 1;
+    for (int f = 0; f < g.faces(); f++) {
+        for (int j = 0; j < g.height(); j++) {
+            for (int i = 0; i < g.width(); i++) {
+                double pos[3], up[3];
+                g.cell_surface(f, i, j, pos, up);
+                float *here = &fluid.state()[g.index(f, i, j) * size_t(fluid.stride())];
+                for (int k = 0; k < fluid.levels(); k++) {
+                    double u[3];
+                    for (int a = 0; a < 3; a++) {
+                        key = key * 1664525u + 1013904223u;
+                        u[a] = 5.0 * (double(key >> 8) / double(1u << 24) * 2.0 - 1.0);
+                    }
+                    const double n = u[0] * up[0] + u[1] * up[1] + u[2] * up[2];
+                    for (int a = 0; a < 3; a++) {
+                        here[fluid.wind_offset(k) + a] = float(u[a] - n * up[a]);
+                    }
+                }
+            }
+        }
+    }
+    fluid.vertical_from_centres();
+    fluid.project(1.0);
+    double energy = 0.0; // the mean of |u|^2 / 2 over the cells, strongest()'s
+    auto strongest = [&](int &r_face, int &r_i, int &r_j, int &r_k) {
+        double m = 0.0;
+        energy = 0.0;
+        for (int f = 0; f < g.faces(); f++) {
+            for (int j = 0; j < g.height(); j++) {
+                for (int i = 0; i < g.width(); i++) {
+                    const float *here = &fluid.state()[g.index(f, i, j) * size_t(fluid.stride())];
+                    for (int k = 0; k < fluid.levels(); k++) {
+                        const float *u = here + fluid.wind_offset(k);
+                        const double s = std::sqrt(double(u[0]) * u[0] + double(u[1]) * u[1] + double(u[2]) * u[2]);
+                        energy += 0.5 * s * s / double(fluid.cell_count());
+                        if (s > m) {
+                            m = s;
+                            r_face = f;
+                            r_i = i;
+                            r_j = j;
+                            r_k = k;
+                        }
+                    }
+                }
+            }
+        }
+        return m;
+    };
+    int f = 0, i = 0, j = 0, k = 0;
+    const double start = strongest(f, i, j, k);
+    MESSAGE(ov::format("start: strongest wind %.2f m/s, mean energy %.4f m^2/s^2", start, energy));
+    double lowest = energy, regrowth = 1.0;
+    for (int minute = 1; minute <= p_minutes; minute++) {
+        dry_step(fluid, ref, 60.0);
+        const double m = strongest(f, i, j, k);
+        regrowth = std::max(regrowth, energy / lowest);
+        lowest = std::min(lowest, energy);
+        MESSAGE(ov::format("minute %d: strongest wind %.2f m/s at face %d (%d, %d) level %d, mean energy %.4f m^2/s^2", minute, m, f, i, j, k, energy));
+    }
+    MESSAGE("largest regrowth of the energy: x", regrowth);
+    return regrowth;
+}
+
+} // namespace
+
+// A random wind over stable air with the game's rotation (a 5-minute day), nothing forcing it: the dynamics may only take
+// energy out. The game's weather blew up from a cube corner (2026-11-26: 17 -> 74 m/s in 2 game minutes): the faces'
+// geometry was the halo's points' (the face's own grid past its edge, not the cell across the seam) and the centres
+// lost a halo-read pressure gradient; with rotation the seams' error turned into wind the projection can't remove, the
+// energy x95 in 20 minutes. With the true neighbours' geometry a corner still regrows it x2.9 once, then it holds.
+TEST_CASE("WeatherFluid: a random wind over stable air never regains its energy") {
+    CHECK(random_wind_regrowth(70, 2.0 * 3.14159265358979 / 300.0, 20) < 4.0);
+}
