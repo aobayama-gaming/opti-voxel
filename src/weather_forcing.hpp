@@ -13,14 +13,16 @@
 // - The sun turns round the pole (y) once a weather day, west as the planet spins east (turn_sun): the planet's day is
 //   the Coriolis' (one Omega).
 // - The ground (WeatherMoist::Ground) per column: its biomes' blend of ground_k, wetness and z0_m, its temperature a
-//   force-restore slab (Deardorff 1978): dT/dt = 2 sqrt(pi) Q / (I sqrt(P)) - 2 pi / P (T - ground_k), P the day, I the
-//   biome's thermal inertia sqrt(k rho c), Q the sunlight it absorbs over the planet's mean: SUN_W_M2 (1 - GROUND_ALBEDO)
-//   ((1 - A) max(up . sun, 0) - PLANET_LIGHT), A the albedo of the cloud over it (its water path, droplets of
-//   DROPLET_RADIUS_M, Stephens 1978's two-stream). So a ground's day's mean follows the sun's angle there: over
-//   ground_k on the equator, under it at the poles (2026-11-26: each column's own day's mean was taken out, which held
-//   every latitude at ground_k, no warm equator nor cold pole to make a wind). Land warms into the afternoon (the slab
-//   lags the sun by an eighth of a day), a sea (an inertia of ~1e5: its mixed layer) barely moves, a cloud's shade
-//   cools what is under it.
+//   baseline, which the sun sets directly: ground_k + sun_k (L - PLANET_LIGHT), L = cos(latitude) / pi the column's
+//   year's mean of max(up . sun, 0) (taken as the equinox's day), PLANET_LIGHT its mean over the sphere, so the
+//   planet's mean stays the climate's: a warm equator, cold poles, sea and land alike (a long mean does not depend on
+//   the heat a ground holds). The day swings it round that: a force-restore slab (Deardorff 1978), dT/dt = 2 sqrt(pi) Q
+//   / (I sqrt(P)) - 2 pi / P (T - baseline), P the day, I the biome's thermal inertia sqrt(k rho c), Q the sunlight it
+//   absorbs over its baseline's: SUN_W_M2 (1 - GROUND_ALBEDO) ((1 - A) max(up . sun, 0) - L), A the albedo of the cloud
+//   over it (its water path, droplets of DROPLET_RADIUS_M, Stephens 1978's two-stream). Land warms into the afternoon
+//   (the slab lags the sun by an eighth of a day), a sea (an inertia of ~1e5: its mixed layer) barely moves, a cloud's
+//   shade cools what is under it. 2026-11-26: the planet had no warm equator nor cold pole (each column's day's mean
+//   was held at ground_k), so nothing made a wind larger than a thermal.
 // - No large-scale wind is imposed (2026-11-26: Earth's three cells, put in as a balanced pressure gradient, held the
 //   air in steady bands round the axis and a cloud ring under the polar jet): the air starts at rest and every wind is
 //   the sun's heating, the convection and the storms', turned by the Coriolis (f = 2 Omega up_y, Omega the weather's
@@ -48,12 +50,14 @@ public:
     static constexpr double SUN_W_M2 = 1000.0; // the clear sky's sunlight at the ground, the sun overhead
     static constexpr double GROUND_ALBEDO = 0.15;
     static constexpr double PLANET_LIGHT = 0.25; // a sphere's mean of max(up . sun, 0), the sun anywhere
+    static constexpr double PI = 3.14159265358979323846;
     static constexpr double DROPLET_RADIUS_M = 1e-5; // the clouds' effective radius
     static constexpr double CLOUD_ASYMMETRY = 0.85; // g, the droplets' forward scattering
     static constexpr double AIR_DENSITY = 1.15; // kg/m^3, the cloud layer's (the sounding's at the ground; 6% less at 600 m)
 
     struct Params {
         double day_s = 300.0; // the weather's day (Omega = 2 pi / day_s)
+        double sun_k = 40.0; // the baseline's warming per unit of a year's mean light (an equator-pole of sun_k / pi)
         double storm_m = 0.0; // 0: 1 / 8 of the radius
         double inversion_m = 300.0;
         uint32_t seed = 0;
@@ -62,12 +66,16 @@ public:
     // p_climate: each interior cell's biome weather (Weather::forcing_at).
     WeatherForcing(const WeatherFluid &p_fluid, const Params &p_params, std::vector<Climate::BiomeWeather> p_climate);
 
+    // Column p_c's year's mean light (cos(latitude) / pi) and its ground's baseline (ground_k + sun_k (that - 1/4)).
+    double year_light(size_t p_c) const;
+    double baseline_k(size_t p_c) const;
     double omega() const { return 2.0 * 3.14159265358979323846 / params.day_s; }
     // The sounding of the grounds' mean temperature (WeatherMoist::Sounding).
     WeatherMoist::Sounding sounding(const WeatherFluid &p_fluid) const;
-    // The fluid's start: the sounding, the air at rest, a little noise on the lowest levels.
+    // The fluid's start: the sounding moved to each column's baseline (warmer or colder by its baseline over the
+    // planet's mean, its vapour keeping its relative humidity), the air at rest, a little noise on the lowest levels.
     void start(WeatherFluid &p_fluid, const WeatherMoist::Sounding &p_sounding) const;
-    // Each column's ground at its day's mean (ground_k), its wetness and roughness.
+    // Each column's ground at its baseline, its wetness and roughness.
     void grounds(std::vector<WeatherMoist::Ground> &r_ground) const;
     // The grounds' temperatures p_dt on under the sun (towards it, planet axes) and the cloud over them (p_rho: the
     // air's density per level, the sounding's; p_extra_cloud, null or per WeatherFluid::cell_index: cloud water the grid

@@ -228,17 +228,21 @@ eddy diffusivity the resolved flow's (no closure of its own since 2026-11-25); o
   first frame shows the scene's sun; `World::shown_sun` the turned one for the atmosphere and the clouds, and VoxelSky
   turns its light by `VoxelTerrain::get_day_angle`, the authored sun kept as the noon one). The main scene's sun is 28
   degrees north: a northern summer (the far north never sets).
-- **The ground's temperature:** a force-restore slab per column (Deardorff 1978), `dT/dt = 2 sqrt(pi) Q / (I sqrt(P)) -
-  2 pi / P (T - ground_k)`: `P` the day, `I` the biomes' `thermal_inertia` `sqrt(k rho c)`, `Q` the sunlight absorbed
-  over the planet's mean (`1000 W/m^2 (1 - 0.15) ((1 - A) max(up . sun, 0) - 1/4)`, 1/4 a sphere's mean light, `A`
-  the albedo of the cloud over it: its water path, droplets of 10 um, a two-stream `(1 - g) tau / (2 + (1 - g) tau)`).
-  The day's mean follows the sun's angle: a moist soil on the equator +0.37 K over `ground_k`, at a pole -1.14 K
-  (2026-11-26; each column's own day's mean, Berger's daily insolation, was taken out before, which held every
-  latitude at `ground_k`). Measured on the `fix` world it changed no wind (max 2.4-3.0 m/s over 20 game minutes): the
-  seas barely move and a 5-minute day leaves a land slab little time to warm. The slab
-  warms into the afternoon (its warmest an eighth of a day after noon). With the 300 s day a moist soil (1500) swings
-  2-8 K, dry sand (300) five times as much, a sea (1e5, its mixed layer) under 0.1 K; a cloud's shade cools what is
-  under it (`test_weather_forcing.cpp`).
+- **The ground's temperature:** a baseline the sun sets directly, `ground_k + sun_k (L - 1/4)`: `L = cos(latitude) / pi`
+  the column's year's mean of `max(up . sun, 0)` (taken as the equinox's day), 1/4 its mean over the sphere, so the
+  planet's mean stays the climate's. A warm equator and cold poles, sea and land alike (a long mean does not depend on
+  the heat a ground holds); `sun_k` 40: the equator +2.7 K, the poles -10 K. The planet starts on it: the ground at its
+  baseline, each column's air (the sounding) moved by its baseline's offset from the planet's mean, its vapour keeping
+  its relative humidity. The day swings it round that: a force-restore slab per column (Deardorff 1978),
+  `dT/dt = 2 sqrt(pi) Q / (I sqrt(P)) - 2 pi / P (T - baseline)`: `P` the day, `I` the biomes' `thermal_inertia`
+  `sqrt(k rho c)`, `Q` the sunlight absorbed over the baseline's (`1000 W/m^2 (1 - 0.15) ((1 - A) max(up . sun, 0) - L)`,
+  `A` the albedo of the cloud over it: its water path, droplets of 10 um, a two-stream `(1 - g) tau / (2 + (1 - g)
+  tau)`). The slab warms into the afternoon (its warmest an eighth of a day after noon). With the 300 s day a moist soil
+  (1500) swings 2-8 K, dry sand (300) five times as much, a sea (1e5, its mixed layer) under 0.1 K; a cloud's shade
+  cools what is under it (`test_weather_forcing.cpp`). Measured on the `fix` world (2026-11-26, 20 game minutes): with
+  every latitude held at `ground_k` (before) the strongest wind was 2.4-3.0 m/s, the cloud 1-2 cells of cumulus
+  everywhere; with the baseline (`sun_k` 40) 6.8-7.6 m/s in eddies over the whole planet, cloud sheets and bands, the
+  cover 0.31 -> 0.17 over the 20 minutes (the circulation mixes the air's gradient, only the grounds restore it).
 - **No large-scale wind is imposed:** the air starts at rest, every wind is the sun's heating, the convection's and the
   storms', turned by the Coriolis (`f = 2 Omega up_y`, `Omega` the weather's day, `day_s` 300 s: the twist, storms spin
   at the game's scale). Removed 2026-11-26: Earth's three cells (`-sin(6 |latitude|)` east, 5 m/s) put in at the start
@@ -265,7 +269,7 @@ grid lands). `cell_m` (the cells' width in metres; 0 or absent: 64 cells a cube 
 would leave [4, 1024]), `top_m` (the levels' top over the ground, 600; the levels about `cell_m` apart, at least 2),
 `tick_hz` (2: a tick costs ~250 ms at 70 cells a face side, 5 a second fell behind), `time_scale` (game seconds a
 real second simulates, 1), `storm_m` (0: 1/8 of the
-radius), `spin_up_s` (game seconds simulated before the first frame, 600), `day_s` (the weather's day, 300),
+radius), `spin_up_s` (game seconds simulated before the first frame, 600), `day_s` (the weather's day, 300), `sun_k` (the sun's warming of the grounds' baseline, 40),
 `inversion_m` (the start sounding's inversion, 300, under `top_m`), `exchange` (the surface fluxes' twist, 40: measured on the `fix` world without an imposed wind, cumulus over 10-18% of the planet against 8-11% at 15 and ~1% at 1, the air warming 0.2 K in 20 game minutes),
 `convection` (the shallow convection's updraft, true) and `cloud_spread` (the partial cloud, true; false: each cell all
 or nothing): the switches the debugger isolates a process with.

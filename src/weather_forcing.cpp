@@ -89,13 +89,18 @@ void WeatherForcing::start(WeatherFluid &p_fluid, const WeatherMoist::Sounding &
             for (int i = 0; i < g.width(); i++) {
                 const size_t in = g.interior(f, i, j);
                 float *here = &p_fluid.state()[g.index(f, i, j) * size_t(p_fluid.stride())];
+                // The column's air over its baseline: theta moved by its offset from the planet's mean, the vapour by
+                // the saturation's ratio at the ground (the same relative humidity).
+                const double offset = baseline_k(in) - mean_ground_k;
+                const double t0 = p_sounding.theta[0];
+                const double wet = WeatherMoist::saturation(t0 + offset, WeatherMoist::P0_MB) / WeatherMoist::saturation(t0, WeatherMoist::P0_MB);
                 for (int k = 0; k < p_fluid.levels(); k++) {
                     for (int a = 0; a < 3; a++) {
                         here[p_fluid.wind_offset(k) + a] = 0.0f;
                     }
                     const double noise = k < 2 ? NOISE_K * (2.0 * unit(hash3(params.seed, uint32_t(in), uint32_t(k))) - 1.0) : 0.0;
-                    here[p_fluid.scalar_offset(k, WeatherMoist::THETA)] = float(p_sounding.theta[size_t(k)] + noise);
-                    here[p_fluid.scalar_offset(k, WeatherMoist::QV)] = float(p_sounding.qv[size_t(k)]);
+                    here[p_fluid.scalar_offset(k, WeatherMoist::THETA)] = float(p_sounding.theta[size_t(k)] + offset + noise);
+                    here[p_fluid.scalar_offset(k, WeatherMoist::QV)] = float(p_sounding.qv[size_t(k)] * wet);
                     here[p_fluid.scalar_offset(k, WeatherMoist::QC)] = 0.0f;
                     here[p_fluid.scalar_offset(k, WeatherMoist::QR)] = 0.0f;
                 }
@@ -108,14 +113,13 @@ void WeatherForcing::start(WeatherFluid &p_fluid, const WeatherMoist::Sounding &
 void WeatherForcing::grounds(std::vector<WeatherMoist::Ground> &r_ground) const {
     r_ground.resize(climate.size());
     for (size_t c = 0; c < climate.size(); c++) {
-        r_ground[c].temp_k = climate[c].ground_k;
+        r_ground[c].temp_k = float(baseline_k(c));
         r_ground[c].wetness = climate[c].wetness;
         r_ground[c].z0_m = climate[c].z0_m;
     }
 }
 
 double WeatherForcing::warm_slab(double p_temp_k, double p_mean_k, double p_inertia, double p_q, double p_day_s, double p_dt) {
-    constexpr double PI = 3.14159265358979323846;
     const double gain = 2.0 * std::sqrt(PI) / (ov::max(p_inertia, 1.0) * std::sqrt(p_day_s));
     const double restore = 2.0 * PI / p_day_s;
     // Implicit in the restoring term: any dt is stable.
@@ -131,6 +135,15 @@ double WeatherForcing::cloud_albedo(double p_lwp) {
     const double tau = cloud_extinction(p_lwp);
     const double t = (1.0 - CLOUD_ASYMMETRY) * tau;
     return t / (2.0 + t);
+}
+
+double WeatherForcing::year_light(size_t p_c) const {
+    const double y = ov::clamp(ups[p_c * 3 + 1], -1.0, 1.0);
+    return std::sqrt(1.0 - y * y) / PI;
+}
+
+double WeatherForcing::baseline_k(size_t p_c) const {
+    return double(climate[p_c].ground_k) + params.sun_k * (year_light(p_c) - PLANET_LIGHT);
 }
 
 Float3 WeatherForcing::turn_sun(const Float3 &p_sun, double p_angle) {
@@ -164,8 +177,8 @@ void WeatherForcing::warm(const Float3 &p_towards_sun, double p_dt, const Weathe
                 lwp += (double(here[p_fluid.scalar_offset(k, WeatherMoist::QC)]) + extra) * p_rho[size_t(k)] * dz;
             }
             const double light = ov::max(dot3(&ups[c * 3], sun) / len, 0.0);
-            const double q = absorbed * ((1.0 - cloud_albedo(lwp)) * light - PLANET_LIGHT);
-            r_ground[c].temp_k = float(warm_slab(r_ground[c].temp_k, climate[c].ground_k, climate[c].thermal_inertia, q, params.day_s, p_dt));
+            const double q = absorbed * ((1.0 - cloud_albedo(lwp)) * light - year_light(c));
+            r_ground[c].temp_k = float(warm_slab(r_ground[c].temp_k, baseline_k(c), climate[c].thermal_inertia, q, params.day_s, p_dt));
         } });
 }
 

@@ -23,7 +23,7 @@
 //                                    "<field name>": { "mean": 0.4, "poles": -0.9 }... },
 //     "atmosphere": { "density": 1, "tint": [1, 1, 1] },
 //     "weather": { "on": true, "cell_m": 0, "top_m": 600, "tick_hz": 2, "time_scale": 1, "storm_m": 0,
-//                  "spin_up_s": 600, "day_s": 300, "inversion_m": 300, "exchange": 40 },
+//                  "spin_up_s": 600, "day_s": 300, "sun_k": 40, "inversion_m": 300, "exchange": 40 },
 //     "look": { "atmosphere": true, "atmosphere_scale": 0, "clouds": true },
 //     "instances": [ { "species": "conifer", "cell_m": 5, "share": 1 }... ],
 //     "features": [ { "kind": "lava_lake", "cell_m": 640, "chance": 0.6, "radius_m": [18, 45] }... ],
@@ -111,6 +111,7 @@ struct WorldFile {
         double storm_m = 0.0; // a storm seed's radius; 0: 1 / 8 of the planet's
         double spin_up_s = 600.0;
         double day_s = 300.0; // the weather's day: its Coriolis (the twist: storms spin at the game's scale)
+        double sun_k = 40.0; // the sun's warming of the grounds' baseline (WeatherForcing: an equator-pole of sun_k / pi)
         double inversion_m = 300.0; // the trade inversion's height in the start sounding
         double exchange = 40.0; // the surface fluxes' twist (WeatherMoist::Params::exchange; 2026-11-26: 15 -> 40, docs/weather.md)
         bool convection = true; // the shallow convection's updraft per column (WeatherConvection)

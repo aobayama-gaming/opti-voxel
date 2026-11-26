@@ -155,17 +155,24 @@ TEST_CASE("WeatherForcing::warm: the ground under the noon sun warms, less under
     CHECK(shaded > 299.0);
 }
 
-// The sun's angle sets each ground's day's mean: over ground_k on the equator, under it at the poles (each column's own
-// day's mean was taken out before 2026-11-26: every latitude stayed at ground_k, nothing to make a wind).
-TEST_CASE("WeatherForcing::warm: over a day the equator warms over ground_k, a pole cools under it") {
+// The sun sets each ground's baseline: over ground_k on the equator, under it at the poles, a sea's as a land's; the day
+// swings it round it (each column's day's mean was held at ground_k before 2026-11-26: nothing to make a wind).
+TEST_CASE("WeatherForcing::warm: the sun's baseline, a warm equator and a cold pole, the day swinging round it") {
     Setup s = make(8, 299.0f, 0.0f);
     std::vector<Climate::BiomeWeather> climate(s.grid->cells());
-    for (Climate::BiomeWeather &c : climate) {
-        c.ground_k = 299.0f;
-        c.thermal_inertia = 1500.0f;
+    for (size_t c = 0; c < climate.size(); c++) {
+        climate[c].ground_k = 299.0f;
+        climate[c].thermal_inertia = c % 2 == 0 ? 1500.0f : 1e5f; // land and sea side by side
     }
     F drive(*s.fluid, F::Params(), climate);
     const M::Sounding snd = drive.sounding(*s.fluid);
+    // The baselines average to ground_k over the sphere (area-weighted).
+    double area = 0.0, mean = 0.0;
+    for (size_t c = 0; c < s.grid->cells(); c++) {
+        area += s.fluid->column_area_m2(c);
+        mean += s.fluid->column_area_m2(c) * drive.baseline_k(c);
+    }
+    CHECK(mean / area == doctest::Approx(299.0).epsilon(2e-4));
     size_t equator = 0, pole = 0;
     double low = 2.0, high = -1.0;
     for (size_t c = 0; c < s.grid->cells(); c++) {
@@ -193,9 +200,16 @@ TEST_CASE("WeatherForcing::warm: over a day the equator warms over ground_k, a p
             pole_mean += double(ground[pole].temp_k) / per_day;
         }
     }
-    MESSAGE("day's mean: equator ", equator_mean, " K, pole ", pole_mean, " K (ground_k 299)");
-    CHECK(equator_mean > 299.2);
-    CHECK(pole_mean < 298.5);
+    MESSAGE("day's mean: equator ", equator_mean, " K (baseline ", drive.baseline_k(equator), "), pole ", pole_mean, " K (baseline ",
+            drive.baseline_k(pole), "), ground_k 299");
+    CHECK(drive.baseline_k(equator) > 301.0);
+    CHECK(drive.baseline_k(pole) < 296.0);
+    CHECK(equator_mean == doctest::Approx(drive.baseline_k(equator)).epsilon(3e-4));
+    CHECK(pole_mean == doctest::Approx(drive.baseline_k(pole)).epsilon(3e-4));
+    // A sea next to the equator's land: the same baseline (a long mean does not depend on the heat it holds).
+    const size_t sea = equator % 2 == 0 ? equator + 1 : equator - 1;
+    CHECK(std::fabs(drive.baseline_k(sea) - drive.baseline_k(equator)) < 0.5);
+    CHECK(ground[sea].temp_k == doctest::Approx(drive.baseline_k(sea)).epsilon(1e-4));
 }
 
 TEST_CASE("WeatherForcing: storms seed at their rate, the same ones from the same seed") {
@@ -213,11 +227,13 @@ TEST_CASE("WeatherForcing: storms seed at their rate, the same ones from the sam
     CHECK(a.fluid->state() == b.fluid->state());
 }
 
-// The forcing's whole start over a sea 1.5 K warmer than its air (a planet of trade-wind sea, its large-scale wind and
-// Coriolis on), sampled each minute from 15 to 40 (the convection comes in bursts while the layer adjusts: one instant
-// says little): cumulus on average, broken, their base above the ground, nothing over the inversion.
+// The forcing's whole start over a sea 1.5 K warmer than its air (a planet of trade-wind sea, the same at every latitude:
+// sun_k 0; the Coriolis on), sampled each minute from 15 to 40 (the convection comes in bursts while the layer adjusts:
+// one instant says little): cumulus on average, broken, their base above the ground, nothing over the inversion.
 TEST_CASE("WeatherForcing: a trade-wind sea makes broken cumulus") {
-    Setup s = make(32, 300.5f, 0.0f);
+    F::Params uniform;
+    uniform.sun_k = 0.0;
+    Setup s = make(32, 300.5f, 0.0f, uniform);
     const M::Sounding snd = s.drive->sounding(*s.fluid);
     WeatherMoist moist(*s.fluid, snd, M::Params());
     s.drive->start(*s.fluid, snd);

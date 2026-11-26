@@ -10,7 +10,7 @@ One terrain (the cascade), one instance path (its table), one world file. Read b
   "sphere" | "torus", "radius_m", "ring_m"}`; the old `planet` key is refused with its rename), `sea` (`{"level_m",
   "water": {deep, shallow, clarity_m}, "shore": {below_m, above_m, sand}}`: the `sea` node's level, no trees or rocks
   under it plus `above_m`, `docs/trees.md`), `atmosphere` (`{density, tint}`, `docs/look.md`), `weather` (`{on, cell_m, top_m, tick_hz, time_scale, storm_m,
-  spin_up_s, day_s, inversion_m, exchange}`: the simulated weather, on by default over a sphere, refused over a flat shape or a torus, `docs/weather.md`), `look`, `instances` (they grow over the whole ground, streamed), `species` (a path or the list),
+  spin_up_s, day_s, sun_k, inversion_m, exchange}`: the simulated weather, on by default over a sphere, refused over a flat shape or a torus, `docs/weather.md`), `look`, `instances` (they grow over the whole ground, streamed), `species` (a path or the list),
   `features` and `feature_region` (the square they stand in until they stream: `SDFTable::set_feature_region`; a world
   whose lists name features needs one), `biomes` (a path or the list; a list's entries are biome objects or paths to
   single-biome files, `biomes/*.biome.json`, read relative to the file naming them; the one default biome, without
