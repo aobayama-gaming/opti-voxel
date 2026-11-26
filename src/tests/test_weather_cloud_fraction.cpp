@@ -26,18 +26,6 @@ TEST_CASE("WeatherCloud: the cloudy share and water follow Cuijpers & Bechtold")
     CHECK(WeatherCloud::water(10.0) == doctest::Approx(10.0).epsilon(1e-5));
 }
 
-TEST_CASE("WeatherCloud: a uniform noise through the spread saturates the cloudy share") {
-    for (const double q1 : { -2.0, -1.0, 0.0, 0.7 }) {
-        const int n = 20000;
-        int cloudy = 0;
-        for (int i = 0; i < n; i++) {
-            const double u = (i + 0.5) / n;
-            cloudy += q1 + WeatherCloud::spread(u) > 0.0;
-        }
-        CHECK(double(cloudy) / n == doctest::Approx(WeatherCloud::fraction(q1)).epsilon(1e-3));
-    }
-}
-
 TEST_CASE("WeatherMoist: the condensation is Kessler's with no spread, partial with one, the water kept") {
     using M = WeatherMoist;
     const double exner = 0.99;
@@ -62,18 +50,6 @@ TEST_CASE("WeatherMoist: the condensation is Kessler's with no spread, partial w
     CHECK(share == 1.0);
     CHECK(uniform == doctest::Approx(excess));
     CHECK(uniform == doctest::Approx(0.02 * qs / (1.0 + M::LATENT / M::CP * qs * 17.27 * 237.3 / ((t - 36.0) * (t - 36.0)))).epsilon(0.05));
-}
-
-TEST_CASE("WeatherCloud: the render's mean excess is the spread's") {
-    for (const double q1 : { -3.0, -1.0, -0.3, 0.0, 0.5, 2.0 }) {
-        const int n = 200000;
-        double sum = 0.0;
-        for (int i = 0; i < n; i++) {
-            sum += std::max(q1 + WeatherCloud::spread((i + 0.5) / n), 0.0);
-        }
-        CHECK(WeatherCloud::mean_excess(q1) == doctest::Approx(sum / n).epsilon(2e-3));
-    }
-    CHECK(WeatherCloud::mean_excess(-10.0) == 0.0);
 }
 
 TEST_CASE("WeatherCloud: the render's noise is exactly uniform, tileable and the same every run") {

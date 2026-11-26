@@ -169,16 +169,14 @@ The air inside a 45 m cell is not uniform: a cell a little under saturation hold
   couple a mass flux to a statistical cloud scheme); `tau = z_i / w*`, the boundary layer's turnover (z_i the updraft's
   top, w* the surface buoyancy flux's; at least u* and 0.1 m/s). The updraft's own cloud is no longer added on top:
   the partial cloud is the cloud.
-- **The render** (`docs/look.md` "Density"): the spread's distribution is fixed by the fit (`N = P(s > 0)` makes its
-  CDF `0.5 + 0.36 atan(1.55 x)` on `|x| <= tan(0.5 / 0.36) / 1.55`), so a uniform noise `u` through
-  `WeatherCloud::spread(u) = tan((u - 0.5) / 0.36) / 1.55` saturates exactly the share N of a cell's points. The weather
-  publishes each level's mean cloud water and its Q1 (`WeatherMoist::q1`, within +-8, a uniform cell's +-8 by its
-  sign); a point's cloud is `max(Q1 + spread(u), 0) / mean_excess(Q1)` of the cell's mean water, `mean_excess` the
-  closed form of `E[max(Q1 + n, 0)]` over the distribution: the cell's points average to the simulation's water, the
-  cloudy ones are its share. `u` is `WeatherCloud::uniform_noise`: a tileable gradient fbm (128^3, 4 lattice cells and
-  3 octaves, a period of 4 weather cells: features of a cell, a half and a quarter; half a cell to an eighth looked like cotton), its ranks turned into values, so it is
-  exactly uniform (each tenth holds a tenth of the texels to within one) and as smooth as the noise. The physics never
-  reads it (`test_weather_cloud_fraction.cpp`: the closed form against the sum, the noise's histogram, its wrap).
+- **The render** (`docs/look.md` "Density"): the simulation's cloud water as it is (each level's mean, published per
+  cell, trilinear between cells and levels, the two states blended), times `0.5 + u`: a texture of mean 1, so where the
+  cloud is and how much is the simulation's alone. `u` is `WeatherCloud::uniform_noise`: a tileable gradient fbm (128^3,
+  4 lattice cells and 3 octaves, a period of 4 weather cells: features of a cell, a half and a quarter), its ranks
+  turned into values, so it is exactly uniform and as smooth as the noise. Until 2026-11-26 the noise was thresholded
+  against each cell's Q1 (`max(Q1 + spread(u), 0)`, a cell without a spread drawn with 0.2 g/kg): the noise then
+  decided where the cloud was, and the clouds looked fluffy and flickered; with features of half a cell to an eighth,
+  like cotton. The physics never reads the noise (`test_weather_cloud_fraction.cpp`: its histogram, its wrap).
 - **Measured** before the closure and the confinement went (trade-wind sea, 6 x 32^2, minutes 15-30): cover 49%
   with no confinement, 17% at 0.02 (all-or-nothing: 86%, 1.8%); sigma_s 0.1-0.45 g/kg, largest in the cloud layer.
   To measure again on the benchmark below.
@@ -364,7 +362,8 @@ Agreed with the user (2026-11-24). Stacked PRs, `feature/weather-*`:
 14. **Turbulence:** the kicks and the vorticity confinement, then (2026-11-25) both removed for an implicit
     large-eddy simulation, checked on the dry convective boundary layer; the vertical staggering of w; the advection
     one conservative flux-form scheme for every field (MacCormack created water on BOMEX).
-15. **Partial cloud:** the statistical cloud scheme in the physics, the render's noise through its spread.
+15. **Partial cloud:** the statistical cloud scheme in the physics; the render draws the simulation's water, the
+    noise only its texture.
 
 Later: curl-noise gusts, the FFT sea reading the wind (U10, fetch, swell), rain and ground wetness, saving the weather,
 the GPU if the CPU tick is too slow.

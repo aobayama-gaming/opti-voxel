@@ -2,38 +2,10 @@
 
 #include "parallel_for.hpp"
 
-#include "ov/str.hpp"
-
 #include <algorithm>
 #include <numeric>
 
 namespace WeatherCloud {
-
-const char *glsl() {
-    static const ov::str text = ov::replace_all(ov::str(R"glsl(
-const float SHARE_SLOPE = $SLOPE;
-const float SHARE_SCALE = $SCALE;
-const float SHARE_REACH = $REACH;
-
-// The spread (units of sigma_s) of a uniform noise value u (weather_cloud_fraction.hpp).
-float cloud_spread(float u) {
-    float half_turn = 0.5 / SHARE_SLOPE;
-    return tan(clamp((u - 0.5) / SHARE_SLOPE, -half_turn, half_turn)) / SHARE_SCALE;
-}
-
-// The mean of max(q1 + n, 0) over the spread's distribution.
-float cloud_mean_excess(float q1) {
-    float l = max(-q1, -SHARE_REACH);
-    if (l >= SHARE_REACH) {
-        return 0.0;
-    }
-    float k = SHARE_SCALE;
-    return SHARE_SLOPE * (q1 * (atan(k * SHARE_REACH) - atan(k * l)) + log((1.0 + k * k * SHARE_REACH * SHARE_REACH) / (1.0 + k * k * l * l)) / (2.0 * k));
-}
-)glsl"),
-            { { "$SLOPE", ov::format("%.9g", SHARE_SLOPE) }, { "$SCALE", ov::format("%.9g", SHARE_SCALE) }, { "$REACH", ov::format("%.9g", reach()) } });
-    return text.c_str();
-}
 
 namespace {
 

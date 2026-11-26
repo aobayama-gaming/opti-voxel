@@ -157,7 +157,7 @@ double WeatherMoist::kessler(double *r_theta, double *r_qv, double *r_qc, double
                     const double sigma = p_sigma ? p_sigma[k] : 0.0;
                     condense(r_theta[k], r_qv[k], r_qc[k], p_exner[k], pc[k], sigma, share[k], excess);
                     const double lim = WeatherCloud::Q1_LIMIT;
-                    r_q1[k] = ov::clamp(excess / (sigma > 1e-9 ? sigma : WeatherCloud::DRAW_SIGMA), -lim, lim);
+                    r_q1[k] = sigma > 1e-9 ? ov::clamp(excess / sigma, -lim, lim) : (excess > 0.0 ? lim : -lim);
                 }
             }
         }

@@ -70,26 +70,24 @@ float cloud_height_fraction(float altitude) {
     return (altitude - cloud_bottom_m) / (cloud_top_m - cloud_bottom_m);
 }
 
-// The cloud's density at p (height fraction hf): the simulation's partial cloud (weather_cloud_fraction.hpp) drawn by
-// the spread noise. Its levels (Weather: the atlas's slice per level; R G the mean cloud water over FULL_CLOUD_QC of
-// the two states, B A their Q1), linear between their middles, the lowest's down to the ground, the top's fading to none
-// at the top; the states blended. A point's saturation excess is Q1 plus the noise's spread there (u uniform, carried
-// by the wind), its cloud that excess over the cell's mean excess times the cell's mean water: the cell's points
-// average to the simulation's water, the cloudy ones are its share. cloud_extinction is the droplets' at density 1.
+// The cloud's density at p (height fraction hf): the simulation's cloud water, textured. Its levels (Weather: the
+// atlas's slice per level; R G the mean cloud water over FULL_CLOUD_QC of the two states), linear between their
+// middles, the lowest's down to the ground, the top's fading to none at the top; the states blended. The simulation
+// alone says where cloud is and how much: the noise (u uniform, carried by the wind) only scales it by 0.5 + u, a mean
+// of 1, so a cell's points average to its water and no threshold makes cloud appear or vanish (a noise thresholded
+// against the cell's saturation decided where the cloud was: fluffy, flickering; 2026-11-26). cloud_extinction is the
+// droplets' at density 1.
 float cloud_density(vec3 p, float hf) {
     if (hf <= 0.0 || hf >= 1.0) {
         return 0.0;
     }
     vec4 m = textureLod($MAP, vec3(weather_uv(p), clamp(hf, $HALF_LEVEL, 1.0 - $HALF_LEVEL)), 0.0);
     float water = (m.r + (m.g - m.r) * cloud_weather_blend) * clamp((1.0 - hf) / $HALF_LEVEL, 0.0, 1.0);
-    float q1 = m.b + (m.a - m.b) * cloud_weather_blend;
-    float mean = cloud_mean_excess(q1);
-    if (water <= 0.0 || mean <= 1e-6) {
+    if (water <= 0.0) {
         return 0.0;
     }
     vec3 c = (shade_point(p, cloud_spread_period_vox) - cloud_wind_offset_m) / shade_period_m(cloud_spread_period_vox);
-    float u = textureLod($SPREAD, c, 0.0).r;
-    return water * max(q1 + cloud_spread(u), 0.0) / mean;
+    return water * (0.5 + textureLod($SPREAD, c, 0.0).r);
 }
 
 // Where the ray p + t dir (t >= 0) is in the layer: [seg.x, seg.y] and [seg.z, seg.w] (either empty), the part below its
@@ -425,8 +423,7 @@ ov::str substitute(const ov::str &p_glsl) {
 }
 
 ov::str density_glsl() {
-    return ov::str(WeatherCloud::glsl()) +
-            ov::replace_all(substitute(GLSL_DENSITY), { { "$SPREAD", "sampler3D(spread_noise, linear)" }, { "$MAP", "sampler3D(weather_map, linear)" } });
+    return ov::replace_all(substitute(GLSL_DENSITY), { { "$SPREAD", "sampler3D(spread_noise, linear)" }, { "$MAP", "sampler3D(weather_map, linear)" } });
 }
 
 // The block's fields: the base's, the atmosphere's (the lookup's uniforms), the layer's and the frame's.
@@ -554,8 +551,6 @@ void Clouds::set_weather(const Weather &p_weather, const Float3 &p_wind_mps, boo
             uint16_t *t = &texels[(size_t(k) * cells + c) * 4];
             t[0] = ov::float_to_half(a);
             t[1] = ov::float_to_half(b);
-            t[2] = ov::float_to_half(prev[at + size_t(levels)]); // the Q1s
-            t[3] = ov::float_to_half(live[at + size_t(levels)]);
             cover_max = ov::max(cover_max, ov::max(a, b));
         }
     }

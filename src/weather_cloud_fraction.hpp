@@ -15,27 +15,13 @@
 // - The mean cloud water q_l / sigma_s = exp(1.2 Q1 - 1) under saturation (B2), over it Q1 + exp(-1) exp(-1.2 Q1):
 //   their quadratic (e^-1 + 0.66 Q1 + 0.086 Q1^2) grows as Q1^2 and never meets the uniform cell's q_l = s when the
 //   spread goes to 0; this one is continuous at 0, within 1% of theirs over [1, 2] and tends to s.
-// - The spread's distribution: N = P(s > 0) for s = s_mean + sigma_s n makes n's CDF F(x) = 0.5 + 0.36 atan(1.55 x) on
-//   |x| <= REACH (it reaches 0 and 1 there: the density 0.36 * 1.55 / (1 + (1.55 x)^2) holds all the probability). A
-//   value u of a uniform noise is the spread n = tan((u - 0.5) / 0.36) / 1.55 (spread()); the share of a cell's points
-//   it saturates is N.
-// - The render (clouds.cpp): a point's cloud is max(Q1 + n, 0) / mean_excess(Q1) of the cell's mean water: its points
-//   average to the mean water, the cloudy ones are the share N. The physics never reads the noise.
+// - The render (clouds.cpp) draws a cell's mean cloud water as it is, textured by a uniform noise (uniform_noise) of
+//   mean 1: where the cloud is and how much is the simulation's alone.
 namespace WeatherCloud {
 
 constexpr double SHARE_SLOPE = 0.36;
 constexpr double SHARE_SCALE = 1.55;
 constexpr double Q1_LIMIT = 8.0; // a published Q1's range (the uniform cell's: +-Q1_LIMIT)
-// The spread a cell's Q1 is drawn with when the simulation has none (all or nothing, Params::spread off), kg/kg: a
-// cell's excess over it, so one near saturation draws near Q1 0 and fades in and out, its edge moving through the cell,
-// instead of +-Q1_LIMIT (a cube's face halfway between two cells, there or gone in a tick). 0.2 g/kg: the scheme's own
-// sigma_s in ocean_test's cloud layer (0.12-0.35 g/kg), as Cuijpers & Bechtold (1995) measure in shallow cumulus.
-constexpr double DRAW_SIGMA = 2e-4;
-
-// The spread's reach: F(REACH) = 1.
-inline double reach() {
-    return std::tan(0.5 / SHARE_SLOPE) / SHARE_SCALE;
-}
 
 // The cloudy share at Q1.
 inline double fraction(double p_q1) {
@@ -47,28 +33,6 @@ inline double fraction(double p_q1) {
 inline double water(double p_q1) {
     return p_q1 < 0.0 ? std::exp(1.2 * p_q1 - 1.0) : p_q1 + std::exp(-1.0 - 1.2 * p_q1);
 }
-
-// The spread (in units of sigma_s) of the noise value p_u in [0, 1] (the inverse of the spread's CDF).
-inline double spread(double p_u) {
-    const double half = 0.5 / SHARE_SLOPE;
-    double x = (p_u - 0.5) / SHARE_SLOPE;
-    x = x < -half ? -half : (x > half ? half : x);
-    return std::tan(x) / SHARE_SCALE;
-}
-
-// The mean of max(Q1 + n, 0) over the spread's distribution: SHARE_SLOPE [Q1 (atan(k X) - atan(k l)) + ln((1 + k^2 X^2)
-// / (1 + k^2 l^2)) / (2 k)], k = SHARE_SCALE, X = reach(), l = max(-Q1, -X).
-inline double mean_excess(double p_q1) {
-    const double k = SHARE_SCALE, x = reach();
-    const double l = -p_q1 > -x ? -p_q1 : -x;
-    if (l >= x) {
-        return 0.0;
-    }
-    return SHARE_SLOPE * (p_q1 * (std::atan(k * x) - std::atan(k * l)) + std::log((1.0 + k * k * x * x) / (1.0 + k * k * l * l)) / (2.0 * k));
-}
-
-// The GLSL twins of spread() and mean_excess() (float; the render's).
-const char *glsl();
 
 // p_size^3 values (x fastest) of a tileable gradient noise (p_lattice cells per side, then p_octaves - 1 octaves each
 // twice as fine at half the amplitude), their ranks turned into values in (0, 1): exactly uniform, as smooth as the

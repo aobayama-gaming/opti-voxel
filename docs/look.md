@@ -101,10 +101,10 @@ They are made from the base's shape like the atmosphere: a layer
 between two altitudes above the base (`base_altitude`; a ray's part in it from `base_level_span`), every noise read at
 the 3D point in the shading frame (no 2D weather map, which a curved base would tear).
 - **Density:** the simulation's alone (2026-11-25, the user's call: see the fluid's result, cells and all): at a point
-  `cloud_density` is the weather's partial cloud there (`docs/weather.md` "Partial cloud"): the level's mean cloud
-  water over `Weather::FULL_CLOUD_QC` (0.3 g/kg) placed by the spread noise (`WeatherCloud::uniform_noise`, exactly
-  uniform, through `cloud_spread` and over `cloud_mean_excess`): a point is cloud where the cell's Q1 plus the noise's
-  spread is above 0, so a cell shows the scheme's share of cloud and averages to its water. Its extinction is the droplets' (`WeatherForcing::cloud_extinction`:
+  `cloud_density` is the weather's cloud water there (`docs/weather.md` "Partial cloud"): the level's mean cloud
+  water over `Weather::FULL_CLOUD_QC` (0.3 g/kg), trilinear between the cells, times `0.5 + u`, a texture of mean 1
+  (`WeatherCloud::uniform_noise`, exactly uniform, octaves of a cell, a half and a quarter): the simulation says where
+  the cloud is and how much, the noise never makes it appear or vanish. Its extinction is the droplets' (`WeatherForcing::cloud_extinction`:
   `3 LWC / (2 rho_w r_e)`, LWC = 1.15 kg/m^3 x q_c, droplets of 10 um, Hansen & Travis 1974; 0.052 /m at 0.3 g/kg, a
   visibility of ~75 m, Kunkel 1984's fog fit 0.057 /m). Schneider's Perlin-Worley noises (Horizon Zero Dawn's Nubis)
   shaped them before, their places only the simulation's: they made round clumps and hid the flow; they and their
