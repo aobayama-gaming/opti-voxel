@@ -22,7 +22,7 @@
 //     "climate": "climate.json" or { "fields": "fields.json" or [ field... ],
 //                                    "<field name>": { "mean": 0.4, "poles": -0.9 }... },
 //     "atmosphere": { "density": 1, "tint": [1, 1, 1] },
-//     "weather": { "on": true, "cell_m": 0, "top_m": 600, "tick_hz": 2, "time_scale": 1, "storm_m": 0,
+//     "weather": { "on": true, "cell_m": 0, "top_m": 600, "stretch": 1, "tick_hz": 2, "time_scale": 1, "storm_m": 0,
 //                  "spin_up_s": 600, "day_s": 300, "sun_k": 40, "relax_days": 2, "inversion_m": 300, "exchange": 40 },
 //     "look": { "atmosphere": true, "atmosphere_scale": 0, "clouds": true },
 //     "instances": [ { "species": "conifer", "cell_m": 5, "share": 1 }... ],
@@ -105,7 +105,8 @@ struct WorldFile {
     struct Weather {
         bool on = false;
         double cell_m = 0.0; // the grid's cells' width (WeatherGrid::for_base; 0: DEFAULT_SIDE cells a face side)
-        double top_m = 600.0; // the levels' top over the ground, about cell_m apart (WeatherFluid)
+        double top_m = 600.0; // the levels' top over the ground (WeatherLevels)
+        double stretch = 1.0; // each level's thickness over the one under it, the lowest about cell_m (WeatherLevels)
         double tick_hz = 2.0; // 2026-11-26: a tick costs ~250 ms at 70 cells a face side, 5 a second fell behind
         double time_scale = 1.0;
         double storm_m = 0.0; // a storm seed's radius; 0: 1 / 8 of the planet's

@@ -38,11 +38,11 @@ TEST_CASE("CloudLayer::of_weather: the ground to the levels' top, the droplets' 
 
 TEST_CASE("Clouds: every constant of the passes' and the hosts' GLSL substituted") {
     const CubeSphereGrid grid(16, 2000.0);
-    for (const ov::str &glsl : { Clouds::glsl_pass_march(grid, 4), Clouds::glsl_pass_shadow(grid, 4), Clouds::glsl_lookup() }) {
+    for (const ov::str &glsl : { Clouds::glsl_pass_march(grid, WeatherLevels{ 4, 600.0, 1.2 }), Clouds::glsl_pass_shadow(grid, WeatherLevels{ 4, 600.0, 1.2 }), Clouds::glsl_lookup() }) {
         CHECK(glsl.find('$') == ov::str::npos);
     }
-    CHECK(Clouds::glsl_pass_march(grid, 4).find("vec3 cloud_camera_m;") != ov::str::npos);
-    CHECK(Clouds::glsl_pass_shadow(grid, 4).find("float cloud_shadow_extent_m;") != ov::str::npos);
+    CHECK(Clouds::glsl_pass_march(grid, WeatherLevels{ 4, 600.0, 1.2 }).find("vec3 cloud_camera_m;") != ov::str::npos);
+    CHECK(Clouds::glsl_pass_shadow(grid, WeatherLevels{ 4, 600.0, 1.2 }).find("float cloud_shadow_extent_m;") != ov::str::npos);
 }
 
 TEST_CASE("Clouds::block_bytes: std140, the base first, padded to 16") {

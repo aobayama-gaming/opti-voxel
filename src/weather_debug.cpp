@@ -110,7 +110,7 @@ void capture_column(const WeatherFluid &p_fluid, const WeatherMoist &p_moist, co
     double lwp = 0.0;
     for (int k = 0; k < p_fluid.levels(); k++) {
         cover = ov::max(cover, p_moist.share()[p_fluid.cell_index(p_in, k)]);
-        lwp += ref.rho[size_t(k)] * double(s[p_fluid.scalar_offset(k, WeatherMoist::QC)]) * p_fluid.dz_m() * 1000.0;
+        lwp += ref.rho[size_t(k)] * double(s[p_fluid.scalar_offset(k, WeatherMoist::QC)]) * p_fluid.thick_m(k) * 1000.0;
     }
     r_col[GROUND_K - LEVEL_FIELDS] = p_ground.temp_k;
     r_col[GROUND_MEAN_K - LEVEL_FIELDS] = b.ground_k;
@@ -171,7 +171,9 @@ std::shared_ptr<const Snapshot> Snapshot::capture(const WeatherFluid &p_fluid, c
     out->width = g.width();
     out->height = g.height();
     out->levels = p_fluid.levels();
-    out->dz_m = p_fluid.dz_m();
+    for (int m = 0; m <= p_fluid.levels(); m++) {
+        out->faces_m.push_back(p_fluid.face_m(m));
+    }
     out->game_s = p_game_s;
     const size_t n = out->cells();
     out->values.assign(size_t(LEVEL_FIELDS) * n * size_t(out->levels) + size_t(FIELDS - LEVEL_FIELDS) * n, 0.0f);
@@ -325,7 +327,7 @@ ov::str profile_table(const Snapshot &p_snap, Columns p_columns) {
                 "|---|---|---|---|---|---|---|---|---|---|---|---|---|\n";
     for (int k = p_snap.levels - 1; k >= 0; k--) {
         const size_t i = size_t(k);
-        s += ov::format("| %.0f | %.2f | %.2f | %.3f | %.4f | %.3f | %.3f | %.3f | %.3f | %.2f | %.3f | %.4f | %.2f |\n", (k + 0.5) * p_snap.dz_m, theta[i], qv[i], rh[i],
+        s += ov::format("| %.0f | %.2f | %.2f | %.3f | %.4f | %.3f | %.3f | %.3f | %.3f | %.2f | %.3f | %.4f | %.2f |\n", 0.5 * (p_snap.faces_m[i] + p_snap.faces_m[i + 1]), theta[i], qv[i], rh[i],
                 qc[i], qc_max[i], share[i], cloudy[i], w[i], w_max[i], sigma[i], updraft[i], speed[i]);
     }
     s += "\nColumns:";

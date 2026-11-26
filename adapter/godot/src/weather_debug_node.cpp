@@ -83,7 +83,11 @@ Dictionary WeatherDebugNode::grid() const {
     d["width"] = g.width();
     d["height"] = g.height();
     d["levels"] = w.levels();
-    d["dz_m"] = w.top_m() / double(w.levels());
+    PackedFloat64Array faces;
+    for (int m = 0; m <= w.levels(); m++) {
+        faces.push_back(w.levels_def().face_m(m));
+    }
+    d["faces_m"] = faces; // the levels' interfaces' heights (stretched: finer near the ground)
     d["top_m"] = w.top_m();
     d["radius_m"] = w.radius_m();
     d["cell_m"] = g.cell_m();

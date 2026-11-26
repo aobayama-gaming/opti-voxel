@@ -33,7 +33,7 @@ public:
     static constexpr double MAX_AREA = 0.3;
     static constexpr int SUBSTEPS = 8; // the updraft's steps per level
 
-    // One updraft over a column, per level k (its centre (k + 1/2) dz).
+    // One updraft over a column, per level k (its centre p_z[k], the levels touching from the ground up).
     struct Plume {
         double theta_l[WeatherFluid::MAX_LEVELS] = {};
         double qt[WeatherFluid::MAX_LEVELS] = {};
@@ -57,7 +57,7 @@ public:
     WeatherMoist::Convective fluxes() const { return { flux_theta_l.data(), flux_qt.data(), top.data() }; }
 
     // A column's updraft: theta, qv, qc per level, the sounding's exner, the surface fluxes, the last top.
-    static void plume(const double *p_theta, const double *p_qv, const double *p_qc, const double *p_exner, double p_dz, int p_levels,
+    static void plume(const double *p_theta, const double *p_qv, const double *p_qc, const double *p_exner, const double *p_z, int p_levels,
             const WeatherMoist::Surface &p_surface, double p_top_m, Plume &r_plume);
     // theta and qc from the conserved theta_l and q_t at exner p_exner (the saturation adjustment, Tetens').
     static void adjust(double p_theta_l, double p_qt, double p_exner, double &r_theta, double &r_qc);

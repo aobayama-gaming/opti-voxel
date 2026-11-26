@@ -372,8 +372,8 @@ func _refresh(force: bool) -> void:
 		m.set_shader_parameter("vmax", vmax)
 		m.set_shader_parameter("diverging", f["signed"])
 	legend_label.text = "%s  %s .. %s %s" % [f["name"], _num(vmin), _num(vmax), f["unit"]]
-	var dz: float = grid["dz_m"]
-	level_label.text = ("level %d: %.0f to %.0f m (centre %.0f m)" % [level, level * dz, (level + 1) * dz, (level + 0.5) * dz]) if f["levels"] else "a ground field (no level)"
+	var faces: PackedFloat64Array = grid["faces_m"]
+	level_label.text = ("level %d: %.0f to %.0f m (centre %.0f m)" % [level, faces[level], faces[level + 1], 0.5 * (faces[level] + faces[level + 1])]) if f["levels"] else "a ground field (no level)"
 	_draw_wind()
 	_status(st)
 	_show_column()
@@ -406,7 +406,7 @@ func _status(st: Dictionary) -> void:
 		tick.get("avg_ms", 0.0), tick.get("max_ms", 0.0), st.get("behind_ticks", 0), st.get("dropped_ticks", 0),
 		100.0 * st.get("convecting", 0.0), st.get("convection_top_m", 0.0), st.get("storms", 0),
 		st.get("ground_day_k", 0.0), st.get("ground_night_k", 0.0), st.get("grid", ""), st.get("cell_m", 0.0),
-		st.get("levels", 0), grid.get("dz_m", 0.0)] + ("\nRUNNING x%.1f" % speed if running else "\npaused (space)")
+		st.get("levels", 0), (grid["faces_m"] as PackedFloat64Array)[1] if grid.has("faces_m") else 0.0] + ("\nRUNNING x%.1f" % speed if running else "\npaused (space)")
 
 
 func _day_s(st: Dictionary) -> float:
@@ -447,14 +447,14 @@ func _show_column() -> void:
 	var idx := []
 	for name in TABLE_FIELDS:
 		idx.append(_field_index(name))
-	var dz: float = grid["dz_m"]
+	var faces: PackedFloat64Array = grid["faces_m"]
 	var s := "[b]cell face %d (%d, %d)[/b]\n[code]" % [picked.x, picked.y, picked.z]
 	s += "%6s" % "z m"
 	for n in TABLE_SHORT:
 		s += "%8s" % n
 	s += "\n"
 	for k in range(int(grid["levels"]) - 1, -1, -1):
-		var line := "%6.0f" % ((k + 0.5) * dz)
+		var line := "%6.0f" % (0.5 * (faces[k] + faces[k + 1]))
 		for i in idx:
 			line += "%8.3f" % (col[i] as PackedFloat32Array)[k]
 		s += ("[color=yellow]%s[/color]\n" % line) if k == level else line + "\n"

@@ -321,63 +321,100 @@ TEST_CASE("WeatherFluid: a step's cost at ocean_test's size (6 x 70^2 columns, 1
 }
 
 // The flux-form advection: what leaves a cell enters its neighbour (the total kept to the floats' rounding), and the
-// limiter keeps a blob within its start's bounds (no new extreme: rain never negative).
+// limiter keeps a blob within its start's bounds (no new extreme: rain never negative); on even levels and stretched ones
+// (WeatherLevels), the wind turning over through them.
 TEST_CASE("WeatherFluid: the advection conserves a scalar and keeps it within its bounds") {
-    const auto grid = std::make_shared<CubeSphereGrid>(24, 1000.0);
-    WeatherFluid::Params p;
-    p.levels = 6;
-    p.top_m = 300.0;
-    p.scalars = 1;
-    WeatherFluid fluid(grid, p);
-    const WeatherGrid &g = fluid.grid();
-    auto total = [&](double &r_lo, double &r_hi) {
-        double sum = 0.0;
-        r_lo = 1e30;
-        r_hi = -1e30;
-        for (size_t in = 0; in < g.cells(); in++) {
-            const int f = int(in / (size_t(g.width()) * size_t(g.height())));
-            const int j = int((in / size_t(g.width())) % size_t(g.height()));
-            const int i = int(in % size_t(g.width()));
-            const float *here = &fluid.state()[g.index(f, i, j) * size_t(fluid.stride())];
-            for (int k = 0; k < fluid.levels(); k++) {
-                const double v = here[fluid.scalar_offset(k, 0)];
-                sum += v * fluid.column_area_m2(in);
-                r_lo = std::min(r_lo, v);
-                r_hi = std::max(r_hi, v);
-            }
-        }
-        return sum;
-    };
-    for (int f = 0; f < g.faces(); f++) {
-        for (int j = 0; j < g.height(); j++) {
-            for (int i = 0; i < g.width(); i++) {
-                float *here = &fluid.state()[g.index(f, i, j) * size_t(fluid.stride())];
-                double pos[3], up[3];
-                g.cell_surface(f, i, j, pos, up);
-                const double l = std::sqrt(pos[0] * pos[0] + pos[1] * pos[1] + pos[2] * pos[2]);
-                const double u[3] = { 5.0 * pos[2] / l, 0.0, -5.0 * pos[0] / l };
+    for (const double stretch : { 1.0, 1.25 }) {
+        CAPTURE(stretch);
+        const auto grid = std::make_shared<CubeSphereGrid>(24, 1000.0);
+        WeatherFluid::Params p;
+        p.levels = 6;
+        p.top_m = 300.0;
+        p.stretch = stretch;
+        p.scalars = 1;
+        WeatherFluid fluid(grid, p);
+        const WeatherGrid &g = fluid.grid();
+        auto total = [&](double &r_lo, double &r_hi) {
+            double sum = 0.0;
+            r_lo = 1e30;
+            r_hi = -1e30;
+            for (size_t in = 0; in < g.cells(); in++) {
+                const int f = int(in / (size_t(g.width()) * size_t(g.height())));
+                const int j = int((in / size_t(g.width())) % size_t(g.height()));
+                const int i = int(in % size_t(g.width()));
+                const float *here = &fluid.state()[g.index(f, i, j) * size_t(fluid.stride())];
                 for (int k = 0; k < fluid.levels(); k++) {
-                    for (int a = 0; a < 3; a++) {
-                        here[fluid.wind_offset(k) + a] = float(u[a]);
+                    const double v = here[fluid.scalar_offset(k, 0)];
+                    sum += v * fluid.column_area_m2(in) * fluid.thick_m(k);
+                    r_lo = std::min(r_lo, v);
+                    r_hi = std::max(r_hi, v);
+                }
+            }
+            return sum;
+        };
+        for (int f = 0; f < g.faces(); f++) {
+            for (int j = 0; j < g.height(); j++) {
+                for (int i = 0; i < g.width(); i++) {
+                    float *here = &fluid.state()[g.index(f, i, j) * size_t(fluid.stride())];
+                    double pos[3], up[3];
+                    g.cell_surface(f, i, j, pos, up);
+                    const double l = std::sqrt(pos[0] * pos[0] + pos[1] * pos[1] + pos[2] * pos[2]);
+                    const double u[3] = { 5.0 * pos[2] / l, 0.0, -5.0 * pos[0] / l };
+                    // A vertical stir (the projection makes the whole of it divergence-free): the blob crosses the levels.
+                    const double stir = 2.0 * std::sin(6.0 * pos[0] / l) * std::cos(5.0 * pos[1] / l);
+                    for (int k = 0; k < fluid.levels(); k++) {
+                        for (int a = 0; a < 3; a++) {
+                            here[fluid.wind_offset(k) + a] = float(u[a] + stir * up[a]);
+                        }
+                        here[fluid.scalar_offset(k, 0)] = (f == 0 && i > 8 && i < 14 && j > 8 && j < 14 && k == 2) ? 1.0f : 0.0f;
                     }
-                    here[fluid.scalar_offset(k, 0)] = (f == 0 && i > 8 && i < 14 && j > 8 && j < 14 && k == 2) ? 1.0f : 0.0f;
                 }
             }
         }
+        fluid.vertical_from_centres();
+        // The wind's discrete divergence out of the sides' speeds, the solve converged (a divergent wind makes extremes of
+        // its own in flux form: one projection of the stir left them at -1e-4).
+        for (int it = 0; it < 40; it++) {
+            fluid.project(1.0);
+        }
+        MESSAGE("stretch ", stretch, ": max divergence ", fluid.max_divergence(), " 1/s");
+        double lo0, hi0;
+        const double before = total(lo0, hi0);
+        for (int s = 0; s < 100; s++) {
+            const double dt = fluid.max_dt();
+            fluid.advect(dt);
+            fluid.project(dt); // as a step does: the wind carries itself into a divergent one otherwise
+        }
+        double lo, hi;
+        const double after = total(lo, hi);
+        MESSAGE("stretch ", stretch, ": a blob after 100 steps of a 5 m/s rotation and a stir: total ", after / before, " of its start, range [", lo, ", ", hi, "]");
+        CHECK(std::fabs(after / before - 1.0) < 1e-5);
+        // The projection's leftover divergence (1e-7 1/s) makes extremes of its own in flux form: -3e-6 on even levels,
+        // -8e-6 stretched under the stir.
+        CHECK(lo >= -2e-5);
+        CHECK(hi <= 1.0 + 1e-6);
     }
-    fluid.vertical_from_centres();
-    fluid.project(1.0); // the rotation's discrete divergence out of the sides' speeds
-    double lo0, hi0;
-    const double before = total(lo0, hi0);
-    for (int s = 0; s < 100; s++) {
-        fluid.advect(fluid.max_dt());
+}
+
+// The levels' heights (WeatherLevels): each stretch times the one under it, adding up to the top, the closed-form
+// index the inverse of the heights; alike when stretch is 1.
+TEST_CASE("WeatherLevels: geometric levels, their heights and their index") {
+    const WeatherLevels even{ 15, 600.0, 1.0 };
+    CHECK(even.thick_m(0) == doctest::Approx(40.0));
+    CHECK(even.thick_m(14) == doctest::Approx(40.0));
+    CHECK(even.index_at(300.0) == doctest::Approx(7.5));
+    const WeatherLevels l = WeatherLevels::for_top(4000.0, 45.0, 1.12, WeatherFluid::MAX_LEVELS);
+    MESSAGE("4 km over a 45 m cell at 1.12: ", l.count, " levels, the lowest ", l.thick_m(0), " m, the top's ", l.thick_m(l.count - 1), " m");
+    CHECK(l.face_m(0) == 0.0);
+    CHECK(l.face_m(l.count) == doctest::Approx(4000.0));
+    CHECK(l.thick_m(0) == doctest::Approx(45.0).epsilon(0.15));
+    for (int k = 1; k < l.count; k++) {
+        CHECK(l.thick_m(k) == doctest::Approx(l.thick_m(k - 1) * 1.12));
     }
-    double lo, hi;
-    const double after = total(lo, hi);
-    MESSAGE("a blob after 100 steps of a 5 m/s rotation: total ", after / before, " of its start, range [", lo, ", ", hi, "]");
-    CHECK(std::fabs(after / before - 1.0) < 1e-5);
-    CHECK(lo >= -1e-6);
-    CHECK(hi <= 1.0 + 1e-6);
+    for (int m = 0; m <= l.count; m++) {
+        CHECK(l.index_at(l.face_m(m)) == doctest::Approx(double(m)).epsilon(1e-9));
+    }
+    CHECK(WeatherLevels::for_top(600.0, 45.0, 1.0, 64).count == 13); // as before the stretch: top over the cell
 }
 
 namespace {

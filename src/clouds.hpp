@@ -197,9 +197,9 @@ public:
     // through the layer at p, under it). The host declares the samplers HOST_TEXTURES and visit_host_frame's uniforms.
     static ov::str glsl_lookup();
     // The passes' compute shaders.
-    // The passes over a weather grid (its lookup, WeatherGrid::glsl_lookup) of p_levels levels.
-    static ov::str glsl_pass_march(const WeatherGrid &p_weather, int p_levels);
-    static ov::str glsl_pass_shadow(const WeatherGrid &p_weather, int p_levels);
+    // The passes over a weather grid (its lookup, WeatherGrid::glsl_lookup) and its levels.
+    static ov::str glsl_pass_march(const WeatherGrid &p_weather, const WeatherLevels &p_levels);
+    static ov::str glsl_pass_shadow(const WeatherGrid &p_weather, const WeatherLevels &p_levels);
     // A camera at p_camera_m's Frame over p_base with the sun towards p_sun (frame() adds the history, the wind, the
     // weather and the origin): the march's reach over a sphere of p_curvature_m (Atmosphere::ms_radius_m) and the shadow map.
     static Frame make_frame(const CloudLayer &p_layer, double p_curvature_m, const Float3 &p_camera_m, const Float3 &p_sun,

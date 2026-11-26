@@ -74,7 +74,7 @@ struct Snapshot {
     int width = 0;
     int height = 0;
     int levels = 0;
-    double dz_m = 0.0;
+    std::vector<double> faces_m; // the levels' interfaces' heights (levels + 1)
     double game_s = 0.0;
     std::vector<float> values; // field-major; a level field interior cell-major (WeatherFluid::cell_index), a column field per interior cell
     std::vector<float> wind; // 3 per interior cell and level: the wind in planet axes

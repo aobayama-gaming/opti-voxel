@@ -138,7 +138,7 @@ public:
     // Siebesma 1998, A1), q_sl.
     static void saturation_terms(double p_theta_l, double p_exner, double p_pc, double &r_a, double &r_b, double &r_qsl);
     // The heating rate (K/s) of the cloud's longwave flux per level of one column (qc per level).
-    static void longwave(const double *p_qc, const double *p_rho, const double *p_exner, double p_dz, int p_levels, double *r_heating);
+    static void longwave(const double *p_qc, const double *p_rho, const double *p_exner, const double *p_thick_m, int p_levels, double *r_heating);
 
 private:
     // The spread sigma_s per level of interior cell p_cell's column p_col (the scalars per level) from the shallow

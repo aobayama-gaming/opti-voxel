@@ -137,11 +137,11 @@ TEST_CASE("WeatherMoist: rain forms past 1 g/kg of cloud, falls out, and the col
 
 TEST_CASE("WeatherMoist: the longwave cools a cloud's top, nothing in clear air") {
     const int n = 15;
-    std::vector<double> qc(n, 0.0), rho(n, 1.15), exner(n, 1.0), heating(n);
+    std::vector<double> qc(n, 0.0), rho(n, 1.15), exner(n, 1.0), heating(n), thick(n, 40.0);
     for (int k = 5; k <= 8; k++) {
         qc[size_t(k)] = 0.0005;
     }
-    M::longwave(qc.data(), rho.data(), exner.data(), 40.0, n, heating.data());
+    M::longwave(qc.data(), rho.data(), exner.data(), thick.data(), n, heating.data());
     MESSAGE("cloud top ", heating[8] * 3600.0, " K/h, cloud base ", heating[5] * 3600.0, " K/h");
     CHECK(heating[8] * 3600.0 < -2.0); // DYCOMS' ~-4.7 K/h over the top 40 m
     CHECK(heating[5] > heating[8]);

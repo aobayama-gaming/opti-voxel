@@ -58,7 +58,8 @@ The simulation, approved with the user (2026-11-25): the non-hydrostatic moist B
 forcing physical and 2D (relief ignored: the SDF as the ground boundary comes later). Built in stages, each with its
 tests.
 - **`WeatherFluid`** (`src/weather_fluid.*`, engine-free): the dynamics only, `du/dt + u . grad u = -grad p + b up -
-  f up x u`, `div u = 0`, over a `WeatherGrid`'s columns in `levels` levels of `top / levels` (shallow atmosphere).
+  f up x u`, `div u = 0`, over a `WeatherGrid`'s columns in `levels` levels (`WeatherLevels`, below; shallow
+  atmosphere).
   A padded cell's record holds per level the wind (3D, planet axes: tangent part and w) and the physics' scalars.
   A step: `advect` (finite volume: every field, the wind's 3 components included, changes only by its fluxes through
   its volume's 6 faces, "Turbulence" below; `max_dt` keeps the sum of a volume's outflow Courant numbers within 0.5),
@@ -109,6 +110,23 @@ tests.
 - **The twist** (`Params::exchange`, 15): the surface fluxes' coefficients only. Sped up as well, radiation and
   subsidence (one time compression of the slow processes, tried) outran the boundary layer's turbulence, which runs at
   its own speed: the humid layer cooled to fog, the fog case's top overturned it into a deck at 180 m.
+
+## Levels
+`WeatherLevels` (`weather_fluid.hpp`): the one definition of the levels' heights, which the fluid, the physics, the
+debugger and the cloud shader all ask. `count` levels from the ground to `top_m`, each `stretch` times as thick as
+the one under it (the planet file's `stretch`, 1 by default: all alike): fine near the ground, where the thermals and
+the cloud base need them, coarse aloft, where a deep atmosphere is smooth (every cloud-resolving model stretches its
+levels: SAM, WRF). Geometric, so interface `m` is at `top (r^m - 1) / (r^n - 1)` and a height's level has a closed
+form, `log(1 + z (r^n - 1) / top) / log r`: its GLSL twin (`glsl_fraction`) is the cloud shader's texture coordinate,
+one constant, no table. `for_top(top, cell, stretch)` picks the count whose lowest level is about the cell's width.
+Every volume has its own bottom, centre and top (the levels', and the interfaces' for the vertical wind: a level's
+centre to the next's): the flux advection reconstructs a face's value at the face's height, the side faces' areas are
+the level's thickness, the interfaces' side speed is the two levels' weighted by their halves, the projection's
+vertical coefficient is the centres' distance, an interface's w and buoyancy are linear between the centres round it,
+the surface layer is the lowest level's thickness, the longwave and the convection's fluxes divide by each level's.
+Kessler's rain already fell between the levels' own heights. Checked (`test_weather_fluid.cpp`): the heights add up
+to the top, each `stretch` times the one under it, the index inverts them; a blob stirred through levels stretched by
+1.25 keeps its total to 1e-5 and its bounds.
 
 ## Turbulence
 An implicit large-eddy simulation: the advection is the one subgrid model, for the wind and every scalar, sideways and
@@ -274,7 +292,8 @@ eddy diffusivity the resolved flow's (no closure of its own since 2026-11-25); o
 ## Planet file
 `"weather"`: on by default over a sphere (`"on": false` turns it off), refused over a flat shape or a torus (until its
 grid lands). `cell_m` (the cells' width in metres; 0 or absent: 64 cells a cube face's side; refused where the side
-would leave [4, 1024]), `top_m` (the levels' top over the ground, 600; the levels about `cell_m` apart, at least 2),
+would leave [4, 1024]), `top_m` (the levels' top over the ground, 600), `stretch` (each level's thickness over the one under it, the
+lowest about `cell_m`, 1: all alike; in [1, 2]; "Levels"),
 `tick_hz` (2: a tick costs ~250 ms at 70 cells a face side, 5 a second fell behind), `time_scale` (game seconds a
 real second simulates, 1), `storm_m` (0: 1/8 of the
 radius), `spin_up_s` (game seconds simulated before the first frame, 600), `day_s` (the weather's day, 300), `sun_k` (the sun's warming of the grounds' baseline, 40), `relax_days` (the air's relaxation, 2),

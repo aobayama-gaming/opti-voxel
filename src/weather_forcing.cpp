@@ -192,7 +192,6 @@ void WeatherForcing::warm(const Float3 &p_towards_sun, double p_dt, const Weathe
     }
     r_ground.resize(climate.size());
     const int levels = p_fluid.levels();
-    const double dz = p_fluid.dz_m();
     const std::vector<float> &state = p_fluid.state();
     const double absorbed = SUN_W_M2 * (1.0 - GROUND_ALBEDO);
     parallel_for(uint32_t(g.faces() * g.height()), "WeatherForcing::warm", [&](uint32_t p_row) {
@@ -204,7 +203,7 @@ void WeatherForcing::warm(const Float3 &p_towards_sun, double p_dt, const Weathe
             double lwp = 0.0;
             for (int k = 0; k < levels; k++) {
                 const double extra = p_extra_cloud != nullptr ? double(p_extra_cloud[p_fluid.cell_index(c, k)]) : 0.0;
-                lwp += (double(here[p_fluid.scalar_offset(k, WeatherMoist::QC)]) + extra) * p_rho[size_t(k)] * dz;
+                lwp += (double(here[p_fluid.scalar_offset(k, WeatherMoist::QC)]) + extra) * p_rho[size_t(k)] * p_fluid.thick_m(k);
             }
             const double light = ov::max(dot3(&ups[c * 3], sun) / len, 0.0);
             const double q = absorbed * ((1.0 - cloud_albedo(lwp)) * light - year_light(c));

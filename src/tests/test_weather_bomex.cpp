@@ -67,7 +67,7 @@ struct Profiles {
 void force_column(WeatherFluid &p_fluid, const WeatherMoist::Sounding &p_sound, size_t p_in, float *p_here, double p_dt, std::vector<float> &r_b) {
     constexpr int MAX = WeatherFluid::MAX_LEVELS;
     const int levels = p_fluid.levels();
-    const double dz = p_fluid.dz_m();
+    const double dz = p_fluid.thick_m(0); // the surface fluxes go into the lowest level
     double col[WeatherMoist::SCALARS][MAX];
     for (int k = 0; k < levels; k++) {
         for (int s = 0; s < WeatherMoist::SCALARS; s++) {
@@ -77,7 +77,7 @@ void force_column(WeatherFluid &p_fluid, const WeatherMoist::Sounding &p_sound, 
     col[WeatherMoist::THETA][0] += THETA_FLUX * p_dt / dz;
     col[WeatherMoist::QV][0] += QT_FLUX * p_dt / dz;
     for (int k = 0; k + 1 < levels; k++) {
-        const double a = -table(SUBSIDENCE, 3, p_sound.z[size_t(k)]) * p_dt / dz;
+        const double a = -table(SUBSIDENCE, 3, p_sound.z[size_t(k)]) * p_dt / (p_sound.z[size_t(k + 1)] - p_sound.z[size_t(k)]);
         for (const int s : { int(WeatherMoist::THETA), int(WeatherMoist::QV), int(WeatherMoist::QC) }) {
             col[s][k] += a * (col[s][k + 1] - col[s][k]);
         }

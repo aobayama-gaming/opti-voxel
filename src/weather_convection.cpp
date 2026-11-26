@@ -43,7 +43,7 @@ void WeatherConvection::adjust(double p_theta_l, double p_qt, double p_exner, do
     r_theta = t / p_exner;
 }
 
-void WeatherConvection::plume(const double *p_theta, const double *p_qv, const double *p_qc, const double *p_exner, double p_dz, int p_levels,
+void WeatherConvection::plume(const double *p_theta, const double *p_qv, const double *p_qc, const double *p_exner, const double *p_z, int p_levels,
         const WeatherMoist::Surface &p_surface, double p_top_m, Plume &r_plume) {
     constexpr int MAX = WeatherFluid::MAX_LEVELS;
     r_plume.levels = 0;
@@ -59,9 +59,10 @@ void WeatherConvection::plume(const double *p_theta, const double *p_qv, const d
     if (!(buoyancy_flux > 0.0)) {
         return; // the ground does not heat the air: no thermals
     }
-    const double zs = ov::max(p_top_m, 2.0 * p_dz);
+    const double z1 = p_z[0];
+    const double dz0 = 2.0 * z1; // the lowest level's thickness
+    const double zs = ov::max(p_top_m, 2.0 * dz0);
     const double wstar = std::cbrt(M::GRAVITY / tv[0] * buoyancy_flux * zs);
-    const double z1 = 0.5 * p_dz;
     const double s1 = sigma_w(z1, zs, wstar, p_surface.ustar);
     if (!(s1 > 1e-6)) {
         return;
@@ -79,17 +80,18 @@ void WeatherConvection::plume(const double *p_theta, const double *p_qv, const d
         r_plume.levels = p_k + 1;
     };
     record(0, z1);
-    const double h = p_dz / SUBSTEPS;
     double z = z1;
     for (int k = 0; k + 1 < p_levels; k++) {
+        const double span = p_z[k + 1] - p_z[k];
+        const double h = span / SUBSTEPS;
         for (int s = 0; s < SUBSTEPS; s++) {
             const double zm = z + 0.5 * h;
-            const double f = (zm - (k + 0.5) * p_dz) / p_dz; // between levels k and k + 1
+            const double f = (zm - p_z[k]) / span; // between levels k and k + 1
             const double tle = tl[k] + f * (tl[k + 1] - tl[k]);
             const double qte = qt[k] + f * (qt[k + 1] - qt[k]);
             const double tve = tv[k] + f * (tv[k + 1] - tv[k]);
             const double exner = p_exner[k] + f * (p_exner[k + 1] - p_exner[k]);
-            const double eps = C_EPS * (1.0 / ov::max(zm, p_dz) + 1.0 / ov::max(zs - zm, p_dz));
+            const double eps = C_EPS * (1.0 / ov::max(zm, dz0) + 1.0 / ov::max(zs - zm, dz0));
             double theta, qc;
             adjust(tlu, qtu, exner, theta, qc);
             const double tvu = theta * (1.0 + 0.61 * (qtu - qc) - qc);
@@ -104,7 +106,7 @@ void WeatherConvection::plume(const double *p_theta, const double *p_qv, const d
             w2 = w2_next;
             z += h;
         }
-        record(k + 1, (k + 1.5) * p_dz);
+        record(k + 1, p_z[k + 1]);
     }
     r_plume.top_m = z;
 }
@@ -113,7 +115,6 @@ void WeatherConvection::apply(WeatherFluid &p_fluid, const std::vector<WeatherMo
     const WeatherGrid &g = p_fluid.grid();
     const int levels = p_fluid.levels();
     const int st = p_fluid.stride();
-    const double dz = p_fluid.dz_m();
     std::vector<float> &state = p_fluid.state();
     parallel_for(uint32_t(g.faces() * g.height()), "WeatherConvection::apply", [&](uint32_t p_row) {
         constexpr int MAX = WeatherFluid::MAX_LEVELS;
@@ -129,7 +130,7 @@ void WeatherConvection::apply(WeatherFluid &p_fluid, const std::vector<WeatherMo
                 qc[k] = here[p_fluid.scalar_offset(k, M::QC)];
             }
             Plume u;
-            plume(theta, qv, qc, ref.exner.data(), dz, levels, in < p_surface.size() ? p_surface[in] : M::Surface(), top[in], u);
+            plume(theta, qv, qc, ref.exner.data(), ref.z.data(), levels, in < p_surface.size() ? p_surface[in] : M::Surface(), top[in], u);
             top[in] = float(u.top_m);
             // The fluxes M (phi_u - phi) through the interface over each level the updraft reaches; none at the
             // ground (the surface's own are the moist physics') nor over its top.
@@ -141,6 +142,7 @@ void WeatherConvection::apply(WeatherFluid &p_fluid, const std::vector<WeatherMo
             }
             for (int k = 0; k < levels; k++) {
                 // theta_l and q_t change, the cloud water kept: theta by theta_l's change, the vapour by q_t's.
+                const double dz = p_fluid.thick_m(k);
                 here[p_fluid.scalar_offset(k, M::THETA)] = float(theta[k] - p_dt * (f_tl[k + 1] - f_tl[k]) / dz);
                 here[p_fluid.scalar_offset(k, M::QV)] = float(ov::max(qv[k] - p_dt * (f_qt[k + 1] - f_qt[k]) / dz, 0.0));
                 const double area = k < u.levels ? ov::min(u.mass[k] / ov::max(u.w[k], 1e-3), MAX_AREA) : 0.0;

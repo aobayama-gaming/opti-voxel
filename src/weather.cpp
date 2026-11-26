@@ -20,7 +20,8 @@ Weather::Weather(const WorldFile::Weather &p_weather, const BaseSurface &p_base,
         cells = std::make_shared<CubeSphereGrid>(WeatherGrid::MIN_N, p_base.get_radius() * p_voxel_m);
     }
     radius = p_base.get_radius() * p_voxel_m;
-    level_count = ov::clamp(int(std::lround(p_weather.top_m / cells->cell_m())), 2, WeatherFluid::MAX_LEVELS);
+    level_def = WeatherLevels::for_top(p_weather.top_m, cells->cell_m(), p_weather.stretch, WeatherFluid::MAX_LEVELS);
+    level_count = level_def.count;
     seed = p_seed;
     // The climate read at the level whose cells are about the grid's.
     const double cell_vox = cells->cell_m() / p_voxel_m;
@@ -78,6 +79,7 @@ void Weather::build() {
     WeatherFluid::Params fp;
     fp.levels = level_count;
     fp.top_m = settings.top_m;
+    fp.stretch = settings.stretch;
     fp.scalars = WeatherMoist::SCALARS;
     WeatherForcing::Params dp;
     dp.day_s = settings.day_s;

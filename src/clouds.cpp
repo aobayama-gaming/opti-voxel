@@ -71,8 +71,9 @@ float cloud_height_fraction(float altitude) {
 }
 
 // The cloud's density at p (height fraction hf): the simulation's cloud water, textured. Its levels (Weather: the
-// atlas's slice per level; R G the mean cloud water over FULL_CLOUD_QC of the two states), linear between their
-// middles, the lowest's down to the ground, the top's fading to none at the top; the states blended. The simulation
+// atlas's slice per level, at the levels' coordinate weather_level_fraction (WeatherLevels: stretched, finer near the
+// ground); R G the mean cloud water over FULL_CLOUD_QC of the two states), linear between their middles, the lowest's
+// down to the ground, the top's fading to none at the top; the states blended. The simulation
 // alone says where cloud is and how much: the noise (u uniform, carried by the wind) only scales it by 0.5 + u, a mean
 // of 1, so a cell's points average to its water and no threshold makes cloud appear or vanish (a noise thresholded
 // against the cell's saturation decided where the cloud was: fluffy, flickering; 2026-11-26). cloud_extinction is the
@@ -81,8 +82,9 @@ float cloud_density(vec3 p, float hf) {
     if (hf <= 0.0 || hf >= 1.0) {
         return 0.0;
     }
-    vec4 m = textureLod($MAP, vec3(weather_uv(p), clamp(hf, $HALF_LEVEL, 1.0 - $HALF_LEVEL)), 0.0);
-    float water = (m.r + (m.g - m.r) * cloud_weather_blend) * clamp((1.0 - hf) / $HALF_LEVEL, 0.0, 1.0);
+    float t = weather_level_fraction(hf);
+    vec4 m = textureLod($MAP, vec3(weather_uv(p), clamp(t, $HALF_LEVEL, 1.0 - $HALF_LEVEL)), 0.0);
+    float water = (m.r + (m.g - m.r) * cloud_weather_blend) * clamp((1.0 - t) / $HALF_LEVEL, 0.0, 1.0);
     if (water <= 0.0) {
         return 0.0;
     }
@@ -447,7 +449,7 @@ void visit_block(V &&p_v, const BaseSurface::Render &p_base, const Atmosphere::H
 
 // A pass of the grid's bindings (GLSL_PASS_HEAD) with p_main after the base, the shading frame, the atmosphere's lookups,
 // the cloud grid, the weather grid's lookup and the density.
-ov::str pass_glsl(const char *p_main, const WeatherGrid &p_weather, int p_levels) {
+ov::str pass_glsl(const char *p_main, const WeatherGrid &p_weather, const WeatherLevels &p_levels) {
     ov::str members;
     visit_block(GLSLUniforms::Declarations{ members }, BaseSurface::Render(), Atmosphere::HostConstants(), 0.0f, CloudLayer(), Clouds::Frame());
     const ov::str head = ov::replace_all(ov::str(GLSL_PASS_HEAD),
@@ -457,9 +459,9 @@ ov::str pass_glsl(const char *p_main, const WeatherGrid &p_weather, int p_levels
                     { "$B_ATMO_MULTISCATTER", ov::itos(B_ATMO_MULTISCATTER) }, { "$B_SAMPLER", ov::itos(B_SAMPLER) }, { "$B_SHADOW", ov::itos(B_SHADOW) }, { "$B_MAP", ov::itos(B_MAP) } });
     return head + BaseSurface::glsl_render() + ShadeFrame::glsl() +
             Atmosphere::glsl_lookup("sampler2D(atmo_volume_texture, linear)", "sampler2D(atmo_multiscatter_texture, linear)") + substitute(GLSL_GRID) +
-            p_weather.glsl_lookup() +
+            p_weather.glsl_lookup() + p_levels.glsl_fraction() +
             ov::replace_all(density_glsl(),
-                    { { "$HALF_LEVEL", ov::format("%.9g", 0.5 / double(ov::max(p_levels, 1))) } }) +
+                    { { "$HALF_LEVEL", ov::format("%.9g", 0.5 / double(ov::max(p_levels.count, 1))) } }) +
             substitute(p_main);
 }
 
@@ -502,11 +504,11 @@ ov::str Clouds::glsl_lookup() {
     return substitute(GLSL_GRID) + GLSL_LOOKUP;
 }
 
-ov::str Clouds::glsl_pass_march(const WeatherGrid &p_weather, int p_levels) {
+ov::str Clouds::glsl_pass_march(const WeatherGrid &p_weather, const WeatherLevels &p_levels) {
     return pass_glsl(GLSL_PASS_MARCH, p_weather, p_levels);
 }
 
-ov::str Clouds::glsl_pass_shadow(const WeatherGrid &p_weather, int p_levels) {
+ov::str Clouds::glsl_pass_shadow(const WeatherGrid &p_weather, const WeatherLevels &p_levels) {
     return pass_glsl(GLSL_PASS_SHADOW, p_weather, p_levels);
 }
 
@@ -536,7 +538,7 @@ void Clouds::start(ov::gpu::Device *p_device, const Atmosphere *p_atmosphere, co
     // Zeros (no cloud) until the weather's first state lands.
     const WeatherGrid &grid = p_weather.grid();
     Atlas atlas{ uint32_t(grid.stride_x()), uint32_t(grid.faces() * grid.stride_y()), uint32_t(p_weather.levels()),
-        glsl_pass_march(grid, p_weather.levels()), glsl_pass_shadow(grid, p_weather.levels()) };
+        glsl_pass_march(grid, p_weather.levels_def()), glsl_pass_shadow(grid, p_weather.levels_def()) };
     device->post([this, atlas, s = std::move(spread)]() { _rt_start(atlas, s); });
 }
 

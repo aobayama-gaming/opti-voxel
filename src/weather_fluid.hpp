@@ -2,6 +2,8 @@
 
 #include "weather_grid.hpp"
 
+#include "ov/str.hpp"
+
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -12,8 +14,10 @@
 //   du/dt + (u . grad) u = -grad p + b up - f up x u,   div u = 0
 // where p is the kinematic pressure perturbation (over the reference density), b the buoyancy the physics gives (m/s^2)
 // and f = 2 Omega n_y. Engine-free, in float state and double geometry.
-// - Cells: each column of the grid cut into `levels` levels of dz = top / levels (the shallow-atmosphere approximation:
-//   a level's cells share their column's surface metric). A padded cell's record (stride() floats) holds per level the
+// - Cells: each column of the grid cut into `levels` levels (WeatherLevels: each `stretch` times as thick as the one
+//   under it, fine near the ground; the shallow-atmosphere approximation: a level's cells share their column's surface
+//   metric). Every volume has its own bottom, centre and top: the levels', and the interfaces' (a level's centre to
+//   the next's); a value at a face is its volume's, linear from its centre to the face's height. A padded cell's record (stride() floats) holds per level the
 //   wind (a 3D vector in the planet's axes: its tangent part and its vertical part w along the up) and `scalars` scalars
 //   the physics owns (WeatherPhysics: the potential temperature first).
 // - A step (the caller's, at most max_dt() long): advect(dt), then the caller's physics on state() (it may change the
@@ -50,6 +54,29 @@
 //   BOMEX, the extra rain evaporating into a 5 K/h cooling); this scheme conserves it.
 // Every interior cell of a pass is written from the previous state only (red-black: one colour from the other), so
 // parallel_for over rows gives the same bits on any thread count.
+
+// The levels' heights (docs/weather.md "Levels"): `count` levels from the ground to top_m, each `stretch` times as thick
+// as the one under it (1: all alike), the lowest top_m (r - 1) / (r^count - 1). Geometric, so a height's level has a
+// closed form (index_at; its GLSL twin, glsl_fraction): the cloud shader needs no table.
+struct WeatherLevels {
+    int count = 15;
+    double top_m = 600.0;
+    double stretch = 1.0;
+
+    // The levels up to p_top_m whose lowest is about p_bottom_m thick, each p_stretch times the one under it, in
+    // [2, p_max].
+    static WeatherLevels for_top(double p_top_m, double p_bottom_m, double p_stretch, int p_max);
+    // Interface p_m's height, p_m in [0, count] (0 the ground, count the top).
+    double face_m(int p_m) const;
+    double centre_m(int p_k) const { return 0.5 * (face_m(p_k) + face_m(p_k + 1)); }
+    double thick_m(int p_k) const { return face_m(p_k + 1) - face_m(p_k); }
+    // Height p_z_m in levels: 0 at the ground, k at the bottom of level k, count at the top.
+    double index_at(double p_z_m) const;
+    // `float weather_level_fraction(float hf)`: index_at(hf top_m) / count for a height fraction hf (a texture of the
+    // levels' coordinate; hf itself when the levels are alike).
+    ov::str glsl_fraction() const;
+};
+
 class WeatherFluid {
 public:
     static constexpr int WIND = 3; // the wind's floats, first in a level's record
@@ -63,6 +90,7 @@ public:
     struct Params {
         int levels = 15; // in [2, MAX_LEVELS]
         double top_m = 600.0;
+        double stretch = 1.0; // each level's thickness over the one under it (WeatherLevels), at least 1
         int scalars = 1; // in [0, MAX_SCALARS]
         double omega_rad_s = 0.0; // the Coriolis's Omega
         int pressure_sweeps = 20;
@@ -76,10 +104,12 @@ public:
 
     const WeatherGrid &grid() const { return *cells; }
     int levels() const { return params.levels; }
-    double dz_m() const { return dz; }
+    const WeatherLevels &level_def() const { return vert; }
     double top_m() const { return params.top_m; }
-    // A level's centre's altitude (metres).
-    double level_m(int p_level) const { return (p_level + 0.5) * dz; }
+    // A level's centre's altitude, its thickness, an interface's height (p_m in [0, levels]) (metres).
+    double level_m(int p_level) const { return lv_centre[size_t(p_level)]; }
+    double thick_m(int p_level) const { return lv_top[size_t(p_level)] - lv_bottom[size_t(p_level)]; }
+    double face_m(int p_m) const { return iv_centre[size_t(p_m)]; }
     int scalars() const { return params.scalars; }
     int per_level() const { return WIND + params.scalars; }
     int stride() const { return params.levels * per_level(); }
@@ -95,8 +125,8 @@ public:
     std::vector<float> &state() { return cur; }
     const std::vector<float> &state() const { return cur; }
     void fill_halo();
-    // The interfaces' vertical wind from the centres' (each interface the mean of the two levels round it; the ground's
-    // and the top's 0).
+    // The interfaces' vertical wind from the centres' (each interface linear between the two levels round it; the
+    // ground's and the top's 0).
     void vertical_from_centres();
     // The vertical wind (m/s) at interface p_m of a padded cell: p_m in [0, levels], the bottom of level p_m (0 the ground,
     // levels the top: both 0).
@@ -153,7 +183,10 @@ private:
 
     std::shared_ptr<const WeatherGrid> cells;
     Params params;
-    double dz = 40.0;
+    WeatherLevels vert;
+    // Each volume's bottom, centre and top (metres): the levels' (levels), the interfaces' (levels + 1: a level's centre
+    // to the next's, the ground's and the top's halves).
+    std::vector<double> lv_bottom, lv_centre, lv_top, iv_bottom, iv_centre, iv_top;
     std::vector<Column> column;
     std::vector<float> cur;
     std::vector<float> next;
@@ -175,12 +208,16 @@ private:
     void neighbours(int p_face, int p_i, int p_j, size_t r_nb[SIDES]) const;
     // Both halos (the state's and the interfaces').
     void halo();
-    // Each interior centre's vertical wind set to the mean of its interfaces', then the halos.
+    // Each interior centre's vertical wind set to the mean of its interfaces' (the centre halfway), then the halos.
     void centre_vertical();
     float *face_w(size_t p_padded) { return &wf[p_padded * size_t(params.levels + 1)]; }
     const float *face_w(size_t p_padded) const { return &wf[p_padded * size_t(params.levels + 1)]; }
     void make_columns();
     void make_faces();
+    // Where interface p_m (in [1, levels - 1]) sits between the centres under and over it: 0 the one under, 1 the one over.
+    double up_share(int p_m) const {
+        return (iv_centre[size_t(p_m)] - lv_centre[size_t(p_m - 1)]) / (lv_centre[size_t(p_m)] - lv_centre[size_t(p_m - 1)]);
+    }
     bool owns(size_t p_interior, int p_side) const { return p_interior < column[p_interior].across[p_side]; }
     // A face's geometry (its owner's) and outward speed from either side.
     double face_length(size_t p_interior, int p_side) const {
@@ -200,10 +237,11 @@ private:
     // side_speed (project() then corrects them).
     void face_speeds();
     // One forward-Euler stage of the flux-form advection (advect) from p_in to r_out (halo filled): p_count volumes per
-    // padded cell of p_per fields each, those from p_first to p_last moved; p_vertical(padded, v) the speed up through
-    // the face between volumes v - 1 and v, p_side(interior, v, s) the speed out through side s.
+    // padded cell of p_per fields each, those from p_first to p_last moved; volume v from p_bottom[v] to p_top[v], its
+    // centre at p_centre[v]; p_vertical(padded, v) the speed up through the face between volumes v - 1 and v,
+    // p_side(interior, v, s) the speed out through side s.
     template <typename Vertical, typename Side>
     void flux_stage(const std::vector<float> &p_in, std::vector<float> &r_out, int p_count, int p_per, int p_first, int p_last, double p_dt,
-            Vertical p_vertical, Side p_side);
+            const double *p_bottom, const double *p_centre, const double *p_top, Vertical p_vertical, Side p_side);
     void sweep(int p_colour);
 };

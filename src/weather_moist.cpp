@@ -170,13 +170,13 @@ double WeatherMoist::kessler(double *r_theta, double *r_qv, double *r_qc, double
     return precl / split;
 }
 
-void WeatherMoist::longwave(const double *p_qc, const double *p_rho, const double *p_exner, double p_dz, int p_levels, double *r_heating) {
+void WeatherMoist::longwave(const double *p_qc, const double *p_rho, const double *p_exner, const double *p_thick_m, int p_levels, double *r_heating) {
     constexpr int MAX = WeatherFluid::MAX_LEVELS;
     // The optical depth of each level, then the flux at each interface (0 the ground, levels the top).
     double q[MAX];
     double total = 0.0;
     for (int k = 0; k < p_levels; k++) {
-        q[k] = LW_KAPPA * p_rho[k] * p_qc[k] * p_dz;
+        q[k] = LW_KAPPA * p_rho[k] * p_qc[k] * p_thick_m[k];
         total += q[k];
     }
     double flux[MAX + 1];
@@ -188,7 +188,7 @@ void WeatherMoist::longwave(const double *p_qc, const double *p_rho, const doubl
         }
     }
     for (int k = 0; k < p_levels; k++) {
-        r_heating[k] = -(flux[k + 1] - flux[k]) / (p_rho[k] * CP * p_exner[k] * p_dz);
+        r_heating[k] = -(flux[k + 1] - flux[k]) / (p_rho[k] * CP * p_exner[k] * p_thick_m[k]);
     }
 }
 
@@ -196,7 +196,6 @@ void WeatherMoist::spread(size_t p_cell, const double (*p_col)[WeatherFluid::MAX
         const WeatherFluid &p_fluid, double *r_sigma) const {
     constexpr int MAX = WeatherFluid::MAX_LEVELS;
     const int levels = p_fluid.levels();
-    const double dz = p_fluid.dz_m();
     double theta_l[MAX], qw[MAX], a[MAX], b[MAX];
     for (int k = 0; k < levels; k++) {
         const double exner = sound.exner[size_t(k)];
@@ -207,14 +206,14 @@ void WeatherMoist::spread(size_t p_cell, const double (*p_col)[WeatherFluid::MAX
     }
     // tau: the boundary layer's turnover z_i / w* (w* from the surface's buoyancy flux; at least u* and 0.1 m/s).
     const double top = p_convective.top_m ? double(p_convective.top_m[p_cell]) : 0.0;
-    const double zi = ov::max(top, 2.0 * dz);
+    const double zi = ov::max(top, p_fluid.face_m(2));
     const Surface &sf = surface_flux[p_cell];
     const double buoyancy_flux = GRAVITY / p_col[THETA][0] * (double(sf.theta_flux) + 0.61 * p_col[THETA][0] * double(sf.qv_flux));
     const double wstar = std::cbrt(ov::max(buoyancy_flux, 0.0) * zi);
     const double tau = zi / ov::max(ov::max(wstar, double(sf.ustar)), 0.1);
     for (int k = 0; k < levels; k++) {
         const int k0 = ov::max(k - 1, 0), k1 = ov::min(k + 1, levels - 1);
-        const double span = double(k1 - k0) * dz;
+        const double span = p_fluid.level_m(k1) - p_fluid.level_m(k0);
         const double ds = (a[k] * (qw[k1] - qw[k0]) - b[k] * (theta_l[k1] - theta_l[k0])) / span;
         double production = 0.0;
         if (p_convective.qt_flux) {
@@ -230,7 +229,11 @@ void WeatherMoist::apply(WeatherFluid &p_fluid, const std::vector<Ground> &p_gro
     const WeatherGrid &g = p_fluid.grid();
     const int levels = p_fluid.levels();
     const int st = p_fluid.stride();
-    const double dz = p_fluid.dz_m();
+    const double dz0 = p_fluid.thick_m(0); // the lowest level: the surface layer
+    double thick[WeatherFluid::MAX_LEVELS];
+    for (int k = 0; k < levels; k++) {
+        thick[k] = p_fluid.thick_m(k);
+    }
     const double clear = CLEAR_COOLING / 86400.0;
     const double sink = params.subsidence_per_s;
     std::vector<float> &state = p_fluid.state();
@@ -249,7 +252,7 @@ void WeatherMoist::apply(WeatherFluid &p_fluid, const std::vector<Ground> &p_gro
             }
             // Subsidence: w = -D z, upwind (from above; the top level's air from its own level).
             for (int k = 0; k + 1 < levels; k++) {
-                const double a = sink * sound.z[size_t(k)] * p_dt / dz;
+                const double a = sink * sound.z[size_t(k)] * p_dt / (sound.z[size_t(k + 1)] - sound.z[size_t(k)]);
                 for (int s = 0; s < SCALARS; s++) {
                     col[s][k] += a * (col[s][k + 1] - col[s][k]);
                 }
@@ -262,8 +265,8 @@ void WeatherMoist::apply(WeatherFluid &p_fluid, const std::vector<Ground> &p_gro
             const double w = u[0] * up[0] + u[1] * up[1] + u[2] * up[2];
             double h[3] = { u[0] - w * up[0], u[1] - w * up[1], u[2] - w * up[2] };
             const double speed = ov::max(std::sqrt(h[0] * h[0] + h[1] * h[1] + h[2] * h[2]), GUSTINESS);
-            const double c = neutral_exchange(0.5 * dz, ov::max(double(gr.z0_m), 1e-6)) * params.exchange;
-            const double a = c * speed * p_dt / dz;
+            const double c = neutral_exchange(0.5 * dz0, ov::max(double(gr.z0_m), 1e-6)) * params.exchange;
+            const double a = c * speed * p_dt / dz0;
             for (int k = 0; k < 3; k++) {
                 u[k] = float(h[k] / (1.0 + a) + w * up[k]);
             }
@@ -273,10 +276,10 @@ void WeatherMoist::apply(WeatherFluid &p_fluid, const std::vector<Ground> &p_gro
             const double ae = qs > col[QV][0] ? a * double(gr.wetness) : a;
             const double d_qv = (qs - col[QV][0]) * ae / (1.0 + ae);
             col[QV][0] += d_qv;
-            surface_flux[in] = Surface{ float(d_theta * dz / p_dt), float(d_qv * dz / p_dt), float(std::sqrt(c) * speed) };
+            surface_flux[in] = Surface{ float(d_theta * dz0 / p_dt), float(d_qv * dz0 / p_dt), float(std::sqrt(c) * speed) };
             // Radiation: the cloud's longwave and the clear air's cooling.
             double heating[MAX];
-            longwave(col[QC], sound.rho.data(), sound.exner.data(), dz, levels, heating);
+            longwave(col[QC], sound.rho.data(), sound.exner.data(), thick, levels, heating);
             for (int k = 0; k < levels; k++) {
                 col[THETA][k] += (heating[k] - clear) * p_dt;
             }

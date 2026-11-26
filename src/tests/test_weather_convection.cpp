@@ -89,7 +89,7 @@ TEST_CASE("WeatherConvection: over a trade-wind sea the updraft saturates under 
     read_column(f, M::QV, qv);
     read_column(f, M::QC, qc);
     C::Plume u;
-    C::plume(theta, qv, qc, c.sounding.exner.data(), f.dz_m(), f.levels(), BOMEX, 300.0, u);
+    C::plume(theta, qv, qc, c.sounding.exner.data(), c.sounding.z.data(), f.levels(), BOMEX, 300.0, u);
     CHECK_OR_RETURN(u.levels > 0);
     int base = -1;
     for (int k = 0; k < u.levels; k++) {
@@ -97,14 +97,14 @@ TEST_CASE("WeatherConvection: over a trade-wind sea the updraft saturates under 
             base = k;
         }
     }
-    MESSAGE(std::string(ov::format("base level %d (%.0f m), top %.0f m, M %.3f m/s at the ground", base, (base + 0.5) * f.dz_m(), u.top_m, u.mass[0]).c_str()));
+    MESSAGE(std::string(ov::format("base level %d (%.0f m), top %.0f m, M %.3f m/s at the ground", base, f.level_m(base), u.top_m, u.mass[0]).c_str()));
     CHECK(base >= 1);
-    CHECK((base + 0.5) * f.dz_m() < 300.0); // under the inversion
-    CHECK(u.top_m > (base + 0.5) * f.dz_m());
+    CHECK(f.level_m(base) < 300.0); // under the inversion
+    CHECK(u.top_m > f.level_m(base));
     CHECK(u.top_m < 450.0); // the inversion caps it
     // Over a ground no warmer than its air: no updraft.
     C::Plume none;
-    C::plume(theta, qv, qc, c.sounding.exner.data(), f.dz_m(), f.levels(), M::Surface{ -1e-3f, 0.0f, 0.2f }, 300.0, none);
+    C::plume(theta, qv, qc, c.sounding.exner.data(), c.sounding.z.data(), f.levels(), M::Surface{ -1e-3f, 0.0f, 0.2f }, 300.0, none);
     CHECK(none.levels == 0);
 }
 

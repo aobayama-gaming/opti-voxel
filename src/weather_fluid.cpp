@@ -23,6 +23,38 @@ double dotf(const float *p_a, const float *p_b) {
 
 } // namespace
 
+WeatherLevels WeatherLevels::for_top(double p_top_m, double p_bottom_m, double p_stretch, int p_max) {
+    WeatherLevels l;
+    l.top_m = p_top_m;
+    l.stretch = p_stretch;
+    const double r = p_stretch;
+    const double n = r > 1.0 ? std::log(1.0 + p_top_m * (r - 1.0) / p_bottom_m) / std::log(r) : p_top_m / p_bottom_m;
+    l.count = ov::clamp(int(std::lround(n)), 2, p_max);
+    return l;
+}
+
+double WeatherLevels::face_m(int p_m) const {
+    if (stretch <= 1.0) {
+        return top_m * double(p_m) / double(count);
+    }
+    return top_m * (std::pow(stretch, double(p_m)) - 1.0) / (std::pow(stretch, double(count)) - 1.0);
+}
+
+double WeatherLevels::index_at(double p_z_m) const {
+    if (stretch <= 1.0) {
+        return p_z_m / top_m * double(count);
+    }
+    return std::log(1.0 + p_z_m / top_m * (std::pow(stretch, double(count)) - 1.0)) / std::log(stretch);
+}
+
+ov::str WeatherLevels::glsl_fraction() const {
+    if (stretch <= 1.0) {
+        return "float weather_level_fraction(float hf) {\n    return hf;\n}\n";
+    }
+    const double a = std::pow(stretch, double(count)) - 1.0;
+    return ov::format("float weather_level_fraction(float hf) {\n    return log(1.0 + hf * %.9g) / %.9g;\n}\n", a, std::log(1.0 + a));
+}
+
 WeatherFluid::WeatherFluid(std::shared_ptr<const WeatherGrid> p_grid, const Params &p_params) :
         cells(std::move(p_grid)), params(p_params) {
     if (params.levels < 2 || params.levels > MAX_LEVELS) {
@@ -40,7 +72,21 @@ WeatherFluid::WeatherFluid(std::shared_ptr<const WeatherGrid> p_grid, const Para
     if (!(params.sponge_m > 0.0)) {
         params.sponge_m = 0.2 * params.top_m;
     }
-    dz = params.top_m / params.levels;
+    if (!(params.stretch >= 1.0) || params.stretch > 2.0) {
+        OV_ERR_PRINT(ov::format("WeatherFluid: a stretch of %g is outside [1, 2].", params.stretch));
+        params.stretch = ov::clamp(std::isfinite(params.stretch) ? params.stretch : 1.0, 1.0, 2.0);
+    }
+    vert = WeatherLevels{ params.levels, params.top_m, params.stretch };
+    for (int k = 0; k < params.levels; k++) {
+        lv_bottom.push_back(vert.face_m(k));
+        lv_top.push_back(vert.face_m(k + 1));
+        lv_centre.push_back(vert.centre_m(k));
+    }
+    for (int m = 0; m <= params.levels; m++) {
+        iv_centre.push_back(vert.face_m(m));
+        iv_bottom.push_back(m > 0 ? lv_centre[size_t(m - 1)] : 0.0);
+        iv_top.push_back(m < params.levels ? lv_centre[size_t(m)] : params.top_m);
+    }
     const WeatherGrid &g = *cells;
     cur.assign(g.padded_cells() * size_t(stride()), 0.0f);
     next = cur;
@@ -239,7 +285,8 @@ void WeatherFluid::vertical_from_centres() {
                 w[0] = 0.0f;
                 w[params.levels] = 0.0f;
                 for (int m = 1; m < params.levels; m++) {
-                    w[m] = float(0.5 * (dotf(here + wind_offset(m - 1), c.up) + dotf(here + wind_offset(m), c.up)));
+                    const double below = dotf(here + wind_offset(m - 1), c.up);
+                    w[m] = float(below + up_share(m) * (dotf(here + wind_offset(m), c.up) - below));
                 }
             }
         }
@@ -299,7 +346,9 @@ double WeatherFluid::max_dt() const {
                     // most sqrt(2) of its speed, w at the centre or either interface.
                     const float *wi = face_w(g.index(face, i, j));
                     const double wv = ov::max(std::fabs(w), ov::max(std::fabs(double(wi[k])), std::fabs(double(wi[k + 1]))));
-                    rate = ov::max(rate, std::sqrt(2.0) * h / min_spacing_m + wv / dz);
+                    // The thinnest volume w crosses here: the level or the one under it (stretch >= 1), whose
+                    // thickness bounds the interfaces' round level k.
+                    rate = ov::max(rate, std::sqrt(2.0) * h / min_spacing_m + wv / thick_m(ov::max(k - 1, 0)));
                 }
             }
         }
@@ -340,7 +389,7 @@ double WeatherFluid::outward(size_t p_interior, int p_level, int p_side) const {
 }
 template <typename Vertical, typename Side>
 void WeatherFluid::flux_stage(const std::vector<float> &p_in, std::vector<float> &r_out, int p_count, int p_per, int p_first, int p_last, double p_dt,
-        Vertical p_vertical, Side p_side) {
+        const double *p_bottom, const double *p_centre, const double *p_top, Vertical p_vertical, Side p_side) {
     const WeatherGrid &g = *cells;
     const size_t rec = size_t(p_count) * size_t(p_per);
     std::vector<float> &grad = p_count == params.levels ? grad_c : grad_w;
@@ -362,7 +411,7 @@ void WeatherFluid::flux_stage(const std::vector<float> &p_in, std::vector<float>
                     const double x = at(here, v, f);
                     const double di = at(nb[0], v, f) - at(nb[1], v, f);
                     const double dj = at(nb[2], v, f) - at(nb[3], v, f);
-                    const double dk = (at(here, v1, f) - at(here, v0, f)) / (double(v1 - v0) * dz);
+                    const double dk = (at(here, v1, f) - at(here, v0, f)) / (p_centre[v1] - p_centre[v0]);
                     double gr[3];
                     for (int a = 0; a < 3; a++) {
                         gr[a] = c.ax[a] * di + c.ay[a] * dj + c.up[a] * dk;
@@ -385,9 +434,9 @@ void WeatherFluid::flux_stage(const std::vector<float> &p_in, std::vector<float>
                     for (int s = 0; s < SIDES; s++) {
                         limit(0.5 * c.distance[s] * (gr[0] * c.normal[s][0] + gr[1] * c.normal[s][1] + gr[2] * c.normal[s][2]));
                     }
-                    const double up = 0.5 * dz * (gr[0] * c.up[0] + gr[1] * c.up[1] + gr[2] * c.up[2]);
-                    limit(up);
-                    limit(-up);
+                    const double gk = gr[0] * c.up[0] + gr[1] * c.up[1] + gr[2] * c.up[2];
+                    limit((p_top[v] - p_centre[v]) * gk);
+                    limit((p_bottom[v] - p_centre[v]) * gk);
                     float *o = &grad[(here * rec + size_t(v * p_per + f)) * 3];
                     for (int a = 0; a < 3; a++) {
                         o[a] = float(alpha * gr[a]);
@@ -400,7 +449,7 @@ void WeatherFluid::flux_stage(const std::vector<float> &p_in, std::vector<float>
     // what one loses the other gains to the bit.
     auto face_flux = [&](size_t p_o, int p_s, int p_v, int p_f) {
         const Column &c = column[p_o];
-        const double u = p_side(p_o, p_v, p_s) * double(c.length[p_s]) * dz;
+        const double u = p_side(p_o, p_v, p_s) * double(c.length[p_s]) * (p_top[p_v] - p_bottom[p_v]);
         const double h = 0.5 * double(c.distance[p_s]);
         const double r[3] = { h * c.normal[p_s][0], h * c.normal[p_s][1], h * c.normal[p_s][2] };
         const size_t cell = u >= 0.0 ? padded(p_o) : size_t(c.across_pad[p_s]);
@@ -419,7 +468,6 @@ void WeatherFluid::flux_stage(const std::vector<float> &p_in, std::vector<float>
                 const float *gr = &grad[(here * rec + size_t(p_v * p_per + p_f)) * 3];
                 return at(here, p_v, p_f) + p_up * (gr[0] * c.up[0] + gr[1] * c.up[1] + gr[2] * c.up[2]);
             };
-            const double volume = double(c.area) * dz;
             for (int v = 0; v < p_count; v++) {
                 for (int f = 0; f < p_per; f++) {
                     double out = at(here, v, f);
@@ -430,13 +478,13 @@ void WeatherFluid::flux_stage(const std::vector<float> &p_in, std::vector<float>
                         }
                         if (v > 0) {
                             const double w = p_vertical(here, v) * double(c.area);
-                            flux -= w * (w >= 0.0 ? value(v - 1, f, 0.5 * dz) : value(v, f, -0.5 * dz));
+                            flux -= w * (w >= 0.0 ? value(v - 1, f, p_top[v - 1] - p_centre[v - 1]) : value(v, f, p_bottom[v] - p_centre[v]));
                         }
                         if (v + 1 < p_count) {
                             const double w = p_vertical(here, v + 1) * double(c.area);
-                            flux += w * (w >= 0.0 ? value(v, f, 0.5 * dz) : value(v + 1, f, -0.5 * dz));
+                            flux += w * (w >= 0.0 ? value(v, f, p_top[v] - p_centre[v]) : value(v + 1, f, p_bottom[v + 1] - p_centre[v + 1]));
                         }
-                        out -= p_dt * flux / volume;
+                        out -= p_dt * flux / (double(c.area) * (p_top[v] - p_bottom[v]));
                     }
                     r_out[here * rec + size_t(v * p_per + f)] = float(out);
                 }
@@ -450,20 +498,26 @@ void WeatherFluid::advect(double p_dt) {
     const size_t fst = size_t(levels + 1);
     halo();
     // The levels' volumes: through their sides the centres' mean wind, through their tops and bottoms the interfaces'.
-    // The interfaces' volumes (a level's centre to the next's): the two levels' side speeds, at their tops and bottoms
-    // the levels' centres' w (the interfaces' means). The ground's and the top's interface stay 0.
+    // The interfaces' volumes (a level's centre to the next's): the two levels' side speeds weighted by their halves in
+    // it, at their tops and bottoms the levels' centres' w (the interfaces' means). The ground's and the top's interface
+    // stay 0.
     auto level_vertical = [&](size_t p_cell, int p_v) { return double(wf_from[p_cell * fst + size_t(p_v)]); };
     auto level_side = [&](size_t p_in, int p_v, int p_s) { return outward(p_in, p_v, p_s); };
     auto interface_vertical = [&](size_t p_cell, int p_v) {
         return 0.5 * (double(wf_from[p_cell * fst + size_t(p_v - 1)]) + wf_from[p_cell * fst + size_t(p_v)]);
     };
-    auto interface_side = [&](size_t p_in, int p_v, int p_s) { return 0.5 * (level_side(p_in, p_v - 1, p_s) + level_side(p_in, p_v, p_s)); };
+    auto interface_side = [&](size_t p_in, int p_v, int p_s) {
+        const double below = thick_m(p_v - 1), above = thick_m(p_v);
+        return (level_side(p_in, p_v - 1, p_s) * below + level_side(p_in, p_v, p_s) * above) / (below + above);
+    };
     wf_from = wf; // the speeds stay the step's start's through both stages
     // Heun (SSP-RK2, Shu & Osher 1988): two stages, their mean with the start.
-    flux_stage(cur, next, levels, per_level(), 0, levels - 1, p_dt, level_vertical, level_side);
-    flux_stage(wf, wf_next, levels + 1, 1, 1, levels - 1, p_dt, interface_vertical, interface_side);
-    flux_stage(next, corr, levels, per_level(), 0, levels - 1, p_dt, level_vertical, level_side);
-    flux_stage(wf_next, wf_corr, levels + 1, 1, 1, levels - 1, p_dt, interface_vertical, interface_side);
+    const double *lb = lv_bottom.data(), *lc = lv_centre.data(), *lt = lv_top.data();
+    const double *ib = iv_bottom.data(), *ic = iv_centre.data(), *it = iv_top.data();
+    flux_stage(cur, next, levels, per_level(), 0, levels - 1, p_dt, lb, lc, lt, level_vertical, level_side);
+    flux_stage(wf, wf_next, levels + 1, 1, 1, levels - 1, p_dt, ib, ic, it, interface_vertical, interface_side);
+    flux_stage(next, corr, levels, per_level(), 0, levels - 1, p_dt, lb, lc, lt, level_vertical, level_side);
+    flux_stage(wf_next, wf_corr, levels + 1, 1, 1, levels - 1, p_dt, ib, ic, it, interface_vertical, interface_side);
     for (size_t n = 0; n < cur.size(); n++) {
         cur[n] = 0.5f * (cur[n] + corr[n]);
     }
@@ -485,11 +539,12 @@ void WeatherFluid::force(double p_dt, const float *p_buoyancy) {
             const Column &c = column[in];
             const double up[3] = { c.up[0], c.up[1], c.up[2] };
             float *here = &cur[g.index(face, i, j) * size_t(st)];
-            // The buoyancy and the sponge on the interfaces (the buoyancy the mean of the two levels').
+            // The buoyancy and the sponge on the interfaces (the buoyancy linear between the two levels').
             float *wi = face_w(g.index(face, i, j));
             for (int m = 1; m < params.levels; m++) {
-                double w = wi[m] + 0.5 * (double(p_buoyancy[cell_index(in, m - 1)]) + p_buoyancy[cell_index(in, m)]) * p_dt;
-                const double into = (double(m) * dz - sponge_base) / params.sponge_m;
+                const double b0 = p_buoyancy[cell_index(in, m - 1)];
+                double w = wi[m] + (b0 + up_share(m) * (double(p_buoyancy[cell_index(in, m)]) - b0)) * p_dt;
+                const double into = (face_m(m) - sponge_base) / params.sponge_m;
                 if (into > 0.0) {
                     w /= 1.0 + p_dt / params.sponge_tau_s * into * into;
                 }
@@ -512,11 +567,11 @@ double WeatherFluid::divergence(size_t p_interior, int p_level) const {
     const Column &c = column[p_interior];
     double flux = 0.0;
     for (int s = 0; s < SIDES; s++) {
-        flux += outward(p_interior, p_level, s) * face_length(p_interior, s) * dz;
+        flux += outward(p_interior, p_level, s) * face_length(p_interior, s) * thick_m(p_level);
     }
     const float *w = face_w(padded(p_interior));
     flux += (double(w[p_level + 1]) - w[p_level]) * c.area;
-    return flux / (double(c.area) * dz);
+    return flux / (double(c.area) * thick_m(p_level));
 }
 double WeatherFluid::max_divergence() const {
     double m = 0.0;
@@ -541,20 +596,21 @@ void WeatherFluid::sweep(int p_colour) {
             const size_t in = g.interior(face, i, j);
             const Column &c = column[in];
             const size_t at = g.index(face, i, j) * size_t(levels);
-            const double vertical = double(c.area) / dz;
             for (int k = (i + j + p_colour) & 1; k < levels; k += 2) {
                 double sum = 0.0;
                 double diag = 0.0;
                 for (int s = 0; s < SIDES; s++) {
-                    const double a = face_length(in, s) * dz / face_distance(in, s);
+                    const double a = face_length(in, s) * thick_m(k) / face_distance(in, s);
                     sum += a * p_from[size_t(c.across_pad[s]) * size_t(levels) + size_t(k)];
                     diag += a;
                 }
                 if (k + 1 < levels) {
+                    const double vertical = double(c.area) / (level_m(k + 1) - level_m(k));
                     sum += vertical * p_from[at + size_t(k + 1)];
                     diag += vertical;
                 }
                 if (k > 0) {
+                    const double vertical = double(c.area) / (level_m(k) - level_m(k - 1));
                     sum += vertical * p_from[at + size_t(k - 1)];
                     diag += vertical;
                 }
@@ -575,7 +631,7 @@ void WeatherFluid::project(double p_dt) {
         for (int i = 0; i < g.width(); i++) {
             const size_t in = g.interior(face, i, j);
             for (int k = 0; k < levels; k++) {
-                rhs[cell_index(in, k)] = float(divergence(in, k) * double(column[in].area) * dz / p_dt);
+                rhs[cell_index(in, k)] = float(divergence(in, k) * double(column[in].area) * thick_m(k) / p_dt);
             }
         } }, ov::Priority::LOW);
     for (int it = 0; it < params.pressure_sweeps; it++) {
@@ -631,7 +687,7 @@ void WeatherFluid::project(double p_dt) {
             float *here = &cur[g.index(face, i, j) * size_t(st)];
             float *wi = face_w(g.index(face, i, j));
             for (int m = 1; m < levels; m++) {
-                wi[m] = float(wi[m] - p_dt * (double(p[at + size_t(m)]) - p[at + size_t(m - 1)]) / dz);
+                wi[m] = float(wi[m] - p_dt * (double(p[at + size_t(m)]) - p[at + size_t(m - 1)]) / (level_m(m) - level_m(m - 1)));
             }
             for (int k = 0; k < levels; k++) {
                 double grad[3] = { 0.0, 0.0, 0.0 };

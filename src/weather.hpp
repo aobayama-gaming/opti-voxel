@@ -95,8 +95,9 @@ public:
     bool at(const double p_pos[3], Sample &r_sample) const;
     // Each level's cloud (over FULL_CLOUD) under a position: r_levels gets levels() floats (false before the first state).
     bool clouds_at(const double p_pos[3], float *r_levels) const;
-    // The levels (the planet file's top_m over about its cells' width), each one top_m / levels thick.
+    // The levels (the planet file's top_m, the lowest about its cells' width thick, each stretch times the one under it).
     int levels() const { return level_count; }
+    const WeatherLevels &levels_def() const { return level_def; }
     double top_m() const { return settings.top_m; }
     // A published state's floats per padded cell: LOOK, then a cloud per level.
     int stride() const { return LOOK + level_count; }
@@ -132,6 +133,7 @@ private:
     WorldFile::Weather settings;
     std::shared_ptr<const WeatherGrid> cells;
     int level_count = 1;
+    WeatherLevels level_def;
     double radius = 1.0;
     uint32_t seed = 0;
     BaseSurface base;

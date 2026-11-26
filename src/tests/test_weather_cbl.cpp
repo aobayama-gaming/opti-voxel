@@ -65,7 +65,7 @@ CBLStats run_cbl(double p_seconds) {
     out.w_star = std::cbrt(WeatherFluid::GRAVITY / THETA * Q * H);
     std::vector<double> w2(size_t(levels), 0.0), wt(size_t(levels), 0.0);
     int samples = 0;
-    const double dz = fluid.dz_m();
+    const double dz = fluid.thick_m(0); // the surface heat goes into the lowest level
     double t = 0.0, next_sample = p_seconds * 2.0 / 3.0;
     while (t < p_seconds) {
         const double dt = std::min(2.0, fluid.max_dt());
