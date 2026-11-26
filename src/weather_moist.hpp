@@ -95,7 +95,7 @@ public:
     };
 
     struct Params {
-        double exchange = 15.0; // the surface fluxes' twist
+        double exchange = 40.0; // the surface fluxes' twist
         double subsidence_per_s = 1.5e-5; // D: w = -D z
         bool spread = true; // the partial cloud (false: each cell all or nothing, sigma_s 0)
     };

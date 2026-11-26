@@ -252,8 +252,9 @@ eddy diffusivity the resolved flow's (no closure of its own since 2026-11-25); o
   40 m, dry stable air above. 0.1 K of noise on the two lowest levels.
 - **Tests** (`test_weather_forcing.cpp`): the sounding saturates at the base and not under it; the ground's noon, night
   and day's mean; storms at their rate, the same from the same seed. **A trade-wind sea** (all of it at once on
-  6 x 32^2 columns: a sea 1.5 K over its air, the rotation, the air at rest), sampled each minute from 15 to 40: 23% of
-  the columns cloudy on average, 29% at most (2026-11-26; with the prevailing wind imposed it was 0.8% and 5.6%).
+  6 x 32^2 columns: a sea 1.5 K over its air, the rotation, the air at rest), sampled each minute from 15 to 40: 24% of
+  the columns cloudy on average, 36% at most (2026-11-26, exchange 40; with the prevailing wind imposed and
+  exchange 15 it was 0.8% and 5.6%).
 
 ## Planet file
 `"weather"`: on by default over a sphere (`"on": false` turns it off), refused over a flat shape or a torus (until its
@@ -262,7 +263,7 @@ would leave [4, 1024]), `top_m` (the levels' top over the ground, 600; the level
 `tick_hz` (2: a tick costs ~250 ms at 70 cells a face side, 5 a second fell behind), `time_scale` (game seconds a
 real second simulates, 1), `storm_m` (0: 1/8 of the
 radius), `spin_up_s` (game seconds simulated before the first frame, 600), `day_s` (the weather's day, 300),
-`inversion_m` (the start sounding's inversion, 300, under `top_m`), `exchange` (the surface fluxes' twist, 15),
+`inversion_m` (the start sounding's inversion, 300, under `top_m`), `exchange` (the surface fluxes' twist, 40: measured on the `fix` world without an imposed wind, cumulus over 10-18% of the planet against 8-11% at 15 and ~1% at 1, the air warming 0.2 K in 20 game minutes),
 `convection` (the shallow convection's updraft, true) and `cloud_spread` (the partial cloud, true; false: each cell all
 or nothing): the switches the debugger isolates a process with.
 
