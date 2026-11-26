@@ -175,8 +175,8 @@ The air inside a 45 m cell is not uniform: a cell a little under saturation hold
   publishes each level's mean cloud water and its Q1 (`WeatherMoist::q1`, within +-8, a uniform cell's +-8 by its
   sign); a point's cloud is `max(Q1 + spread(u), 0) / mean_excess(Q1)` of the cell's mean water, `mean_excess` the
   closed form of `E[max(Q1 + n, 0)]` over the distribution: the cell's points average to the simulation's water, the
-  cloudy ones are its share. `u` is `WeatherCloud::uniform_noise`: a tileable gradient fbm (128^3, 8 lattice cells and
-  3 octaves, a period of 4 weather cells: features of half a cell to an eighth), its ranks turned into values, so it is
+  cloudy ones are its share. `u` is `WeatherCloud::uniform_noise`: a tileable gradient fbm (128^3, 4 lattice cells and
+  3 octaves, a period of 4 weather cells: features of a cell, a half and a quarter; half a cell to an eighth looked like cotton), its ranks turned into values, so it is
   exactly uniform (each tenth holds a tenth of the texels to within one) and as smooth as the noise. The physics never
   reads it (`test_weather_cloud_fraction.cpp`: the closed form against the sum, the noise's histogram, its wrap).
 - **Measured** before the closure and the confinement went (trade-wind sea, 6 x 32^2, minutes 15-30): cover 49%

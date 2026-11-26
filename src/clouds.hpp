@@ -57,8 +57,8 @@ struct CloudLayer {
     static constexpr double EARTH_SPREAD_PERIOD_M = 12000.0;
     static constexpr double EARTH_WEATHER_PERIOD_M = 48000.0;
     static constexpr double EARTH_WARP_PERIOD_M = 800000.0; // 2^23 voxels at 5 cm: the frame's longest period
-    // The periods in the weather's cells (of_weather): the spread noise's (Clouds::SPREAD_*: its features half a cell
-    // to an eighth, inside a cell, where the simulation has its spread), the weather's (a multiple of it).
+    // The periods in the weather's cells (of_weather): the spread noise's (Clouds::SPREAD_*: its features a cell to
+    // a quarter, where the simulation has its spread), the weather's (a multiple of it).
     static constexpr double WEATHER_CELLS = 16.0;
     static constexpr double SPREAD_CELLS = 4.0;
 
@@ -86,7 +86,9 @@ struct CloudLayer {
 class Clouds {
 public:
     static constexpr int SPREAD_SIZE = 128; // the spread noise, texels per side
-    static constexpr int SPREAD_LATTICE = 8; // its coarsest lattice cells per side (a feature ~half a weather cell)
+    // Its coarsest lattice cells per side: one per weather cell, so the octaves are a cell, a half and a quarter (half a
+    // cell to an eighth looked like cotton, 2026-11-26).
+    static constexpr int SPREAD_LATTICE = int(CloudLayer::SPREAD_CELLS);
     static constexpr int SPREAD_OCTAVES = 3;
     static constexpr int GRID_W = 1536; // the direction grid: azimuths
     static constexpr int GRID_H = 768; // elevations, from straight down to straight up
