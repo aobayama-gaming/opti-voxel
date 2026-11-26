@@ -195,7 +195,7 @@ func _make_eye() -> void:
 	attributes.auto_exposure_enabled = not "--eye=0" in args
 	attributes.auto_exposure_scale = 0.4
 	attributes.auto_exposure_speed = 0.5
-	attributes.auto_exposure_min_sensitivity = 2.0
+	attributes.auto_exposure_min_sensitivity = 0.4  # down to the Moon's light (Atmosphere::MOON_SHARE, 1e-3)
 	attributes.auto_exposure_max_sensitivity = 320.0
 	for a in args:
 		if a.begins_with("--eye_min="):

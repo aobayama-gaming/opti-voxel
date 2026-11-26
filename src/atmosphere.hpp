@@ -80,6 +80,15 @@ public:
     static constexpr int SPACE_STEPS = 24; // a host's sky seen from above the atmosphere, per pixel
     // The sun's disk in the sky (atmo_sky_radiance): this many times a sky radiance of 1, through the air.
     static constexpr float SUN_DISK = 40.0f;
+    // The night's light (2026-11-26, the user's call: brighter than nature's ~1e-6 and ~1e-8 of the sun, so a night
+    // reads in a game), every one a share of the sun's light (the hosts scale the sky by it): the Moon, opposite the sun
+    // (always full), MOON_SHARE of its light, its disk MOON_SHARE of the sun's; the night sky's glow (the stars and the
+    // airglow), an isotropic radiance whose illuminance (pi L) is NIGHT_SKY of the sun's, with STAR_CELLS^2 cells a cube
+    // face of the sky, one in STAR_ODDS holding a star.
+    static constexpr float MOON_SHARE = 1e-3f;
+    static constexpr float NIGHT_SKY = 1e-5f;
+    static constexpr int STAR_CELLS = 160;
+    static constexpr int STAR_ODDS = 12;
 
     // What changes per frame, as the passes' uniforms: the camera (render metres), the sun (unit, towards it), the
     // slices' range, the longest path through the atmosphere (a ray along a plane is cut there) and the radius of the

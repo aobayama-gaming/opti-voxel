@@ -278,7 +278,7 @@ void light() {
         // The air between the fragment and the sun (red at dusk, none past the base's terminator).
         sun = atmo_transmittance(v_world_pos, to_sun, ATMO_SUN_STEPS);
     }
-    if (LIGHT_IS_DIRECTIONAL && cloud_enabled) {
+    if (LIGHT_IS_DIRECTIONAL && cloud_enabled && dot(to_sun, atmo_sun_dir) > 0.0) { // the sun's map: not the Moon's
         sun *= cloud_sun_shadow(v_world_pos);
     }
     DIFFUSE_LIGHT += clamp(dot(NORMAL, LIGHT), 0.0, 1.0) * ATTENUATION * LIGHT_COLOR * sun;

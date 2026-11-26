@@ -83,6 +83,17 @@ render contract (`BaseSurface::glsl_render`, `docs/terrain.md`), so another base
   mixer's view, VoxelTerrain sets `atmo_sun_dir` from its DirectionalLight3D sibling); the textures reach the materials through
   `texture_rd_create` (the pages) and the sky material's RID. With the atmosphere on, the environment's fog stays
   enabled at density 0 (Godot drops a shader's `FOG` without it): the atmosphere is the haze.
+- **The night** (`Atmosphere::MOON_SHARE`, `NIGHT_SKY`; 2026-11-26): brighter than nature (a full Moon ~1e-6 of the
+  sun, a moonless sky ~1e-8) so a night reads in a game. The Moon is opposite the sun (always full) at 1e-3 of its
+  light: its disk in `atmo_sky_radiance`, a `DirectionalLight3D` child of VoxelSky (`sky_mode` light only, so the sun
+  stays the sky shader's LIGHT0; no shadows; the clouds' shadow map is the sun's, so the page shader's `light()` cuts
+  only the sun by it), and the cloud march's light where the sun reaches neither end of the ray. The night sky (the
+  stars' and the airglow's glow) is an isotropic radiance of 1e-5 of the sun's illuminance, slightly blue, added to
+  `atmo_sky_radiance` (so to Godot's ambient from the sky, the sea's reflection) and to the clouds' sky light; the
+  stars are cells on a cube round the sky, fixed to the sun's frame (they turn with the day), one in 12 holding a star
+  whose brightness spans two decades. The player's eye adaptation (Godot's auto exposure, `player.gd` `_make_eye`:
+  sensitivity 320 by day, down to 0.4) brings them up. Not done: the Moon's light scattered by the air (a moonlit
+  sky), its phases, terrain shadows from it.
 - **Checked:** `AtmosphereCheck` (in `frame_test.sh`'s report, `atmosphere_check`): the passes against a CPU reference
   in double, sample for sample, for a flat base, Earth at its pole and 100 km up and a 2 km planet: worst relative
   error under 0.1% (half floats), and the running object's volume. Cost (forest5cm, steady, RTX 3070 Laptop, 2 runs

@@ -179,6 +179,40 @@ constexpr const char GLSL_LOOKUP[] = R"glsl(
 // coarse for its limb.
 const int ATMO_SPACE_STEPS = $SPACE_STEPS;
 const float ATMO_SUN_DISK = $SUN_DISK;
+const float ATMO_MOON_SHARE = $MOON_SHARE;
+// The night sky's radiance (Atmosphere::NIGHT_SKY of the sun's illuminance over the hemisphere), a little blue.
+const vec3 ATMO_NIGHT_SKY = vec3(0.8, 0.9, 1.15) * ($NIGHT_SKY / ATMO_PI);
+const float ATMO_STAR_CELLS = $STAR_CELLS.0;
+const float ATMO_STAR_ODDS = $STAR_ODDS.0;
+
+float atmo_star_hash(vec3 c) {
+    c = fract(c * vec3(0.1031, 0.1030, 0.0973));
+    c += dot(c, c.yxz + 33.33);
+    return fract((c.x + c.y) * c.z);
+}
+
+// The stars' radiance along dir (unit): fixed to the sun's frame (the day turns the sky with the sun, about y), cells
+// over the faces of a cube round the sky, one in ATMO_STAR_ODDS holding a star of a few arc minutes at a random place,
+// its brightness spread over two decades.
+vec3 atmo_stars(vec3 dir, vec3 sun) {
+    vec3 a = cross(vec3(0.0, 1.0, 0.0), sun);
+    a = dot(a, a) > 1e-6 ? normalize(a) : vec3(1.0, 0.0, 0.0);
+    vec3 d = vec3(dot(dir, sun), dot(dir, a), dot(dir, cross(sun, a)));
+    vec3 m = abs(d);
+    float axis = m.x > m.y ? (m.x > m.z ? 0.0 : 2.0) : (m.y > m.z ? 1.0 : 2.0);
+    vec2 uv = axis == 0.0 ? d.yz / m.x : (axis == 1.0 ? d.xz / m.y : d.xy / m.z);
+    vec2 g = uv * ATMO_STAR_CELLS;
+    vec2 cell = floor(g);
+    vec3 key = vec3(cell, axis * 7.0 + (d[int(axis)] > 0.0 ? 1.0 : 0.0));
+    if (atmo_star_hash(key) * ATMO_STAR_ODDS > 1.0) {
+        return vec3(0.0);
+    }
+    vec2 at = vec2(atmo_star_hash(key + 11.0), atmo_star_hash(key + 23.0)) * 0.7 + 0.15;
+    float r = length(g - cell - at);
+    float bright = pow(10.0, 2.0 * atmo_star_hash(key + 37.0));
+    float tint = atmo_star_hash(key + 51.0);
+    return mix(vec3(1.0, 0.85, 0.7), vec3(0.75, 0.85, 1.0), tint) * (bright * smoothstep(0.12, 0.0, r)) * ATMO_NIGHT_SKY * 10.0;
+}
 
 // Slice s of the volume at uv: linear across texels, not across slices (a slice's rows clamped to its band).
 vec4 atmo_slice(vec2 uv, int s) {
@@ -212,12 +246,16 @@ vec4 atmo_sky(vec3 camera, vec3 dir) {
 }
 
 // The sky's light towards the camera along dir for a sun of illuminance 1 towards sun: the volume's sky slice, or from
-// above the atmosphere a march per pixel (the volume's texels are too coarse for the limb); plus the sun's disk (its
-// radius' cosine sun_cos) through the air.
+// above the atmosphere a march per pixel (the volume's texels are too coarse for the limb); the night sky's glow and
+// stars; the sun's and the Moon's disks (their radius' cosine sun_cos; the Moon opposite the sun) through the air.
 vec3 atmo_sky_radiance(vec3 camera, vec3 dir, vec3 sun, float sun_cos) {
     vec3 light = base_altitude(camera) > atmo_top_m ? atmo_integrate(camera, dir, sun, ATMO_SPACE_STEPS).rgb : atmo_sky(camera, dir).rgb;
+    light += ATMO_NIGHT_SKY + atmo_stars(dir, sun);
     if (dot(dir, sun) > sun_cos) {
         light += atmo_transmittance(camera, sun, ATMO_SUN_STEPS) * ATMO_SUN_DISK;
+    }
+    if (dot(dir, -sun) > sun_cos) {
+        light += atmo_transmittance(camera, -sun, ATMO_SUN_STEPS) * (ATMO_SUN_DISK * ATMO_MOON_SHARE);
     }
     return light;
 }
@@ -397,7 +435,9 @@ ov::str substitute(const ov::str &p_glsl) {
             { { "$SLICES", ov::itos(A::SLICES) }, { "$VOLUME_W", ov::itos(A::VOLUME_W) }, { "$VOLUME_H", ov::itos(A::VOLUME_H) },
                     { "$MS_SIZE", ov::itos(A::MS_SIZE) }, { "$SUN_STEPS", ov::itos(A::SUN_STEPS) }, { "$FAR_STEPS", ov::itos(A::FAR_STEPS) },
                     { "$MS_STEPS", ov::itos(A::MS_STEPS) }, { "$MS_DIRS", ov::itos(A::MS_DIRS) }, { "$SPACE_STEPS", ov::itos(A::SPACE_STEPS) },
-                    { "$SUN_DISK", ov::str(ov::format("%.1f", double(A::SUN_DISK))) } });
+                    { "$SUN_DISK", ov::str(ov::format("%.1f", double(A::SUN_DISK))) }, { "$MOON_SHARE", ov::format("%.9g", double(A::MOON_SHARE)) },
+                    { "$NIGHT_SKY", ov::format("%.9g", double(A::NIGHT_SKY)) }, { "$STAR_CELLS", ov::itos(A::STAR_CELLS) },
+                    { "$STAR_ODDS", ov::itos(A::STAR_ODDS) } });
 }
 
 ov::str block_members() {

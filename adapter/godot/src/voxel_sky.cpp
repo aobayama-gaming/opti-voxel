@@ -251,6 +251,15 @@ void VoxelSky::_process(double) {
         sun->set_global_transform(xf);
     }
     const Vector3 towards = basis_set.get_column(2).normalized();
+    if (moon != nullptr) {
+        // Turned half a turn about the sun's x: its z (towards it) the sun's negated.
+        const Transform3D moon_xf(basis_set * Basis(Vector3(1.0f, 0.0f, 0.0f), real_t(Math_PI)), xf.origin);
+        if (!moon->get_global_transform().is_equal_approx(moon_xf)) {
+            moon->set_global_transform(moon_xf);
+        }
+        moon->set_color(sun->get_color());
+        moon->set_param(Light3D::PARAM_ENERGY, sun->get_param(Light3D::PARAM_ENERGY) * Atmosphere::MOON_SHARE);
+    }
     if (towards != sun_dir_sent) {
         sun_dir_sent = towards;
         RenderingServer::get_singleton()->global_shader_parameter_set("atmo_sun_dir", towards);
@@ -287,6 +296,13 @@ void VoxelSky::_ready() {
         if (DirectionalLight3D *light = Object::cast_to<DirectionalLight3D>(parent->get_child(i))) {
             sun = light;
         }
+    }
+    if (sun != nullptr && moon == nullptr) {
+        moon = memnew(DirectionalLight3D);
+        moon->set_name("Moon");
+        moon->set_sky_mode(DirectionalLight3D::SKY_MODE_LIGHT_ONLY);
+        moon->set_shadow(false);
+        add_child(moon);
     }
     Ref<Environment> env = world_env->get_environment();
     ERR_FAIL_COND_MSG(env.is_null(), "VoxelSky: the WorldEnvironment has no Environment.");

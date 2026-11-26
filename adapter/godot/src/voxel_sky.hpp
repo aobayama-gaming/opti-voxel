@@ -73,6 +73,9 @@ private:
     Vector3 sun_dir_sent; // the last atmo_sun_dir set
 
     DirectionalLight3D *sun = nullptr; // the sibling the sky's sun is (LIGHT0)
+    // The Moon: a child light opposite the sun, Atmosphere::MOON_SHARE of its energy, out of the sky shader's lights
+    // (the sky draws the Moon itself) and without shadows.
+    DirectionalLight3D *moon = nullptr;
     // The sun as authored (or as a script last set it), which the terrain's day turns; the basis last given the light.
     Basis noon_basis;
     Basis basis_set;

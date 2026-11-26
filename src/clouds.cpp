@@ -213,9 +213,10 @@ float cloud_light_depth(vec3 p, vec3 sun) {
     return depth * cloud_extinction;
 }
 
-// The sky's light on a cloud at x: the atmosphere's isotropic light there (its multiple-scattering table).
+// The sky's light on a cloud at x: the atmosphere's isotropic light there (its multiple-scattering table) and the night
+// sky's glow.
 vec3 cloud_sky(vec3 x) {
-    return atmo_ms(max(base_altitude(x), 0.0), dot(base_up(x), cloud_sun));
+    return atmo_ms(max(base_altitude(x), 0.0), dot(base_up(x), cloud_sun)) + ATMO_NIGHT_SKY;
 }
 
 // Interleaved gradient noise (Jimenez): a texel's jitter, decorrelated between neighbours.
@@ -240,17 +241,14 @@ vec4 cloud_march(vec3 cam, vec3 dir, float jitter, out vec2 front_mean) {
     float t_last = seg.w > seg.z ? seg.w : seg.y;
     // The sun through the air at the clouds and the sky's light on them: at the ray's two ends, linear between; made at
     // the first sample with density (a ray through clear sky needs neither).
+    // The light the ray's clouds march towards: the sun, or where it reaches neither end of the ray (the night) the Moon,
+    // opposite it, ATMO_MOON_SHARE of its light (one march a sample either way).
     vec3 sun_a = vec3(0.0);
     vec3 sun_b = vec3(0.0);
     vec3 sky_a = vec3(0.0);
     vec3 sky_b = vec3(0.0);
-    float cos_sun = dot(dir, cloud_sun);
+    vec3 key = cloud_sun;
     float phases[OCTAVES];
-    float k = 1.0;
-    for (int o = 0; o < OCTAVES; o++) {
-        phases[o] = cloud_phase(cos_sun, k);
-        k *= MS_ECCENTRICITY;
-    }
     vec3 light = vec3(0.0);
     float trans = 1.0;
     float weighted_t = 0.0;
@@ -269,13 +267,23 @@ vec4 cloud_march(vec3 cam, vec3 dir, float jitter, out vec2 front_mean) {
             front_t = t;
             sun_a = atmo_transmittance(cam + dir * t_first, cloud_sun, ATMO_SUN_STEPS);
             sun_b = atmo_transmittance(cam + dir * t_last, cloud_sun, ATMO_SUN_STEPS);
+            if (max(max(sun_a.r, sun_a.g), max(sun_b.r, sun_b.g)) < ATMO_MOON_SHARE) {
+                key = -cloud_sun;
+                sun_a = atmo_transmittance(cam + dir * t_first, key, ATMO_SUN_STEPS) * ATMO_MOON_SHARE;
+                sun_b = atmo_transmittance(cam + dir * t_last, key, ATMO_SUN_STEPS) * ATMO_MOON_SHARE;
+            }
+            float k = 1.0;
+            for (int o = 0; o < OCTAVES; o++) {
+                phases[o] = cloud_phase(dot(dir, key), k);
+                k *= MS_ECCENTRICITY;
+            }
             sky_a = cloud_sky(cam + dir * t_first);
             sky_b = cloud_sky(cam + dir * t_last);
         }
         float sigma = density * cloud_extinction;
         // The sun through the octaves; the sky dimmer lower in the layer (Frostbite's gradient).
         float along = clamp((t - t_first) / max(t_last - t_first, 1.0), 0.0, 1.0);
-        vec3 sun = mix(sun_a, sun_b, along) * cloud_octaves(cloud_light_depth(x, cloud_sun), phases);
+        vec3 sun = mix(sun_a, sun_b, along) * cloud_octaves(cloud_light_depth(x, key), phases);
         vec3 sky = mix(sky_a, sky_b, along) * mix(0.4, 1.0, hf);
         float step_trans = exp(-sigma * dt);
         light += trans * cloud_albedo * (sun + sky) * (1.0 - step_trans);
