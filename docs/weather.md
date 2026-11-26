@@ -230,9 +230,12 @@ eddy diffusivity the resolved flow's (no closure of its own since 2026-11-25); o
   degrees north: a northern summer (the far north never sets).
 - **The ground's temperature:** a force-restore slab per column (Deardorff 1978), `dT/dt = 2 sqrt(pi) Q / (I sqrt(P)) -
   2 pi / P (T - ground_k)`: `P` the day, `I` the biomes' `thermal_inertia` `sqrt(k rho c)`, `Q` the sunlight absorbed
-  over the day's mean (`1000 W/m^2 (1 - 0.15) ((1 - A) max(up . sun, 0) - mean_light)`, `mean_light` Berger's daily
-  insolation for the column's latitude and the sun's declination, `A` the albedo of the cloud over it: its water path,
-  droplets of 10 um, a two-stream `(1 - g) tau / (2 + (1 - g) tau)`). Clear, the day's mean is `ground_k`; the slab
+  over the planet's mean (`1000 W/m^2 (1 - 0.15) ((1 - A) max(up . sun, 0) - 1/4)`, 1/4 a sphere's mean light, `A`
+  the albedo of the cloud over it: its water path, droplets of 10 um, a two-stream `(1 - g) tau / (2 + (1 - g) tau)`).
+  The day's mean follows the sun's angle: a moist soil on the equator +0.37 K over `ground_k`, at a pole -1.14 K
+  (2026-11-26; each column's own day's mean, Berger's daily insolation, was taken out before, which held every
+  latitude at `ground_k`). Measured on the `fix` world it changed no wind (max 2.4-3.0 m/s over 20 game minutes): the
+  seas barely move and a 5-minute day leaves a land slab little time to warm. The slab
   warms into the afternoon (its warmest an eighth of a day after noon). With the 300 s day a moist soil (1500) swings
   2-8 K, dry sand (300) five times as much, a sea (1e5, its mixed layer) under 0.1 K; a cloud's shade cools what is
   under it (`test_weather_forcing.cpp`).
