@@ -106,6 +106,7 @@ func _ready():
 	pitch = camera.rotation.x
 	_stand()
 	_make_flashlight("--flashlight=1" in Presets.user_args())
+	_make_eye()
 	for a in Presets.user_args():
 		if a.begins_with("--marks="):
 			marks_dir = a.trim_prefix("--marks=")
@@ -180,6 +181,30 @@ func _make_hud() -> void:
 	hud.add_theme_constant_override("shadow_offset_x", 1)
 	hud.add_theme_constant_override("shadow_offset_y", 1)
 	hud_layer.add_child(hud)
+
+# Eye adaptation: Godot's auto exposure on the camera, so a dark scene brightens as an eye adapts to it. The sky, the sea
+# and the clouds reach the same HDR image, so they adapt alike. Godot sets the exposure to auto_exposure_scale over the
+# scene's mean luminance, that mean clamped between the two sensitivities' luminances: max_sensitivity keeps a day at
+# the exposure the look was tuned at, min_sensitivity caps how far a night brightens. --eye=0: the fixed exposure;
+# --eye_min=<ISO> / --eye_max=<ISO> / --eye_speed=<1/s> to tune them.
+func _make_eye() -> void:
+	var attributes := camera.attributes as CameraAttributesPractical
+	if attributes == null:
+		return
+	var args := Presets.user_args()
+	attributes.auto_exposure_enabled = not "--eye=0" in args
+	attributes.auto_exposure_scale = 0.4
+	attributes.auto_exposure_speed = 0.5
+	attributes.auto_exposure_min_sensitivity = 2.0
+	attributes.auto_exposure_max_sensitivity = 320.0
+	for a in args:
+		if a.begins_with("--eye_min="):
+			attributes.auto_exposure_min_sensitivity = a.trim_prefix("--eye_min=").to_float()
+		if a.begins_with("--eye_max="):
+			attributes.auto_exposure_max_sensitivity = a.trim_prefix("--eye_max=").to_float()
+		if a.begins_with("--eye_speed="):
+			attributes.auto_exposure_speed = a.trim_prefix("--eye_speed=").to_float()
+
 
 # A torch: a spot along the view, slightly below and right of the eye so its shadows read as cast from the hand.
 func _make_flashlight(p_on: bool) -> void:
