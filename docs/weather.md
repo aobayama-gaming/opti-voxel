@@ -243,6 +243,14 @@ eddy diffusivity the resolved flow's (no closure of its own since 2026-11-25); o
   every latitude held at `ground_k` (before) the strongest wind was 2.4-3.0 m/s, the cloud 1-2 cells of cumulus
   everywhere; with the baseline (`sun_k` 40) 6.8-7.6 m/s in eddies over the whole planet, cloud sheets and bands, the
   cover 0.31 -> 0.17 over the 20 minutes (the circulation mixes the air's gradient, only the grounds restore it).
+- **The air's relaxation** (`relax_days`, 2 weather days): each level's theta and vapour relax to the column's
+  equilibrium, the start's state (the sounding moved by the baseline's offset, the vapour keeping its relative
+  humidity). Theta: the air's radiation, Held & Suarez 1994's Newtonian relaxation (they take 40 days aloft; a game's
+  weather has minutes). Vapour: the exchange with the air over the 600 m lid (the boundary layer's moisture carried
+  up, dry air sinking in: BOMEX's large-scale drying). Measured on the `fix` world over 90 game minutes (2026-11-26):
+  theta alone held the cover ~0.3 for 30 minutes, then the seas' vapour, which only rain took out, filled the layer
+  (0.79 and fog over a quarter of the ground at 90); with both, the cover 0.20 at the start, then 0.10-0.14 from
+  minute 15 to 90, the strongest wind 6.5-7.2 m/s, no fog nor rain. `sun_k` and `relax_days` set the level.
 - **No large-scale wind is imposed:** the air starts at rest, every wind is the sun's heating, the convection's and the
   storms', turned by the Coriolis (`f = 2 Omega up_y`, `Omega` the weather's day, `day_s` 300 s: the twist, storms spin
   at the game's scale). Removed 2026-11-26: Earth's three cells (`-sin(6 |latitude|)` east, 5 m/s) put in at the start
@@ -269,7 +277,7 @@ grid lands). `cell_m` (the cells' width in metres; 0 or absent: 64 cells a cube 
 would leave [4, 1024]), `top_m` (the levels' top over the ground, 600; the levels about `cell_m` apart, at least 2),
 `tick_hz` (2: a tick costs ~250 ms at 70 cells a face side, 5 a second fell behind), `time_scale` (game seconds a
 real second simulates, 1), `storm_m` (0: 1/8 of the
-radius), `spin_up_s` (game seconds simulated before the first frame, 600), `day_s` (the weather's day, 300), `sun_k` (the sun's warming of the grounds' baseline, 40),
+radius), `spin_up_s` (game seconds simulated before the first frame, 600), `day_s` (the weather's day, 300), `sun_k` (the sun's warming of the grounds' baseline, 40), `relax_days` (the air's relaxation, 2),
 `inversion_m` (the start sounding's inversion, 300, under `top_m`), `exchange` (the surface fluxes' twist, 40: measured on the `fix` world without an imposed wind, cumulus over 10-18% of the planet against 8-11% at 15 and ~1% at 1, the air warming 0.2 K in 20 game minutes),
 `convection` (the shallow convection's updraft, true) and `cloud_spread` (the partial cloud, true; false: each cell all
 or nothing): the switches the debugger isolates a process with.

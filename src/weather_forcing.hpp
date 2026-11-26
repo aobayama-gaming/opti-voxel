@@ -23,6 +23,13 @@
 //   (the slab lags the sun by an eighth of a day), a sea (an inertia of ~1e5: its mixed layer) barely moves, a cloud's
 //   shade cools what is under it. 2026-11-26: the planet had no warm equator nor cold pole (each column's day's mean
 //   was held at ground_k), so nothing made a wind larger than a thermal.
+// - The air relaxes to its column's equilibrium, the start's (equilibrium()), over relax_days weather days: its theta
+//   (the air's radiation, Held & Suarez 1994's Newtonian relaxation; they take 40 days aloft, a game's weather has
+//   minutes) and its vapour (the exchange with the air over the lid: the boundary layer's moisture carried up, dry
+//   air sinking in, BOMEX's large-scale drying). Measured on the fix world (2026-11-26): with neither, the cover fell
+//   0.31 -> 0.17 in 20 game minutes (the circulation mixes the sun's gradient away); with theta alone it stayed ~0.3
+//   for 30 minutes, then the seas' vapour, which only rain took out, filled the lidded layer: 0.79 and fog over a
+//   quarter of the ground at 90.
 // - No large-scale wind is imposed (2026-11-26: Earth's three cells, put in as a balanced pressure gradient, held the
 //   air in steady bands round the axis and a cloud ring under the polar jet): the air starts at rest and every wind is
 //   the sun's heating, the convection and the storms', turned by the Coriolis (f = 2 Omega up_y, Omega the weather's
@@ -58,6 +65,7 @@ public:
     struct Params {
         double day_s = 300.0; // the weather's day (Omega = 2 pi / day_s)
         double sun_k = 40.0; // the baseline's warming per unit of a year's mean light (an equator-pole of sun_k / pi)
+        double relax_days = 2.0; // the air's relaxation to its equilibrium (theta and vapour), in weather days
         double storm_m = 0.0; // 0: 1 / 8 of the radius
         double inversion_m = 300.0;
         uint32_t seed = 0;
@@ -96,6 +104,11 @@ public:
     static Float3 turn_sun(const Float3 &p_sun, double p_angle);
     // The large-scale wind and the storms' seeds for p_dt of step p_step; the storms started so far.
     void apply(WeatherFluid &p_fluid, double p_dt, uint64_t p_step);
+    // Column p_c's equilibrium against p_reference: its theta offset (its baseline over the planet's mean) and its
+    // vapour's factor (the saturation's ratio at the ground over that offset: the same relative humidity).
+    void equilibrium(size_t p_c, const WeatherMoist::Sounding &p_reference, double &r_offset_k, double &r_vapour) const;
+    // The air p_dt on towards its equilibrium, theta and vapour (implicit: any dt is stable).
+    void relax(WeatherFluid &p_fluid, const WeatherMoist::Sounding &p_reference, double p_dt) const;
     uint64_t storms() const { return storms_started; }
     // Each interior cell's biome weather (the constructor's).
     const std::vector<Climate::BiomeWeather> &cell_climate() const { return climate; }

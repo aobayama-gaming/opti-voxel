@@ -212,6 +212,34 @@ TEST_CASE("WeatherForcing::warm: the sun's baseline, a warm equator and a cold p
     CHECK(ground[sea].temp_k == doctest::Approx(drive.baseline_k(sea)).epsilon(1e-4));
 }
 
+// The air relaxes towards its equilibrium (Held & Suarez's radiation, the exchange over the lid for the vapour): the
+// start's state; a displacement falls by e over relax_days weather days, the equilibrium stays put.
+TEST_CASE("WeatherForcing::relax: the air relaxes to its column's equilibrium over relax_days") {
+    Setup s = make(8, 299.0f, 0.0f);
+    const M::Sounding snd = s.drive->sounding(*s.fluid);
+    s.drive->start(*s.fluid, snd);
+    const WeatherGrid &g = *s.grid;
+    const int st = s.fluid->stride();
+    const int k = 3;
+    const size_t at = g.index(0, 2, 5) * size_t(st) + size_t(s.fluid->scalar_offset(k, M::THETA));
+    const size_t still = g.index(1, 4, 4) * size_t(st) + size_t(s.fluid->scalar_offset(k, M::THETA));
+    const double eq = s.fluid->state()[at];
+    const double eq_still = s.fluid->state()[still];
+    const size_t at_qv = g.index(0, 2, 5) * size_t(st) + size_t(s.fluid->scalar_offset(k, M::QV));
+    const double eq_qv = s.fluid->state()[at_qv];
+    s.fluid->state()[at] = float(eq + 1.0);
+    s.fluid->state()[at_qv] = float(eq_qv + 1e-3);
+    const double span = F::Params().relax_days * F::Params().day_s;
+    for (int t = 0; t < 1000; t++) {
+        s.drive->relax(*s.fluid, snd, span / 1000.0);
+    }
+    const double left = s.fluid->state()[at] - eq;
+    MESSAGE("1 K over its equilibrium, relax_days on: ", left, " K left");
+    CHECK(left == doctest::Approx(std::exp(-1.0)).epsilon(0.01));
+    CHECK(s.fluid->state()[still] == doctest::Approx(eq_still).epsilon(1e-6));
+    CHECK((s.fluid->state()[at_qv] - eq_qv) / 1e-3 == doctest::Approx(std::exp(-1.0)).epsilon(0.01));
+}
+
 TEST_CASE("WeatherForcing: storms seed at their rate, the same ones from the same seed") {
     // A planet of storms 60 starts one a minute: 10 minutes of 5 s steps, ~10 storms.
     Setup a = make(16, 300.0f, 60.0f);

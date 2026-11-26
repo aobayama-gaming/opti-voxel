@@ -91,9 +91,8 @@ void WeatherForcing::start(WeatherFluid &p_fluid, const WeatherMoist::Sounding &
                 float *here = &p_fluid.state()[g.index(f, i, j) * size_t(p_fluid.stride())];
                 // The column's air over its baseline: theta moved by its offset from the planet's mean, the vapour by
                 // the saturation's ratio at the ground (the same relative humidity).
-                const double offset = baseline_k(in) - mean_ground_k;
-                const double t0 = p_sounding.theta[0];
-                const double wet = WeatherMoist::saturation(t0 + offset, WeatherMoist::P0_MB) / WeatherMoist::saturation(t0, WeatherMoist::P0_MB);
+                double offset, wet;
+                equilibrium(in, p_sounding, offset, wet);
                 for (int k = 0; k < p_fluid.levels(); k++) {
                     for (int a = 0; a < 3; a++) {
                         here[p_fluid.wind_offset(k) + a] = 0.0f;
@@ -144,6 +143,37 @@ double WeatherForcing::year_light(size_t p_c) const {
 
 double WeatherForcing::baseline_k(size_t p_c) const {
     return double(climate[p_c].ground_k) + params.sun_k * (year_light(p_c) - PLANET_LIGHT);
+}
+
+void WeatherForcing::equilibrium(size_t p_c, const WeatherMoist::Sounding &p_reference, double &r_offset_k, double &r_vapour) const {
+    r_offset_k = baseline_k(p_c) - mean_ground_k;
+    const double t0 = p_reference.theta[0];
+    r_vapour = WeatherMoist::saturation(t0 + r_offset_k, WeatherMoist::P0_MB) / WeatherMoist::saturation(t0, WeatherMoist::P0_MB);
+}
+
+void WeatherForcing::relax(WeatherFluid &p_fluid, const WeatherMoist::Sounding &p_reference, double p_dt) const {
+    if (!(params.relax_days > 0.0)) {
+        return;
+    }
+    const WeatherGrid &g = p_fluid.grid();
+    const double k = p_dt / (params.relax_days * params.day_s);
+    const double keep = 1.0 / (1.0 + k);
+    std::vector<float> &state = p_fluid.state();
+    parallel_for(uint32_t(g.faces() * g.height()), "WeatherForcing::relax", [&](uint32_t p_row) {
+        const int face = int(p_row) / g.height();
+        const int j = int(p_row) % g.height();
+        for (int i = 0; i < g.width(); i++) {
+            const size_t c = g.interior(face, i, j);
+            double offset, wet;
+            equilibrium(c, p_reference, offset, wet);
+            float *here = &state[g.index(face, i, j) * size_t(p_fluid.stride())];
+            for (int level = 0; level < p_fluid.levels(); level++) {
+                float &theta = here[p_fluid.scalar_offset(level, WeatherMoist::THETA)];
+                float &qv = here[p_fluid.scalar_offset(level, WeatherMoist::QV)];
+                theta = float((double(theta) + k * (p_reference.theta[size_t(level)] + offset)) * keep);
+                qv = float((double(qv) + k * p_reference.qv[size_t(level)] * wet) * keep);
+            }
+        } }, ov::Priority::LOW);
 }
 
 Float3 WeatherForcing::turn_sun(const Float3 &p_sun, double p_angle) {

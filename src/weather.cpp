@@ -82,6 +82,7 @@ void Weather::build() {
     WeatherForcing::Params dp;
     dp.day_s = settings.day_s;
     dp.sun_k = settings.sun_k;
+    dp.relax_days = settings.relax_days;
     dp.storm_m = settings.storm_m;
     dp.inversion_m = settings.inversion_m;
     dp.seed = seed;
@@ -135,6 +136,7 @@ void Weather::advance(double p_dt) {
         drive->warm(sun_at(sim_time_s + 0.5 * dt), dt, *fluid, moist->reference().rho, nullptr, ground);
         fluid->advect(dt);
         drive->apply(*fluid, dt, steps);
+        drive->relax(*fluid, moist->reference(), dt);
         if (settings.convection) {
             convection->apply(*fluid, moist->surface(), dt);
         }
