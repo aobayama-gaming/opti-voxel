@@ -17,6 +17,7 @@
 namespace {
 
 constexpr double PI = 3.141592653589793;
+constexpr double FULL_WIND_MPS = 10.0; // the wind map's full brightness
 
 // The unit direction of an equirectangular pixel's centre (the +y pole at the top).
 void pixel_dir(int p_x, int p_y, int p_w, int p_h, double r_dir[3]) {
@@ -165,7 +166,7 @@ WeatherReport::Frames run_world(const WorldFile &p_world, const std::vector<doub
         while (weather.game_s() < start_s + minutes * 60.0 - 1e-6) {
             session.step(1);
         }
-        out.frames.push_back(map_state(weather, out.width, 2.0 * ov::max(p_world.weather.prevailing_mps, 1.0)));
+        out.frames.push_back(map_state(weather, out.width, FULL_WIND_MPS));
         out.frames.back().minutes = minutes;
     }
     out.stats = weather.get_stats();

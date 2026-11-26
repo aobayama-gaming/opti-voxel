@@ -7,7 +7,7 @@
 #include <vector>
 
 // The weather's forcing (WeatherForcing, docs/weather.md "Forcing"): the sounding, the grounds under the sun, the
-// prevailing wind, the storms' seeds; then the whole of it over a warm sea gives cumulus.
+// storms' seeds; then the whole of it over a warm sea gives cumulus.
 
 namespace {
 
@@ -60,7 +60,7 @@ TEST_CASE("WeatherForcing: the sounding's mixed layer saturates at the cloud bas
 
 TEST_CASE("WeatherForcing: the sun turns west, once a weather day") {
     const double omega = 2.0 * 3.14159265358979323846 / F::Params().day_s;
-    // Over z = 1 on the equator east is +x (the prevailing wind's test): a quarter day on, the noon sun sets in the west.
+    // Over z = 1 on the equator east is +x: a quarter day on, the noon sun sets in the west.
     const Float3 noon{ 0.0f, 0.0f, 1.0f };
     const Float3 dusk = F::turn_sun(noon, -omega * F::Params().day_s / 4.0);
     CHECK(dusk.x == doctest::Approx(-1.0).epsilon(1e-6));
@@ -173,19 +173,6 @@ TEST_CASE("WeatherForcing::warm: the ground under the noon sun warms, less under
     CHECK(clear > 299.5);
     CHECK(shaded < clear - 0.1);
     CHECK(shaded > 299.0);
-}
-
-TEST_CASE("WeatherForcing: the prevailing wind blows from the east in the trades, from the west at 45 degrees") {
-    const double s = std::sin(3.14159265358979323846 / 12.0); // 15 degrees north, on x = 0
-    const double trades[3] = { 0.0, s, std::sqrt(1.0 - s * s) };
-    double w[3];
-    F::prevailing(trades, 5.0, w);
-    // East at z = 1 on the equator is pole x up = +x: the trades blow towards -x.
-    CHECK(w[0] == doctest::Approx(-5.0).epsilon(1e-6));
-    const double h = std::sqrt(0.5);
-    const double westerlies[3] = { 0.0, h * std::cos(0.0), h };
-    F::prevailing(westerlies, 5.0, w);
-    CHECK(w[0] > 0.0);
 }
 
 TEST_CASE("WeatherForcing: storms seed at their rate, the same ones from the same seed") {

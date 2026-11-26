@@ -81,7 +81,6 @@ void Weather::build() {
     fp.scalars = WeatherMoist::SCALARS;
     WeatherForcing::Params dp;
     dp.day_s = settings.day_s;
-    dp.prevailing_mps = settings.prevailing_mps;
     dp.storm_m = settings.storm_m;
     dp.inversion_m = settings.inversion_m;
     dp.seed = seed;

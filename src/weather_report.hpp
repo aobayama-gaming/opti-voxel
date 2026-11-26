@@ -10,7 +10,7 @@
 // run on the CPU alone (no GPU, no window) on a clock of its own, mapped at the game minutes asked for. Each map is the
 // whole planet, equirectangular (longitude across, the +y pole at the top): the cover (grey, the rain blue) and the wind
 // (the direction it blows to as a hue, east red, north yellow-green, west cyan, south violet; its speed as the
-// brightness, full at twice the prevailing wind), and a cross-section along the equator (longitude across, the levels
+// brightness, full at 10 m/s), and a cross-section along the equator (longitude across, the levels
 // up from the ground, SECTION_PX rows each: the cloud water, white at full cover, the rain blue).
 namespace WeatherReport {
 

@@ -27,18 +27,6 @@ double unit(uint32_t p_h) {
 
 } // namespace
 
-void WeatherForcing::prevailing(const double p_up[3], double p_speed, double r_wind[3]) {
-    const double pole[3] = { 0.0, 1.0, 0.0 };
-    double east[3];
-    cross3(pole, p_up, east);
-    const double len = std::sqrt(dot3(east, east));
-    const double lat = std::asin(ov::clamp(p_up[1], -1.0, 1.0));
-    const double s = len > 1e-9 ? -std::sin(6.0 * std::fabs(lat)) * p_speed / len : 0.0;
-    for (int k = 0; k < 3; k++) {
-        r_wind[k] = east[k] * s;
-    }
-}
-
 WeatherForcing::WeatherForcing(const WeatherFluid &p_fluid, const Params &p_params, std::vector<Climate::BiomeWeather> p_climate) :
         params(p_params), climate(std::move(p_climate)) {
     const size_t n = p_fluid.grid().cells();
@@ -101,12 +89,9 @@ void WeatherForcing::start(WeatherFluid &p_fluid, const WeatherMoist::Sounding &
             for (int i = 0; i < g.width(); i++) {
                 const size_t in = g.interior(f, i, j);
                 float *here = &p_fluid.state()[g.index(f, i, j) * size_t(p_fluid.stride())];
-                double up[3], wind[3];
-                p_fluid.column_up(in, up);
-                prevailing(up, params.prevailing_mps, wind);
                 for (int k = 0; k < p_fluid.levels(); k++) {
                     for (int a = 0; a < 3; a++) {
-                        here[p_fluid.wind_offset(k) + a] = float(wind[a]);
+                        here[p_fluid.wind_offset(k) + a] = 0.0f;
                     }
                     const double noise = k < 2 ? NOISE_K * (2.0 * unit(hash3(params.seed, uint32_t(in), uint32_t(k))) - 1.0) : 0.0;
                     here[p_fluid.scalar_offset(k, WeatherMoist::THETA)] = float(p_sounding.theta[size_t(k)] + noise);
@@ -203,29 +188,7 @@ void WeatherForcing::warm(const Float3 &p_towards_sun, double p_dt, const Weathe
 }
 
 void WeatherForcing::apply(WeatherFluid &p_fluid, double p_dt, uint64_t p_step) {
-    const WeatherGrid &g = p_fluid.grid();
-    const int levels = p_fluid.levels();
-    const int st = p_fluid.stride();
-    const double omega = this->omega();
-    std::vector<float> &state = p_fluid.state();
-    // The large-scale pressure gradient: f up x u_g on every level.
-    parallel_for(uint32_t(g.faces() * g.height()), "WeatherForcing::apply", [&](uint32_t p_row) {
-        const int face = int(p_row) / g.height();
-        const int j = int(p_row) % g.height();
-        for (int i = 0; i < g.width(); i++) {
-            double up[3], ug[3], push[3];
-            p_fluid.column_up(g.interior(face, i, j), up);
-            prevailing(up, params.prevailing_mps, ug);
-            cross3(up, ug, push);
-            const double f = 2.0 * omega * up[1];
-            float *here = &state[g.index(face, i, j) * size_t(st)];
-            for (int k = 0; k < levels; k++) {
-                for (int a = 0; a < 3; a++) {
-                    here[p_fluid.wind_offset(k) + a] += float(f * push[a] * p_dt);
-                }
-            }
-        } }, ov::Priority::LOW);
-    // The storms' seeds.
+    (void)p_dt;
     if (!any_storms) {
         return;
     }

@@ -22,7 +22,7 @@
 //     "climate": "climate.json" or { "fields": "fields.json" or [ field... ],
 //                                    "<field name>": { "mean": 0.4, "poles": -0.9 }... },
 //     "atmosphere": { "density": 1, "tint": [1, 1, 1] },
-//     "weather": { "on": true, "cell_m": 0, "top_m": 600, "tick_hz": 5, "time_scale": 1, "prevailing_mps": 5, "storm_m": 0,
+//     "weather": { "on": true, "cell_m": 0, "top_m": 600, "tick_hz": 2, "time_scale": 1, "storm_m": 0,
 //                  "spin_up_s": 600, "day_s": 300, "inversion_m": 300, "exchange": 15 },
 //     "look": { "atmosphere": true, "atmosphere_scale": 0, "clouds": true },
 //     "instances": [ { "species": "conifer", "cell_m": 5, "share": 1 }... ],
@@ -48,7 +48,7 @@
 // that isn't one is refused. "atmosphere": the air's density (times every scattering and absorption coefficient) and the
 // tint of its Rayleigh scattering (AtmosphereMedium::for_base); "weather" the simulated weather over a sphere (on there
 // by default, refused on a flat shape or a torus; docs/weather.md): its grid's cells' width in metres (0 or absent: 64 a cube face's side), the top of its levels (about cell_m apart), its ticks a
-// second, the game seconds a real one simulates, the prevailing wind's speed, a storm's radius (the Coriolis comes from
+// second, the game seconds a real one simulates, a storm's radius (the Coriolis comes from
 // it; 0 or absent: a quarter of the radius) and the game seconds simulated before the first frame; "look" whether there is air and clouds, and their scale.
 // A path is relative to the file naming it, or absolute (res://, /...); "species" and "biomes" files hold the list, a
 // string in a "biomes" list a file holding one biome. The default biome (the one without "at") is moved last; two are
@@ -106,9 +106,8 @@ struct WorldFile {
         bool on = false;
         double cell_m = 0.0; // the grid's cells' width (WeatherGrid::for_base; 0: DEFAULT_SIDE cells a face side)
         double top_m = 600.0; // the levels' top over the ground, about cell_m apart (WeatherFluid)
-        double tick_hz = 5.0;
+        double tick_hz = 2.0; // 2026-11-26: a tick costs ~250 ms at 70 cells a face side, 5 a second fell behind
         double time_scale = 1.0;
-        double prevailing_mps = 5.0; // the large-scale wind (WeatherForcing)
         double storm_m = 0.0; // a storm seed's radius; 0: 1 / 8 of the planet's
         double spin_up_s = 600.0;
         double day_s = 300.0; // the weather's day: its Coriolis (the twist: storms spin at the game's scale)

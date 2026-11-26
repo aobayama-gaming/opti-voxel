@@ -19,10 +19,10 @@
 //   DROPLET_RADIUS_M, Stephens 1978's two-stream). Clear, the day's mean is ground_k; land warms into the afternoon
 //   (the slab lags the sun by an eighth of a day), a sea (an inertia of ~1e5: its mixed layer) barely moves, a cloud's
 //   shade cools what is under it.
-// - The large-scale wind: the pressure gradient that holds the prevailing wind u_g in geostrophic balance, f up x u_g
-//   added to every level (u_g: east times -sin(6 |latitude|), trade easterlies at 15 degrees, westerlies at 45, y the
-//   pole axis); the Coriolis turns the rest. f = 2 Omega up_y, Omega the weather's day (the twist: a day of minutes, so
-//   storms spin at the game's scale).
+// - No large-scale wind is imposed (2026-11-26: Earth's three cells, put in as a balanced pressure gradient, held the
+//   air in steady bands round the axis and a cloud ring under the polar jet): the air starts at rest and every wind is
+//   the sun's heating, the convection and the storms', turned by the Coriolis (f = 2 Omega up_y, Omega the weather's
+//   day: a day of minutes, so storms spin at the game's scale).
 // - Storms' seeds: in each step a column starts one with the chance its biomes' storms give (a whole planet of storms 1
 //   starts one an hour; a hash of the seed, the step and the column): a warm, moist bubble of storm_m in the lower half
 //   of the levels. What it grows into is the physics': the seed only triggers it.
@@ -51,7 +51,6 @@ public:
 
     struct Params {
         double day_s = 300.0; // the weather's day (Omega = 2 pi / day_s)
-        double prevailing_mps = 5.0;
         double storm_m = 0.0; // 0: 1 / 8 of the radius
         double inversion_m = 300.0;
         uint32_t seed = 0;
@@ -63,7 +62,7 @@ public:
     double omega() const { return 2.0 * 3.14159265358979323846 / params.day_s; }
     // The sounding of the grounds' mean temperature (WeatherMoist::Sounding).
     WeatherMoist::Sounding sounding(const WeatherFluid &p_fluid) const;
-    // The fluid's start: the sounding, the prevailing wind, a little noise on the lowest levels.
+    // The fluid's start: the sounding, the air at rest, a little noise on the lowest levels.
     void start(WeatherFluid &p_fluid, const WeatherMoist::Sounding &p_sounding) const;
     // Each column's ground at its day's mean (ground_k), its wetness and roughness.
     void grounds(std::vector<WeatherMoist::Ground> &r_ground) const;
@@ -100,9 +99,6 @@ public:
             double &r_night) const;
     // A storm's seed under a position (metres from the base's centre).
     void seed_storm(WeatherFluid &p_fluid, const double p_pos[3]) const;
-
-    // The prevailing wind at a unit up for p_speed m/s.
-    static void prevailing(const double p_up[3], double p_speed, double r_wind[3]);
 
 private:
     Params params;

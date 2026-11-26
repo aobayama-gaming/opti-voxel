@@ -236,11 +236,12 @@ eddy diffusivity the resolved flow's (no closure of its own since 2026-11-25); o
   warms into the afternoon (its warmest an eighth of a day after noon). With the 300 s day a moist soil (1500) swings
   2-8 K, dry sand (300) five times as much, a sea (1e5, its mixed layer) under 0.1 K; a cloud's shade cools what is
   under it (`test_weather_forcing.cpp`).
-- **The large scale:** the pressure gradient holding the prevailing wind in geostrophic balance, `f up x u_g` on every
-  level (`u_g`: east times `-sin(6 |latitude|)`, trades at 15 degrees, westerlies at 45). `f = 2 Omega up_y`, `Omega`
-  the weather's day (`day_s` 300 s: the twist, storms spin at the game's scale). The jets are unstable: they roll up
-  into mid-latitude eddies, which the cube's 4-fold symmetry seeds at wavenumber 4 (without the prevailing wind there
-  are none: the grid makes no wind by itself).
+- **No large-scale wind is imposed:** the air starts at rest, every wind is the sun's heating, the convection's and the
+  storms', turned by the Coriolis (`f = 2 Omega up_y`, `Omega` the weather's day, `day_s` 300 s: the twist, storms spin
+  at the game's scale). Removed 2026-11-26: Earth's three cells (`-sin(6 |latitude|)` east, 5 m/s) put in at the start
+  and held by their balancing pressure gradient. Measured on the `fix` world (after the corner fix) over 20 game
+  minutes: the wind stayed in steady bands round the axis (a 5-minute day balances them almost exactly), and the
+  polar easterlies' jet at 75 degrees, its surface fluxes the strongest, kept a full-cover ring round each pole.
 - **Storm seeds:** each step a column starts one with the chance its `storms` gives (a planet of storms 1 starts one an
   hour; a hash of the seed, the step and the column): +2 K and +2 g/kg in a bubble of `storm_m` over the lower half of
   the levels. What it grows into is the physics'.
@@ -250,17 +251,16 @@ eddy diffusivity the resolved flow's (no closure of its own since 2026-11-25); o
   over the thermals' reach and nothing formed in 20 minutes), a cloud layer (+4 K/km, drying), a 4 K inversion over
   40 m, dry stable air above. 0.1 K of noise on the two lowest levels.
 - **Tests** (`test_weather_forcing.cpp`): the sounding saturates at the base and not under it; the ground's noon, night
-  and day's mean; the trades from the east, the westerlies from the west; storms at their rate, the same from the same
-  seed. **A trade-wind sea** (all of it at once on 6 x 32^2 columns: a sea 1.5 K over its air, the rotation, the
-  prevailing wind), sampled each minute from 15 to 40: cumulus with their base at 140-180 m, nothing at the ground nor
-  above 340 m, 0.8% of the columns cloudy on average and 5.6% at most. BOMEX's ~10%: the twisted rotation (f up to
-  0.04 /s, a thermal's Rossby number ~0.5) stiffens the thermals (a 50-minute day gave 5.6% on average).
+  and day's mean; storms at their rate, the same from the same seed. **A trade-wind sea** (all of it at once on
+  6 x 32^2 columns: a sea 1.5 K over its air, the rotation, the air at rest), sampled each minute from 15 to 40: 23% of
+  the columns cloudy on average, 29% at most (2026-11-26; with the prevailing wind imposed it was 0.8% and 5.6%).
 
 ## Planet file
 `"weather"`: on by default over a sphere (`"on": false` turns it off), refused over a flat shape or a torus (until its
 grid lands). `cell_m` (the cells' width in metres; 0 or absent: 64 cells a cube face's side; refused where the side
 would leave [4, 1024]), `top_m` (the levels' top over the ground, 600; the levels about `cell_m` apart, at least 2),
-`tick_hz` (5), `time_scale` (game seconds a real second simulates, 1), `prevailing_mps` (5), `storm_m` (0: 1/8 of the
+`tick_hz` (2: a tick costs ~250 ms at 70 cells a face side, 5 a second fell behind), `time_scale` (game seconds a
+real second simulates, 1), `storm_m` (0: 1/8 of the
 radius), `spin_up_s` (game seconds simulated before the first frame, 600), `day_s` (the weather's day, 300),
 `inversion_m` (the start sounding's inversion, 300, under `top_m`), `exchange` (the surface fluxes' twist, 15),
 `convection` (the shallow convection's updraft, true) and `cloud_spread` (the partial cloud, true; false: each cell all
