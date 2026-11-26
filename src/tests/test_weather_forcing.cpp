@@ -71,26 +71,6 @@ TEST_CASE("WeatherForcing: the sun turns west, once a weather day") {
     CHECK(day.z == doctest::Approx(0.866).epsilon(1e-5));
 }
 
-TEST_CASE("WeatherForcing::mean_light: a day's mean sunlight, the sun turned round the pole") {
-    constexpr double PI = 3.14159265358979323846;
-    for (const double lat : { 0.0, 20.0, -45.0, 70.0, 89.0 }) {
-        for (const double decl : { 0.0, 23.4, -23.4 }) {
-            const double up[3] = { std::cos(lat * PI / 180.0), std::sin(lat * PI / 180.0), 0.0 };
-            const Float3 noon{ float(std::cos(decl * PI / 180.0)), float(std::sin(decl * PI / 180.0)), 0.0f };
-            double mean = 0.0;
-            const int steps = 7200;
-            for (int h = 0; h < steps; h++) {
-                const Float3 sun = F::turn_sun(noon, 2.0 * PI * (h + 0.5) / steps);
-                mean += std::max(up[0] * sun.x + up[1] * sun.y + up[2] * sun.z, 0.0) / steps;
-            }
-            CAPTURE(lat);
-            CAPTURE(decl);
-            CHECK(F::mean_light(up[1], std::sin(decl * PI / 180.0)) == doctest::Approx(mean).epsilon(1e-4));
-        }
-    }
-    CHECK(F::mean_light(0.0, 0.0) == doctest::Approx(1.0 / PI));
-}
-
 namespace {
 
 // A slab of p_inertia on the equator at equinox, clear, over 12 weather days of 1 s steps: its last day's mean, swing
@@ -173,6 +153,49 @@ TEST_CASE("WeatherForcing::warm: the ground under the noon sun warms, less under
     CHECK(clear > 299.5);
     CHECK(shaded < clear - 0.1);
     CHECK(shaded > 299.0);
+}
+
+// The sun's angle sets each ground's day's mean: over ground_k on the equator, under it at the poles (each column's own
+// day's mean was taken out before 2026-11-26: every latitude stayed at ground_k, nothing to make a wind).
+TEST_CASE("WeatherForcing::warm: over a day the equator warms over ground_k, a pole cools under it") {
+    Setup s = make(8, 299.0f, 0.0f);
+    std::vector<Climate::BiomeWeather> climate(s.grid->cells());
+    for (Climate::BiomeWeather &c : climate) {
+        c.ground_k = 299.0f;
+        c.thermal_inertia = 1500.0f;
+    }
+    F drive(*s.fluid, F::Params(), climate);
+    const M::Sounding snd = drive.sounding(*s.fluid);
+    size_t equator = 0, pole = 0;
+    double low = 2.0, high = -1.0;
+    for (size_t c = 0; c < s.grid->cells(); c++) {
+        double up[3];
+        s.fluid->column_up(c, up);
+        if (std::fabs(up[1]) < low) {
+            low = std::fabs(up[1]);
+            equator = c;
+        }
+        if (std::fabs(up[1]) > high) {
+            high = std::fabs(up[1]);
+            pole = c;
+        }
+    }
+    std::vector<M::Ground> ground;
+    drive.grounds(ground);
+    const double day_s = F::Params().day_s;
+    const Float3 noon{ 0.0f, 0.0f, 1.0f }; // the equinox
+    double equator_mean = 0.0, pole_mean = 0.0;
+    const int per_day = int(day_s);
+    for (int t = 0; t < 6 * per_day; t++) {
+        drive.warm(F::turn_sun(noon, 2.0 * 3.14159265358979323846 * (t + 0.5) / day_s), 1.0, *s.fluid, snd.rho, nullptr, ground);
+        if (t >= 5 * per_day) {
+            equator_mean += double(ground[equator].temp_k) / per_day;
+            pole_mean += double(ground[pole].temp_k) / per_day;
+        }
+    }
+    MESSAGE("day's mean: equator ", equator_mean, " K, pole ", pole_mean, " K (ground_k 299)");
+    CHECK(equator_mean > 299.2);
+    CHECK(pole_mean < 298.5);
 }
 
 TEST_CASE("WeatherForcing: storms seed at their rate, the same ones from the same seed") {

@@ -122,16 +122,6 @@ double WeatherForcing::warm_slab(double p_temp_k, double p_mean_k, double p_iner
     return (p_temp_k + p_dt * (gain * p_q + restore * p_mean_k)) / (1.0 + restore * p_dt);
 }
 
-double WeatherForcing::mean_light(double p_sin_lat, double p_sin_decl) {
-    constexpr double PI = 3.14159265358979323846;
-    const double sl = ov::clamp(p_sin_lat, -1.0, 1.0), sd = ov::clamp(p_sin_decl, -1.0, 1.0);
-    const double cl = std::sqrt(1.0 - sl * sl), cd = std::sqrt(1.0 - sd * sd);
-    // The sun is up while cos h > -tan(lat) tan(decl): from -h0 to h0.
-    const double c = cl * cd > 1e-12 ? -(sl * sd) / (cl * cd) : (sl * sd > 0.0 ? -2.0 : 2.0);
-    const double h0 = std::acos(ov::clamp(c, -1.0, 1.0));
-    return (h0 * sl * sd + cl * cd * std::sin(h0)) / PI;
-}
-
 double WeatherForcing::cloud_extinction(double p_lwc) {
     return 1.5 * ov::max(p_lwc, 0.0) / (1000.0 * DROPLET_RADIUS_M);
 }
@@ -157,14 +147,6 @@ void WeatherForcing::warm(const Float3 &p_towards_sun, double p_dt, const Weathe
     if (len < 1e-9) {
         return;
     }
-    const double sin_decl = sun[1] / len;
-    if (light_mean.size() != climate.size() || std::fabs(sin_decl - light_decl) > 1e-6) {
-        light_mean.resize(climate.size());
-        for (size_t c = 0; c < climate.size(); c++) {
-            light_mean[c] = mean_light(ups[c * 3 + 1], sin_decl);
-        }
-        light_decl = sin_decl;
-    }
     r_ground.resize(climate.size());
     const int levels = p_fluid.levels();
     const double dz = p_fluid.dz_m();
@@ -182,7 +164,7 @@ void WeatherForcing::warm(const Float3 &p_towards_sun, double p_dt, const Weathe
                 lwp += (double(here[p_fluid.scalar_offset(k, WeatherMoist::QC)]) + extra) * p_rho[size_t(k)] * dz;
             }
             const double light = ov::max(dot3(&ups[c * 3], sun) / len, 0.0);
-            const double q = absorbed * ((1.0 - cloud_albedo(lwp)) * light - light_mean[c]);
+            const double q = absorbed * ((1.0 - cloud_albedo(lwp)) * light - PLANET_LIGHT);
             r_ground[c].temp_k = float(warm_slab(r_ground[c].temp_k, climate[c].ground_k, climate[c].thermal_inertia, q, params.day_s, p_dt));
         } });
 }

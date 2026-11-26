@@ -14,11 +14,13 @@
 //   the Coriolis' (one Omega).
 // - The ground (WeatherMoist::Ground) per column: its biomes' blend of ground_k, wetness and z0_m, its temperature a
 //   force-restore slab (Deardorff 1978): dT/dt = 2 sqrt(pi) Q / (I sqrt(P)) - 2 pi / P (T - ground_k), P the day, I the
-//   biome's thermal inertia sqrt(k rho c), Q the sunlight it absorbs over its day's mean: SUN_W_M2 (1 - GROUND_ALBEDO)
-//   ((1 - A) max(up . sun, 0) - mean_light), A the albedo of the cloud over it (its water path, droplets of
-//   DROPLET_RADIUS_M, Stephens 1978's two-stream). Clear, the day's mean is ground_k; land warms into the afternoon
-//   (the slab lags the sun by an eighth of a day), a sea (an inertia of ~1e5: its mixed layer) barely moves, a cloud's
-//   shade cools what is under it.
+//   biome's thermal inertia sqrt(k rho c), Q the sunlight it absorbs over the planet's mean: SUN_W_M2 (1 - GROUND_ALBEDO)
+//   ((1 - A) max(up . sun, 0) - PLANET_LIGHT), A the albedo of the cloud over it (its water path, droplets of
+//   DROPLET_RADIUS_M, Stephens 1978's two-stream). So a ground's day's mean follows the sun's angle there: over
+//   ground_k on the equator, under it at the poles (2026-11-26: each column's own day's mean was taken out, which held
+//   every latitude at ground_k, no warm equator nor cold pole to make a wind). Land warms into the afternoon (the slab
+//   lags the sun by an eighth of a day), a sea (an inertia of ~1e5: its mixed layer) barely moves, a cloud's shade
+//   cools what is under it.
 // - No large-scale wind is imposed (2026-11-26: Earth's three cells, put in as a balanced pressure gradient, held the
 //   air in steady bands round the axis and a cloud ring under the polar jet): the air starts at rest and every wind is
 //   the sun's heating, the convection and the storms', turned by the Coriolis (f = 2 Omega up_y, Omega the weather's
@@ -45,6 +47,7 @@ public:
     static constexpr double NOISE_K = 0.1; // the two lowest levels' start
     static constexpr double SUN_W_M2 = 1000.0; // the clear sky's sunlight at the ground, the sun overhead
     static constexpr double GROUND_ALBEDO = 0.15;
+    static constexpr double PLANET_LIGHT = 0.25; // a sphere's mean of max(up . sun, 0), the sun anywhere
     static constexpr double DROPLET_RADIUS_M = 1e-5; // the clouds' effective radius
     static constexpr double CLOUD_ASYMMETRY = 0.85; // g, the droplets' forward scattering
     static constexpr double AIR_DENSITY = 1.15; // kg/m^3, the cloud layer's (the sounding's at the ground; 6% less at 600 m)
@@ -74,9 +77,6 @@ public:
     // A thermal inertia's slab (force-restore over a day of p_day_s) p_dt on, absorbing p_q W/m^2 over its day's mean,
     // restored to p_mean_k.
     static double warm_slab(double p_temp_k, double p_mean_k, double p_inertia, double p_q, double p_day_s, double p_dt);
-    // The day's mean of max(up . sun, 0) at sin(latitude) p_sin_lat, the sun at sin(declination) p_sin_decl, turning
-    // round the pole (Berger's daily insolation).
-    static double mean_light(double p_sin_lat, double p_sin_decl);
     // The albedo of a cloud of p_lwp kg/m^2 of water.
     static double cloud_albedo(double p_lwp);
     // The extinction (1/m) of p_lwc kg/m^3 of cloud water: 3 LWC / (2 rho_w r_e) (droplets far larger than the light's
@@ -104,8 +104,6 @@ private:
     Params params;
     std::vector<Climate::BiomeWeather> climate;
     std::vector<double> ups; // 3 per column
-    std::vector<double> light_mean; // per column, for the sun's declination light_decl
-    double light_decl = 2.0;
     double mean_ground_k = 299.0;
     bool any_storms = false;
     uint64_t storms_started = 0;
