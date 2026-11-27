@@ -118,6 +118,9 @@ public:
 
     // The saturation mixing ratio at temperature p_t (K) and pressure p_p_mb (Tetens as in KW eq. 2.11).
     static double saturation(double p_t, double p_p_mb);
+    // The potential temperature at p_z_m of a saturated parcel at p_theta_k at p_from_m (the pseudo-adiabat,
+    // c_p dT + g dz + L dq_s = 0 on saturation()'s q_s, the hydrostatic exner of a p_theta_ref atmosphere; 10 m steps).
+    static double moist_adiabat(double p_theta_k, double p_from_m, double p_z_m, double p_theta_ref);
     // The bulk exchange coefficient at height p_z_m over a roughness p_z0_m (neutral).
     static double neutral_exchange(double p_z_m, double p_z0_m);
     // The buoyancy (m/s^2) of a cell's theta, qv, qc, qr against its level's reference: virtual, the condensate's

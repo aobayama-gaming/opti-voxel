@@ -61,6 +61,8 @@ WeatherMoist::Sounding WeatherForcing::sounding(const WeatherFluid &p_fluid) con
     const double top = inv + INVERSION_DEPTH_M;
     const double theta_inv = theta0 + CLOUD_LAPSE_K_PER_M * (inv - base);
     const double q_inv = q0 - CLOUD_DRYING_PER_M * (inv - base);
+    // Above the inversion: the moist adiabat of the mixed layer's air, as much warmer than it as at the inversion's top.
+    const double above = theta_inv + INVERSION_K - WeatherMoist::moist_adiabat(theta0, base, top, theta0);
     std::vector<double> theta, qv;
     for (int k = 0; k < p_fluid.levels(); k++) {
         const double z = p_fluid.level_m(k);
@@ -75,7 +77,7 @@ WeatherMoist::Sounding WeatherForcing::sounding(const WeatherFluid &p_fluid) con
             theta.push_back(theta_inv + INVERSION_K * t);
             qv.push_back(q_inv + (ABOVE_HUMIDITY * q0 - q_inv) * t);
         } else {
-            theta.push_back(theta_inv + INVERSION_K + ABOVE_LAPSE_K_PER_M * (z - top));
+            theta.push_back(above + WeatherMoist::moist_adiabat(theta0, base, z, theta0));
             qv.push_back(ABOVE_HUMIDITY * q0);
         }
     }

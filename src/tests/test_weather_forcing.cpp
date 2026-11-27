@@ -20,12 +20,13 @@ struct Setup {
     std::unique_ptr<F> drive;
 };
 
-Setup make(int p_n, float p_ground_k, float p_storms, const F::Params &p_params = F::Params()) {
+Setup make(int p_n, float p_ground_k, float p_storms, const F::Params &p_params = F::Params(), const WeatherLevels &p_levels = WeatherLevels()) {
     Setup s;
     s.grid = std::make_shared<CubeSphereGrid>(p_n, 1000.0);
     WeatherFluid::Params fp;
-    fp.levels = 15;
-    fp.top_m = 600.0;
+    fp.levels = p_levels.count;
+    fp.top_m = p_levels.top_m;
+    fp.stretch = p_levels.stretch;
     fp.scalars = M::SCALARS;
     fp.omega_rad_s = 2.0 * 3.14159265358979323846 / p_params.day_s;
     s.fluid = std::make_unique<WeatherFluid>(s.grid, fp);
@@ -56,6 +57,35 @@ TEST_CASE("WeatherForcing: the sounding's mixed layer saturates at the cloud bas
     const int top = s.fluid->levels() - 1;
     CHECK(snd.theta[size_t(top)] > theta0 + F::INVERSION_K);
     CHECK(snd.qv[size_t(top)] == doctest::Approx(F::ABOVE_HUMIDITY * snd.qv[0]));
+}
+
+// A deep atmosphere (3 km, stretched levels): a saturated parcel of the mixed layer stays colder than the air over the
+// inversion up to the top (the moist adiabat it follows, kept warmer): no thermal crosses it into a deck under the lid.
+// The old free atmosphere (3 K/km) let it through from 1.25 km up, +5 K at the top: the whole planet's sky filled in 2
+// game minutes (2026-11-27).
+TEST_CASE("WeatherForcing: over the inversion, a deep sounding holds a lifted parcel back") {
+    Setup s = make(8, 299.5f, 0.0f, F::Params(), WeatherLevels::for_top(3000.0, 45.0, 1.12, WeatherFluid::MAX_LEVELS));
+    const M::Sounding snd = s.drive->sounding(*s.fluid);
+    const double theta0 = snd.theta[0];
+    const double base = F::CLOUD_BASE * F::Params().inversion_m;
+    const double over = F::Params().inversion_m + F::INVERSION_DEPTH_M;
+    int checked = 0;
+    double least = 1e30;
+    for (int k = 0; k < s.fluid->levels(); k++) {
+        const double z = s.fluid->level_m(k);
+        if (z <= over) {
+            continue;
+        }
+        const double parcel = M::moist_adiabat(theta0, base, z, theta0);
+        const double qs = M::saturation(parcel * snd.exner[size_t(k)], M::P0_MB * std::pow(snd.exner[size_t(k)], 1.0 / M::KAPPA_EXNER));
+        const double margin = snd.theta[size_t(k)] * (1.0 + 0.61 * snd.qv[size_t(k)]) - parcel * (1.0 + 0.61 * qs);
+        least = std::min(least, margin);
+        CHECK(snd.qv[size_t(k)] < 0.9 * qs); // under saturation
+        checked++;
+    }
+    MESSAGE(checked, " levels over the inversion, the parcel at least ", least, " K colder (virtual)");
+    CHECK(checked >= 10);
+    CHECK(least > 1.0);
 }
 
 TEST_CASE("WeatherForcing: the sun turns west, once a weather day") {

@@ -55,8 +55,29 @@ WeatherMoist::WeatherMoist(const WeatherFluid &p_fluid, const Sounding &p_soundi
     surface_flux.assign(p_fluid.grid().cells(), Surface());
 }
 
+namespace {
+// Tetens' constants (saturation()).
+constexpr double TETENS_A = 17.27;
+constexpr double TETENS_T0 = 273.0;
+constexpr double TETENS_T1 = 36.0;
+} // namespace
+
 double WeatherMoist::saturation(double p_t, double p_p_mb) {
-    return 3.8 / p_p_mb * std::exp(17.27 * (p_t - 273.0) / (p_t - 36.0));
+    return 3.8 / p_p_mb * std::exp(TETENS_A * (p_t - TETENS_T0) / (p_t - TETENS_T1));
+}
+
+double WeatherMoist::moist_adiabat(double p_theta_k, double p_from_m, double p_z_m, double p_theta_ref) {
+    auto exner = [&](double p_z) { return 1.0 - GRAVITY / (CP * p_theta_ref) * p_z; };
+    const int steps = ov::max(1, int(std::ceil(std::fabs(p_z_m - p_from_m) / 10.0)));
+    const double h = (p_z_m - p_from_m) / steps;
+    double t = p_theta_k * exner(p_from_m);
+    for (int s = 0; s < steps; s++) {
+        const double qs = saturation(t, P0_MB * std::pow(exner(p_from_m + s * h), 1.0 / KAPPA_EXNER));
+        // dq_s = dq_s/dT dT - q_s dp / p, dp / p = -g dz / (R_d T).
+        const double dqs_dt = qs * TETENS_A * (TETENS_T0 - TETENS_T1) / ((t - TETENS_T1) * (t - TETENS_T1));
+        t -= h * GRAVITY * (1.0 + LATENT * qs / (R_D * t)) / (CP + LATENT * dqs_dt);
+    }
+    return t / exner(p_z_m);
 }
 
 double WeatherMoist::neutral_exchange(double p_z_m, double p_z0_m) {

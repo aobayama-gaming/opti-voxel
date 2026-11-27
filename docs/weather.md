@@ -282,7 +282,11 @@ eddy diffusivity the resolved flow's (no closure of its own since 2026-11-25); o
   `inversion_m`: a mixed layer 1.5 K under the grounds' mean up to 0.53 of the inversion, its vapour saturating a
   ground parcel exactly there (the cloud base at the mixed layer's top, as in BOMEX; at 88% humidity the base sat 80 m
   over the thermals' reach and nothing formed in 20 minutes), a cloud layer (+4 K/km, drying), a 4 K inversion over
-  40 m, dry stable air above. 0.1 K of noise on the two lowest levels.
+  40 m; above it, air at 45% of the mixed layer's vapour on the mixed layer's moist adiabat (`WeatherMoist::moist_adiabat`),
+  kept as much warmer than it as at the inversion's top (convective quasi-equilibrium, Emanuel 1994): a saturated
+  thermal stays 1.7-2.7 K colder than the air up to any top, only a ground past its baseline breaks through. The old
+  3 K/km let a parcel through from 1.25 km up (+5 K at 3 km): with `top_m` 3000 the whole sky filled in 2 game
+  minutes, updrafts at 50 m/s. 0.1 K of noise on the two lowest levels.
 - **Tests** (`test_weather_forcing.cpp`): the sounding saturates at the base and not under it; the ground's noon, night
   and day's mean; storms at their rate, the same from the same seed. **A trade-wind sea** (all of it at once on
   6 x 32^2 columns: a sea 1.5 K over its air, the rotation, the air at rest), sampled each minute from 15 to 40: 24% of

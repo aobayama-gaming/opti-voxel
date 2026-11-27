@@ -39,7 +39,9 @@
 //   of the levels. What it grows into is the physics': the seed only triggers it.
 // - The sounding the air starts from and is buoyant against: a trade-wind boundary layer (BOMEX's shape, Siebesma et
 //   al. 2003) scaled to the inversion: a mixed layer AIR_BELOW_GROUND_K under the grounds' mean, its vapour
-//   saturating at the mixed layer's top (the cloud base), a conditionally unstable cloud layer, a 4 K inversion, dry stable air above.
+//   saturating at the mixed layer's top (the cloud base), a conditionally unstable cloud layer, a 4 K inversion; above
+//   it the mixed layer's moist adiabat kept the inversion's margin warmer (convective quasi-equilibrium, Emanuel 1994):
+//   a deep atmosphere no ordinary thermal crosses, only a ground warmer than its baseline.
 class WeatherForcing {
 public:
     static constexpr double STORM_PERIOD_S = 3600.0;
@@ -50,7 +52,6 @@ public:
     static constexpr double INVERSION_DEPTH_M = 40.0;
     static constexpr double INVERSION_K = 4.0;
     static constexpr double CLOUD_LAPSE_K_PER_M = 0.004; // theta, the cloud layer's
-    static constexpr double ABOVE_LAPSE_K_PER_M = 0.003; // theta, above the inversion
     static constexpr double CLOUD_DRYING_PER_M = 1.4e-5; // q_v
     static constexpr double ABOVE_HUMIDITY = 0.45; // q_v above the inversion over the mixed layer's
     static constexpr double NOISE_K = 0.1; // the two lowest levels' start
