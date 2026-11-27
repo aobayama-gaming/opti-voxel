@@ -15,6 +15,8 @@ void WeatherDebugNode::_bind_methods() {
     ClassDB::bind_method(D_METHOD("open", "world_path", "spin_up_s"), &WeatherDebugNode::open);
     ClassDB::bind_method(D_METHOD("step", "ticks"), &WeatherDebugNode::step);
     ClassDB::bind_method(D_METHOD("run", "real_s"), &WeatherDebugNode::run);
+    ClassDB::bind_method(D_METHOD("seed_vortex", "lat_deg", "lon_deg", "vmax_mps", "radius_m"), &WeatherDebugNode::seed_vortex);
+    ClassDB::bind_method(D_METHOD("storm", "radius_m"), &WeatherDebugNode::storm);
     ClassDB::bind_method(D_METHOD("is_ready"), &WeatherDebugNode::is_ready);
     ClassDB::bind_method(D_METHOD("stats"), &WeatherDebugNode::stats);
     ClassDB::bind_method(D_METHOD("grid"), &WeatherDebugNode::grid);
@@ -56,6 +58,21 @@ void WeatherDebugNode::step(int p_ticks) {
 
 void WeatherDebugNode::run(double p_real_s) {
     session.run(p_real_s);
+}
+
+void WeatherDebugNode::seed_vortex(double p_lat_deg, double p_lon_deg, double p_vmax_mps, double p_radius_m) {
+    session.seed_vortex(p_lat_deg, p_lon_deg, p_vmax_mps, p_radius_m);
+}
+
+Dictionary WeatherDebugNode::storm(double p_radius_m) const {
+    const WeatherDebug::Storm s = session.storm(p_radius_m);
+    Dictionary d;
+    d["drop"] = s.drop;
+    d["max_wind"] = s.max_wind;
+    d["rmw_m"] = s.rmw_m;
+    d["lat_deg"] = s.lat_deg;
+    d["lon_deg"] = s.lon_deg;
+    return d;
 }
 
 bool WeatherDebugNode::is_ready() const {

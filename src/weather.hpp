@@ -126,6 +126,10 @@ public:
     // The latest state's whole simulation (WeatherDebug::Snapshot; null unless probing).
     std::shared_ptr<const WeatherDebug::Snapshot> probe() const { return live_probe; }
 
+    // Any thread: a weak cyclone (WeatherForcing::seed_vortex) round a position (metres from the base's centre), from
+    // the next tick on.
+    void seed_vortex(const double p_pos[3], double p_vmax_mps, double p_radius_m);
+
     // The worker's: the forcing and the spin-up first, then one tick per call while ticks are due.
     bool step() override;
 
@@ -165,6 +169,12 @@ private:
     uint64_t next_done = 0;
     double next_time_s = 0.0;
     uint64_t next_storms = 0;
+    struct Vortex {
+        double pos[3];
+        double vmax_mps;
+        double radius_m;
+    };
+    std::vector<Vortex> vortices; // seed_vortex's, not yet applied
     std::shared_ptr<const WeatherDebug::Snapshot> next_probe;
     Float3 sun_dir{ 0.0f, 0.0f, 1.0f }; // an equinox sun until a host sets one (the report's)
     TimingStat tick_stat;

@@ -270,6 +270,61 @@ TEST_CASE("WeatherForcing::relax: the air relaxes to its column's equilibrium ov
     CHECK((s.fluid->state()[at_qv] - eq_qv) / 1e-3 == doctest::Approx(std::exp(-1.0)).epsilon(0.01));
 }
 
+// The boundary layer follows its ground, the free atmosphere is the planet's: a warm column's air is warmer under the
+// inversion, the same over it.
+TEST_CASE("WeatherForcing::level_equilibrium: the boundary layer follows its ground, the air aloft is the planet's") {
+    Setup s = make(8, 299.0f, 0.0f, F::Params(), WeatherLevels::for_top(3000.0, 45.0, 1.12, WeatherFluid::MAX_LEVELS));
+    const M::Sounding snd = s.drive->sounding(*s.fluid);
+    const double inv = F::Params().inversion_m;
+    for (int k = 0; k < s.fluid->levels(); k++) {
+        double theta, qv;
+        s.drive->level_equilibrium(snd, k, 2.0, 1.1, theta, qv);
+        const double z = snd.z[size_t(k)];
+        if (z < inv) {
+            CHECK(theta == doctest::Approx(snd.theta[size_t(k)] + 2.0));
+            CHECK(qv == doctest::Approx(snd.qv[size_t(k)] * 1.1));
+        } else if (z > inv + F::INVERSION_DEPTH_M) {
+            CHECK(theta == doctest::Approx(snd.theta[size_t(k)]));
+            CHECK(qv == doctest::Approx(snd.qv[size_t(k)]));
+        }
+    }
+}
+
+// The typhoon benchmark's seed: a cyclone turns anticlockwise seen from above in the north, clockwise in the south, its
+// wind vmax at its radius on the lowest level.
+TEST_CASE("WeatherForcing::seed_vortex: a cyclone each side of the equator, vmax at its radius") {
+    for (const double lat : { 20.0, -20.0 }) {
+        CAPTURE(lat);
+        Setup s = make(32, 299.0f, 0.0f);
+        const WeatherGrid &g = *s.grid;
+        const double r = 1000.0, a = lat * 3.14159265358979323846 / 180.0;
+        const double centre[3] = { r * std::cos(a), r * std::sin(a), 0.0 };
+        const double up[3] = { std::cos(a), std::sin(a), 0.0 };
+        F::seed_vortex(*s.fluid, centre, 5.0, 150.0);
+        double spin = 0.0, strongest = 0.0, at_m = 0.0;
+        for (size_t in = 0; in < g.cells(); in++) {
+            const int f = int(in / (size_t(g.width()) * size_t(g.height())));
+            const int j = int((in / size_t(g.width())) % size_t(g.height()));
+            const int i = int(in % size_t(g.width()));
+            double pos[3];
+            s.fluid->column_pos(in, pos);
+            const float *w = &s.fluid->state()[g.index(f, i, j) * size_t(s.fluid->stride()) + size_t(s.fluid->wind_offset(0))];
+            const double d[3] = { pos[0] - centre[0], pos[1] - centre[1], pos[2] - centre[2] };
+            // (d x w) . up: positive anticlockwise round up.
+            spin += ((d[1] * w[2] - d[2] * w[1]) * up[0] + (d[2] * w[0] - d[0] * w[2]) * up[1] + (d[0] * w[1] - d[1] * w[0]) * up[2]);
+            const double speed = std::sqrt(double(w[0]) * w[0] + double(w[1]) * w[1] + double(w[2]) * w[2]);
+            if (speed > strongest) {
+                strongest = speed;
+                at_m = std::sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+            }
+        }
+        MESSAGE("lat ", lat, ": strongest ", strongest, " m/s at ", at_m, " m");
+        CHECK((spin > 0.0) == (lat > 0.0));
+        CHECK(strongest == doctest::Approx(5.0 * (1.0 - s.fluid->level_m(0) / s.fluid->top_m())).epsilon(0.1));
+        CHECK(at_m == doctest::Approx(150.0).epsilon(0.3));
+    }
+}
+
 TEST_CASE("WeatherForcing: storms seed at their rate, the same ones from the same seed") {
     // A planet of storms 60 starts one a minute: 10 minutes of 5 s steps, ~10 storms.
     Setup a = make(16, 300.0f, 60.0f);

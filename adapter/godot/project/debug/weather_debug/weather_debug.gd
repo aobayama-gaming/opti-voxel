@@ -3,7 +3,8 @@ extends Node3D
 ## terrain. The planet is the weather's cells coloured by a field at a level (or a column field: the ground and its
 ## fluxes); click a cell for its column (every level's values) and the section through it (its face's row, the levels up).
 ## Run: godot --path project res://debug/weather_debug/weather_debug.tscn -- [--world=res://worlds/ocean_test.planet.json]
-##   [--spin_up=<s>, the world's by default] [--run: running from the start] [--speed=<x>: game seconds per real
+##   [--spin_up=<s>, the world's by default] [--vortex=<lat,lon,vmax,radius>: a weak cyclone at the start (degrees,
+##   m/s, m); --trace then prints the deepest low each line, WEATHER_STORM] [--run: running from the start] [--speed=<x>: game seconds per real
 ##   second, 20 at most: past what the worker keeps up with, it ticks flat out] [--field=<name>] [--level=<k>] [--pick=<face,i,j>] [--shot=<png>
 ##   --ticks=<n>: n ticks, a screenshot, quit] [--profiles=<m,m,...>: headless, the profile tables (all, sea, land) at
 ##   those game minutes after the start, printed, then quit] [--trace=<m>: headless, one line a game minute for m minutes
@@ -69,6 +70,9 @@ func _ready() -> void:
 	level = int(args.get("level", "0"))
 	field_menu.select(field)
 	_open(args.get("world", "res://worlds/ocean_test.planet.json"), float(args.get("spin_up", "-1")))
+	if args.has("vortex"):
+		var v: PackedStringArray = String(args["vortex"]).split(",")
+		sim.seed_vortex(float(v[0]), float(v[1]), float(v[2]), float(v[3]))
 	if args.has("pick"):
 		var p: PackedStringArray = String(args["pick"]).split(",")
 		if p.size() == 3:
@@ -342,6 +346,11 @@ func _trace() -> void:
 		var ci := uat % wd
 		print("WEATHER_TRACE %5.2f %7.0f %7.1f %7.2f (%2d, %d, %2d, %2d) %7.2f %7.2f %+8.3f %7.3f %7.4f %6.3f" % [m, st.get("snapshot_game_s", 0.0),
 				st.get("tick", {}).get("avg_ms", 0.0), umax, ulev, face, ci, cj, usum / count, wmax, th / count, qv / count, qc / count, cover / cov.size()])
+		if args.has("vortex"):
+			var r := float(String(args["vortex"]).split(",")[3])
+			var s: Dictionary = sim.storm(4.0 * r)
+			print("WEATHER_STORM %5.2f  drop %7.2f m2/s2  max wind %6.2f m/s at %5.0f m  centre %+6.1f %+7.1f" % [m, s["drop"], s["max_wind"],
+					s["rmw_m"], s["lat_deg"], s["lon_deg"]])
 		if umax > 25.0 and not shown:
 			shown = true
 			var col: Array = sim.column(face, ci, cj)

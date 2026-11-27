@@ -105,6 +105,13 @@ public:
     static Float3 turn_sun(const Float3 &p_sun, double p_angle);
     // The large-scale wind and the storms' seeds for p_dt of step p_step; the storms started so far.
     void apply(WeatherFluid &p_fluid, double p_dt, uint64_t p_step);
+    // Level p_level's equilibrium in a column of equilibrium() p_offset_k, p_vapour: the reference moved by them in the
+    // boundary layer, under the inversion; above it the planet's free atmosphere, alike over every ground (the weak
+    // temperature gradient: gravity waves spread a warm patch aloft in minutes, Sobel & Bretherton 2000), so the
+    // warmest grounds are the warmest against their sky (their thermals cross the inversion: deep convection); linear
+    // across the inversion.
+    void level_equilibrium(const WeatherMoist::Sounding &p_reference, int p_level, double p_offset_k, double p_vapour, double &r_theta,
+            double &r_qv) const;
     // Column p_c's equilibrium against p_reference: its theta offset (its baseline over the planet's mean) and its
     // vapour's factor (the saturation's ratio at the ground over that offset: the same relative humidity).
     void equilibrium(size_t p_c, const WeatherMoist::Sounding &p_reference, double &r_offset_k, double &r_vapour) const;
@@ -121,6 +128,11 @@ public:
             double &r_night) const;
     // A storm's seed under a position (metres from the base's centre).
     void seed_storm(WeatherFluid &p_fluid, const double p_pos[3]) const;
+    // A weak cyclone round a position (metres from the base's centre): the tangent wind p_vmax_mps at p_radius_m from its
+    // centre, v = vmax x e^((1 - x^2) / 2) (x = r / radius), turning as the Coriolis turns a low (anticlockwise seen
+    // from above in the north), fading to none at the top; no warm core or low (the projection makes its pressure).
+    // The typhoon benchmark's start (Rotunno & Emanuel 1987, Nolan et al. 2007: a weak vortex over a warm sea).
+    static void seed_vortex(WeatherFluid &p_fluid, const double p_pos[3], double p_vmax_mps, double p_radius_m);
 
 private:
     Params params;

@@ -413,6 +413,59 @@ void Session::step(int p_ticks) {
     }
 }
 
+Storm strongest_storm(const Snapshot &p_snap, const WeatherGrid &p_grid, double p_radius_m) {
+    Storm out;
+    const size_t cells = p_snap.cells();
+    if (cells == 0) {
+        return out;
+    }
+    double mean = 0.0, lowest = 1e30;
+    size_t centre = 0;
+    for (size_t c = 0; c < cells; c++) {
+        const double p = p_snap.at(PRESSURE, c, 0);
+        mean += p / double(cells);
+        if (p < lowest) {
+            lowest = p;
+            centre = c;
+        }
+    }
+    out.drop = mean - lowest;
+    const size_t per_face = size_t(p_snap.width) * size_t(p_snap.height);
+    auto place = [&](size_t p_c, double r_pos[3], double r_up[3]) {
+        p_grid.cell_surface(int(p_c / per_face), int(p_c % size_t(p_snap.width)), int((p_c % per_face) / size_t(p_snap.width)), r_pos, r_up);
+    };
+    double at[3], up[3];
+    place(centre, at, up);
+    out.lat_deg = std::asin(ov::clamp(up[1], -1.0, 1.0)) * 180.0 / 3.14159265358979323846;
+    out.lon_deg = std::atan2(up[2], up[0]) * 180.0 / 3.14159265358979323846;
+    for (size_t c = 0; c < cells; c++) {
+        double pos[3], u[3];
+        place(c, pos, u);
+        const double d = std::sqrt((pos[0] - at[0]) * (pos[0] - at[0]) + (pos[1] - at[1]) * (pos[1] - at[1]) + (pos[2] - at[2]) * (pos[2] - at[2]));
+        const double speed = p_snap.at(SPEED, c, 0);
+        if (d <= p_radius_m && speed > out.max_wind) {
+            out.max_wind = speed;
+            out.rmw_m = d;
+        }
+    }
+    return out;
+}
+
+void Session::seed_vortex(double p_lat_deg, double p_lon_deg, double p_vmax_mps, double p_radius_m) {
+    if (!sim) {
+        return;
+    }
+    const double lat = p_lat_deg * 3.14159265358979323846 / 180.0, lon = p_lon_deg * 3.14159265358979323846 / 180.0;
+    const double r = sim->radius_m();
+    const double pos[3] = { r * std::cos(lat) * std::cos(lon), r * std::sin(lat), r * std::cos(lat) * std::sin(lon) };
+    sim->seed_vortex(pos, p_vmax_mps, p_radius_m);
+}
+
+Storm Session::storm(double p_radius_m) const {
+    const auto snap = sim ? sim->probe() : nullptr;
+    return snap ? strongest_storm(*snap, sim->grid(), p_radius_m) : Storm();
+}
+
 void Session::run(double p_real_s) {
     if (!sim) {
         return;

@@ -250,8 +250,16 @@ eddy diffusivity the resolved flow's (no closure of its own since 2026-11-25); o
   the column's year's mean of `max(up . sun, 0)` (taken as the equinox's day), 1/4 its mean over the sphere, so the
   planet's mean stays the climate's. A warm equator and cold poles, sea and land alike (a long mean does not depend on
   the heat a ground holds); `sun_k` 40: the equator +2.7 K, the poles -10 K. The planet starts on it: the ground at its
-  baseline, each column's air (the sounding) moved by its baseline's offset from the planet's mean, its vapour keeping
-  its relative humidity. The day swings it round that: a force-restore slab per column (Deardorff 1978),
+  baseline, each column's boundary layer (the sounding under the inversion) moved by its baseline's offset from the
+  planet's mean, its vapour keeping its relative humidity, the free atmosphere over the inversion the planet's
+  (`level_equilibrium`, linear across the inversion). The tropics' weak temperature gradient (Sobel & Bretherton
+  2000): gravity waves spread a warm patch aloft in minutes, so the air aloft is alike over warm and cold grounds and
+  the warmest grounds are the warmest against their sky: their thermals cross the inversion (deep convection, where
+  typhoons start), a cold ground's air is capped (a polar inversion). Moving the whole column instead (before
+  2026-11-27) capped every ground alike, and a deep atmosphere turned its equator-pole contrast into the pressure of
+  the whole depth: with `top_m` 3000 `sun_k` 80 drove 45 m/s at the top and ran away, 16 held; with the free
+  atmosphere shared, `sun_k` 40 holds (15 game minutes: cover 0.20-0.27, the strongest wind 6-8 m/s, ~215 ms a tick).
+  The day swings it round that: a force-restore slab per column (Deardorff 1978),
   `dT/dt = 2 sqrt(pi) Q / (I sqrt(P)) - 2 pi / P (T - baseline)`: `P` the day, `I` the biomes' `thermal_inertia`
   `sqrt(k rho c)`, `Q` the sunlight absorbed over the baseline's (`1000 W/m^2 (1 - 0.15) ((1 - A) max(up . sun, 0) - L)`,
   `A` the albedo of the cloud over it: its water path, droplets of 10 um, a two-stream `(1 - g) tau / (2 + (1 - g)
@@ -262,8 +270,7 @@ eddy diffusivity the resolved flow's (no closure of its own since 2026-11-25); o
   everywhere; with the baseline (`sun_k` 40) 6.8-7.6 m/s in eddies over the whole planet, cloud sheets and bands, the
   cover 0.31 -> 0.17 over the 20 minutes (the circulation mixes the air's gradient, only the grounds restore it).
 - **The air's relaxation** (`relax_days`, 2 weather days): each level's theta and vapour relax to the column's
-  equilibrium, the start's state (the sounding moved by the baseline's offset, the vapour keeping its relative
-  humidity). Theta: the air's radiation, Held & Suarez 1994's Newtonian relaxation (they take 40 days aloft; a game's
+  equilibrium, the start's state (`level_equilibrium`). Theta: the air's radiation, Held & Suarez 1994's Newtonian relaxation (they take 40 days aloft; a game's
   weather has minutes). Vapour: the exchange with the air over the 600 m lid (the boundary layer's moisture carried
   up, dry air sinking in: BOMEX's large-scale drying). Measured on the `fix` world over 90 game minutes (2026-11-26):
   theta alone held the cover ~0.3 for 30 minutes, then the seas' vapour, which only rain took out, filled the layer
@@ -371,6 +378,13 @@ the simulation holds, cell by cell. One path: the engine's own `Weather`, built 
 state also carries a `WeatherDebug::Snapshot` (`src/weather_debug.*`, engine-free: the fields captured on the worker
 after the tick, field-major) and run by a `WeatherDebug::Session` (the world's SDF for the forcing, the weather, a clock
 of its own; the report runs through one too). `WeatherDebugNode` (adapter) only maps them onto Godot's types.
+- **Typhoon benchmark:** `--vortex=<lat,lon,vmax,radius>` seeds a weak cyclone at the start (`Weather::seed_vortex`, any
+  thread, applied at the next tick: `WeatherForcing::seed_vortex`, `v = vmax x e^((1 - x^2) / 2)`, cyclonic for its
+  hemisphere, fading to none at the top; Rotunno & Emanuel 1987, Nolan et al. 2007); with `--trace` each line then
+  prints `WEATHER_STORM`: `WeatherDebug::strongest_storm`, the deepest low on the lowest level (its pressure under the
+  planet's mean, m^2/s^2), the strongest wind within 4 radii of it and that wind's distance (the radius of maximum
+  wind), where it is. The yardstick is Emanuel's potential intensity, `V^2 = C_k / C_d (T_s - T_o) / T_o (k*_s - k)`:
+  the drag and the exchange share one coefficient (`C_k / C_d = 1`).
 - **Fields:** per cell and level the wind (east, north, w, speed), theta and its anomaly over the sounding, the
   temperature, qv, qs, the relative humidity, qc, qr, the cloudy share, Q1, sigma_s, the updraft's water, the buoyancy
   and the pressure; per column the ground (its temperature now and its biomes' mean, the ground over the lowest air, its

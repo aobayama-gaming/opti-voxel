@@ -12,6 +12,7 @@ class SDFCascade;
 class Weather;
 class WeatherConvection;
 class WeatherForcing;
+class WeatherGrid;
 struct WorldFile;
 
 // The weather debugger's core (docs/weather.md "Debugger", res://debug/weather_debug.tscn): what a tick leaves in the
@@ -124,6 +125,18 @@ ov::str profile_table(const Snapshot &p_snap, Columns p_columns);
 
 // A world's weather on a clock of its own (the report's and the debugger's): the world's SDF for the forcing, the
 // weather, its ticks asked for by hand.
+// A state's deepest low (a cyclone's centre: the lowest pressure on the lowest level): its pressure under the planet's
+// mean (m^2/s^2: Pa over the air's density), the strongest wind on the lowest level within p_radius_m of it and that
+// wind's distance (the radius of maximum wind), where it is.
+struct Storm {
+    double drop = 0.0;
+    double max_wind = 0.0;
+    double rmw_m = 0.0;
+    double lat_deg = 0.0;
+    double lon_deg = 0.0;
+};
+Storm strongest_storm(const Snapshot &p_snap, const WeatherGrid &p_grid, double p_radius_m);
+
 class Session {
 public:
     Session();
@@ -139,6 +152,11 @@ public:
     // p_real_s of the weather's clock: asks for the ticks due and collects what landed, without waiting (the worker
     // catches up, at most Weather::MAX_BEHIND behind).
     void run(double p_real_s);
+    // A weak cyclone (WeatherForcing::seed_vortex) at a latitude and longitude (longitude 0 on +x, 90 on +z), from the
+    // next tick on.
+    void seed_vortex(double p_lat_deg, double p_lon_deg, double p_vmax_mps, double p_radius_m);
+    // strongest_storm of the latest state (a probing session's; a zero Storm before it).
+    Storm storm(double p_radius_m) const;
 
 private:
     std::unique_ptr<SDFCascade> sdf;

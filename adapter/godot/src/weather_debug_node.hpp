@@ -49,6 +49,11 @@ public:
     // ground, then that point plus the wind times p_seconds.
     PackedVector3Array wind_lines(int p_level, double p_altitude_m, double p_seconds, int p_every) const;
 
+    // A weak cyclone (WeatherDebug::Session::seed_vortex) from the next tick on.
+    void seed_vortex(double p_lat_deg, double p_lon_deg, double p_vmax_mps, double p_radius_m);
+    // WeatherDebug::strongest_storm of the latest state: { drop, max_wind, rmw_m, lat_deg, lon_deg }.
+    Dictionary storm(double p_radius_m) const;
+
     // WeatherDebug::profile_table over p_columns (WeatherDebug::Columns: 0 all, 1 the seas, 2 the land).
     String profile_table(int p_columns) const;
 

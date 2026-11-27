@@ -198,6 +198,11 @@ std::vector<float> Weather::look() const {
     return out;
 }
 
+void Weather::seed_vortex(const double p_pos[3], double p_vmax_mps, double p_radius_m) {
+    std::lock_guard<std::mutex> lock(mutex);
+    vortices.push_back(Vortex{ { p_pos[0], p_pos[1], p_pos[2] }, p_vmax_mps, p_radius_m });
+}
+
 bool Weather::step() {
     if (!fluid) {
         build();
@@ -210,6 +215,14 @@ bool Weather::step() {
         }
         OV_TRACE("weather", "tick");
         const uint64_t t0 = ov::now_usec();
+        std::vector<Vortex> seeds;
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            seeds.swap(vortices);
+        }
+        for (const Vortex &v : seeds) {
+            WeatherForcing::seed_vortex(*fluid, v.pos, v.vmax_mps, v.radius_m);
+        }
         advance(settings.time_scale / settings.tick_hz);
         std::lock_guard<std::mutex> lock(mutex);
         tick_stat.add(ov::now_usec() - t0);
