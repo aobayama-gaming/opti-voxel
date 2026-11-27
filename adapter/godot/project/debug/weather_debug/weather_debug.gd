@@ -3,7 +3,8 @@ extends Node3D
 ## terrain. The planet is the weather's cells coloured by a field at a level (or a column field: the ground and its
 ## fluxes); click a cell for its column (every level's values) and the section through it (its face's row, the levels up).
 ## Run: godot --path project res://debug/weather_debug/weather_debug.tscn -- [--world=res://worlds/ocean_test.planet.json]
-##   [--spin_up=<s>, the world's by default] [--field=<name>] [--level=<k>] [--pick=<face,i,j>] [--shot=<png>
+##   [--spin_up=<s>, the world's by default] [--run: running from the start] [--speed=<x>: game seconds per real
+##   second, 20 at most: past what the worker keeps up with, it ticks flat out] [--field=<name>] [--level=<k>] [--pick=<face,i,j>] [--shot=<png>
 ##   --ticks=<n>: n ticks, a screenshot, quit] [--profiles=<m,m,...>: headless, the profile tables (all, sea, land) at
 ##   those game minutes after the start, printed, then quit] [--trace=<m>: headless, one line a game minute for m minutes
 ##   (the strongest wind and its cell, the mean, the strongest w, theta's departure, qv, qc, the cover; the strongest
@@ -56,6 +57,8 @@ func _ready() -> void:
 		if a.begins_with("--"):
 			var kv: PackedStringArray = a.substr(2).split("=", true, 1)
 			args[kv[0]] = kv[1] if kv.size() > 1 else "true"
+	speed = float(args.get("speed", str(speed)))
+	running = args.has("run")
 	fields = WeatherDebugNode.fields()
 	_build_scene()
 	_build_ui()
